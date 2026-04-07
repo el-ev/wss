@@ -1,0 +1,2588 @@
+use std::collections::HashMap;
+
+use anyhow::Context;
+
+use crate::ast::{BinOp, Node, RelOp, UnOp};
+use crate::ir::{BasicBlock, BlockId, Inst, IrNode, Terminator};
+use crate::ir8::{
+    BUILTIN_CLZ_32, BUILTIN_CTZ_32, BUILTIN_DIV_S32, BUILTIN_DIV_U32, BUILTIN_PC_BASE,
+    BUILTIN_POPCNT_32, BUILTIN_REM_S32, BUILTIN_REM_U32, BUILTIN_ROTL_32, BUILTIN_ROTR_32,
+    BUILTIN_SHL_32, BUILTIN_SHR_S32, BUILTIN_SHR_U32, BasicBlock8, BoolNary8, FrameInfo, Inst8,
+    Inst8Kind, Ir8Program, MemoryLayout, PC_STRIDE, Pc, Terminator8, TrapCode, VREG_START, Val8,
+    Word,
+};
+use crate::module::{IrFuncInfo, Module};
+
+mod analysis;
+mod builder;
+mod calls;
+mod ops;
+
+use analysis::{collect_spill_words, compute_live_after_by_block};
+use builder::{FuncAlloc, FuncBuilder, alloc_builtin_div_params, prealloc_locals};
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Lower8Config {
+    pub js_coprocessor: bool,
+}
+
+fn build_memory_layout(
+    module: &Module,
+    memory_bytes_cap: u32,
+    stack_pointer: Option<u32>,
+) -> anyhow::Result<MemoryLayout> {
+    let memory_size = (module.num_pages() as usize) * 65536;
+    anyhow::ensure!(
+        memory_size <= 65536,
+        "linear memory too large for 16-bit addressing ({} bytes)",
+        memory_size
+    );
+    let mut init_bytes = vec![0u8; memory_size];
+    for (off, bytes) in module.preloaded_data() {
+        let end = off + bytes.len();
+        anyhow::ensure!(end <= memory_size, "data segment out of bounds");
+        init_bytes[*off..end].copy_from_slice(bytes);
+    }
+    let memory_end = if memory_bytes_cap == 0 {
+        stack_pointer.context("memory bytes cap is 0, but global 0 (stack pointer) is missing")?
+    } else {
+        memory_bytes_cap
+    };
+    anyhow::ensure!(
+        memory_end <= crate::constants::MAX_ADDRESSABLE_MEMORY_BYTES,
+        "memory bytes cap {} exceeds 16-bit address space limit {}",
+        memory_end,
+        crate::constants::MAX_ADDRESSABLE_MEMORY_BYTES
+    );
+    if let Some(sp) = stack_pointer
+        && sp > memory_end
+    {
+        eprintln!(
+            "warning: global 0 stack pointer ({}) exceeds memory cap ({} bytes)",
+            sp, memory_end
+        );
+    }
+    Ok(MemoryLayout {
+        memory_end,
+        init_bytes,
+    })
+}
+
+fn build_global_init(module: &Module) -> anyhow::Result<Vec<u32>> {
+    let mut out = Vec::with_capacity(module.globals().len());
+    for (i, g) in module.globals().iter().enumerate() {
+        // TODO(i64): global lowering currently supports only i32 globals.
+        anyhow::ensure!(
+            g.content_type() == wasmparser::ValType::I32,
+            "global {} type {:?} is unsupported (only i32 globals are supported)",
+            i,
+            g.content_type()
+        );
+        let v = match g.init() {
+            // TODO(i64): global init lowering currently supports only i32 const inits.
+            Node::I32Const(v) => *v as u32,
+            _ => anyhow::bail!("global {} has unsupported init expr", i),
+        };
+        out.push(v);
+    }
+    Ok(out)
+}
+
+struct Lower8Context<'a> {
+    module: &'a Module,
+    allocs: &'a [FuncAlloc],
+    div_builtins: Option<DivBuiltinFuncs>,
+    js_coprocessor: bool,
+}
+
+#[derive(Clone, Copy)]
+struct DivBuiltinFuncs {
+    div_u: u32,
+    rem_u: u32,
+    div_s: u32,
+    rem_s: u32,
+}
+
+impl DivBuiltinFuncs {
+    fn for_op(self, op: BinOp) -> Option<u32> {
+        match op {
+            BinOp::DivU => Some(self.div_u),
+            BinOp::RemU => Some(self.rem_u),
+            BinOp::DivS => Some(self.div_s),
+            BinOp::RemS => Some(self.rem_s),
+            _ => None,
+        }
+    }
+}
+
+fn lower_word_lane32_op(
+    b: &mut FuncBuilder,
+    lhs: Word,
+    rhs: Word,
+    make_kind: impl Fn(Word, Word, u8) -> Inst8Kind,
+) -> Word {
+    let dst = b.alloc_word();
+    for (lane, dst_lane) in dst.bytes().into_iter().enumerate() {
+        b.emit(Inst8::with_dst(dst_lane, make_kind(lhs, rhs, lane as u8)));
+    }
+    dst
+}
+
+fn lower_word_bytewise_op(
+    b: &mut FuncBuilder,
+    lhs: Word,
+    rhs: Word,
+    make_kind: impl Fn(Val8, Val8) -> Inst8Kind,
+) -> Word {
+    let dst = b.alloc_word();
+    for (dst_lane, (lhs_lane, rhs_lane)) in dst
+        .bytes()
+        .into_iter()
+        .zip(lhs.bytes().into_iter().zip(rhs.bytes()))
+    {
+        b.emit(Inst8::with_dst(dst_lane, make_kind(lhs_lane, rhs_lane)));
+    }
+    dst
+}
+
+fn lower_add32(b: &mut FuncBuilder, lhs: Word, rhs: Word) -> Word {
+    // TODO(i64): arithmetic helpers are currently specialized to 32-bit words.
+    lower_word_lane32_op(b, lhs, rhs, |lhs, rhs, lane| Inst8Kind::Add32Byte {
+        lhs,
+        rhs,
+        lane,
+    })
+}
+
+fn lower_sub32(b: &mut FuncBuilder, lhs: Word, rhs: Word) -> Word {
+    lower_word_lane32_op(b, lhs, rhs, |lhs, rhs, lane| Inst8Kind::Sub32Byte {
+        lhs,
+        rhs,
+        lane,
+    })
+}
+
+fn lower_sub32_with_borrow(b: &mut FuncBuilder, lhs: Word, rhs: Word) -> (Word, Val8) {
+    let dst = lower_sub32(b, lhs, rhs);
+    let borrow = b.alloc_reg();
+    b.emit(Inst8::with_dst(borrow, Inst8Kind::Sub32Borrow { lhs, rhs }));
+    (dst, borrow)
+}
+
+fn select_word(b: &mut FuncBuilder, cond: Val8, if_true: Word, if_false: Word) -> Word {
+    let dst = b.alloc_word();
+    for (dst_lane, (true_lane, false_lane)) in dst
+        .bytes()
+        .into_iter()
+        .zip(if_true.bytes().into_iter().zip(if_false.bytes()))
+    {
+        b.emit(Inst8::with_dst(
+            dst_lane,
+            Inst8Kind::Sel(cond, true_lane, false_lane),
+        ));
+    }
+    dst
+}
+
+fn emit_bool_chain(
+    b: &mut FuncBuilder,
+    regs: &[Val8],
+    make_kind: impl Fn(BoolNary8) -> Inst8Kind,
+) -> Val8 {
+    let dst = b.alloc_reg();
+    let op = BoolNary8::from_regs(regs).expect("bool op inputs should fit IR8 nary limit");
+    b.emit(Inst8::with_dst(dst, make_kind(op)));
+    dst
+}
+
+fn lower_eq32_bit(b: &mut FuncBuilder, lhs: Word, rhs: Word) -> Val8 {
+    let eq0 = b.alloc_reg();
+    b.emit(Inst8::with_dst(eq0, Inst8Kind::Eq(lhs.b0, rhs.b0)));
+    let eq1 = b.alloc_reg();
+    b.emit(Inst8::with_dst(eq1, Inst8Kind::Eq(lhs.b1, rhs.b1)));
+    let eq2 = b.alloc_reg();
+    b.emit(Inst8::with_dst(eq2, Inst8Kind::Eq(lhs.b2, rhs.b2)));
+    let eq3 = b.alloc_reg();
+    b.emit(Inst8::with_dst(eq3, Inst8Kind::Eq(lhs.b3, rhs.b3)));
+    emit_bool_chain(b, &[eq0, eq1, eq2, eq3], Inst8Kind::BoolAnd)
+}
+
+fn lower_ltu32_bit(b: &mut FuncBuilder, lhs: Word, rhs: Word) -> Val8 {
+    let lt3 = b.alloc_reg();
+    b.emit(Inst8::with_dst(lt3, Inst8Kind::LtU(lhs.b3, rhs.b3)));
+    let eq3 = b.alloc_reg();
+    b.emit(Inst8::with_dst(eq3, Inst8Kind::Eq(lhs.b3, rhs.b3)));
+    let lt2 = b.alloc_reg();
+    b.emit(Inst8::with_dst(lt2, Inst8Kind::LtU(lhs.b2, rhs.b2)));
+    let eq2 = b.alloc_reg();
+    b.emit(Inst8::with_dst(eq2, Inst8Kind::Eq(lhs.b2, rhs.b2)));
+    let lt1 = b.alloc_reg();
+    b.emit(Inst8::with_dst(lt1, Inst8Kind::LtU(lhs.b1, rhs.b1)));
+    let eq1 = b.alloc_reg();
+    b.emit(Inst8::with_dst(eq1, Inst8Kind::Eq(lhs.b1, rhs.b1)));
+    let lt0 = b.alloc_reg();
+    b.emit(Inst8::with_dst(lt0, Inst8Kind::LtU(lhs.b0, rhs.b0)));
+
+    // lt3 || (eq3 && lt2) || (eq3 && eq2 && lt1) || (eq3 && eq2 && eq1 && lt0)
+    let eq3_and_lt2 = emit_bool_chain(b, &[eq3, lt2], Inst8Kind::BoolAnd);
+    let eq3_and_eq2 = emit_bool_chain(b, &[eq3, eq2], Inst8Kind::BoolAnd);
+    let eq3_eq2_and_lt1 = emit_bool_chain(b, &[eq3_and_eq2, lt1], Inst8Kind::BoolAnd);
+    let eq3_eq2_and_eq1 = emit_bool_chain(b, &[eq3_and_eq2, eq1], Inst8Kind::BoolAnd);
+    let eq3_eq2_eq1_and_lt0 = emit_bool_chain(b, &[eq3_eq2_and_eq1, lt0], Inst8Kind::BoolAnd);
+    emit_bool_chain(
+        b,
+        &[lt3, eq3_and_lt2, eq3_eq2_and_lt1, eq3_eq2_eq1_and_lt0],
+        Inst8Kind::BoolOr,
+    )
+}
+
+fn shl1_word(b: &mut FuncBuilder, w: Word) -> Word {
+    lower_add32(b, w, w)
+}
+
+fn add_lsb_bit(b: &mut FuncBuilder, w: Word, bit: Val8, zero: Val8) -> Word {
+    lower_add32(b, w, Word::new(bit, zero, zero, zero))
+}
+
+fn word_bit(b: &mut FuncBuilder, w: Word, bit_index: u8, zero: Val8) -> Val8 {
+    let byte = match bit_index / 8 {
+        0 => w.b0,
+        1 => w.b1,
+        2 => w.b2,
+        _ => w.b3,
+    };
+    let mask = Val8::imm(1u8 << (bit_index % 8));
+    let masked = b.alloc_reg();
+    b.emit(Inst8::with_dst(masked, Inst8Kind::And8(byte, mask)));
+    let bit = b.alloc_reg();
+    b.emit(Inst8::with_dst(bit, Inst8Kind::Ne(masked, zero)));
+    bit
+}
+
+fn negate_word(b: &mut FuncBuilder, w: Word) -> Word {
+    let zero = Word::from_u32_imm(0);
+    lower_sub32(b, zero, w)
+}
+
+fn emit_divrem_u32_iteration(
+    b: &mut FuncBuilder,
+    numer: Word,
+    denom: Word,
+    bit_idx: u8,
+    quotient_state: Word,
+    remainder_state: Word,
+    zero: Val8,
+) {
+    let remainder_shifted = shl1_word(b, remainder_state);
+    let in_bit = word_bit(b, numer, bit_idx, zero);
+    let remainder_with_bit = add_lsb_bit(b, remainder_shifted, in_bit, zero);
+
+    let (sub, borrow_out) = lower_sub32_with_borrow(b, remainder_with_bit, denom);
+    let ge = b.alloc_reg();
+    b.emit(Inst8::with_dst(ge, Inst8Kind::BoolNot(borrow_out)));
+
+    let remainder_next = select_word(b, ge, sub, remainder_with_bit);
+
+    let quotient_shifted = shl1_word(b, quotient_state);
+    let quotient_next = add_lsb_bit(b, quotient_shifted, ge, zero);
+
+    b.copy_word(remainder_state, remainder_next);
+    b.copy_word(quotient_state, quotient_next);
+}
+
+fn divrem_u32_core(b: &mut FuncBuilder, numer: Word, denom: Word) -> (Word, Word) {
+    let zero_word = Word::from_u32_imm(0);
+    let zero = Val8::imm(0);
+    let quotient_state = b.alloc_word();
+    let remainder_state = b.alloc_word();
+    b.copy_word(quotient_state, zero_word);
+    b.copy_word(remainder_state, zero_word);
+
+    // TODO(i64): restoring division is currently unrolled for a fixed 32-bit width.
+    let iter_blocks: Vec<Pc> = (0..32).map(|_| b.alloc_block()).collect();
+    let done_pc = b.alloc_block();
+    let check_b2_pc = b.alloc_block();
+    let check_b1_pc = b.alloc_block();
+
+    let b3_zero = b.alloc_reg();
+    b.emit(Inst8::with_dst(b3_zero, Inst8Kind::Eq(numer.b3, zero)));
+    b.finish(Terminator8::Branch {
+        cond: b3_zero,
+        if_true: check_b2_pc,
+        if_false: iter_blocks[31],
+    });
+
+    b.switch_to(check_b2_pc);
+    let b2_zero = b.alloc_reg();
+    b.emit(Inst8::with_dst(b2_zero, Inst8Kind::Eq(numer.b2, zero)));
+    b.finish(Terminator8::Branch {
+        cond: b2_zero,
+        if_true: check_b1_pc,
+        if_false: iter_blocks[23],
+    });
+
+    b.switch_to(check_b1_pc);
+    let b1_zero = b.alloc_reg();
+    b.emit(Inst8::with_dst(b1_zero, Inst8Kind::Eq(numer.b1, zero)));
+    b.finish(Terminator8::Branch {
+        cond: b1_zero,
+        if_true: iter_blocks[7],
+        if_false: iter_blocks[15],
+    });
+
+    for bit_idx in (0..32u8).rev() {
+        b.switch_to(iter_blocks[bit_idx as usize]);
+        emit_divrem_u32_iteration(
+            b,
+            numer,
+            denom,
+            bit_idx,
+            quotient_state,
+            remainder_state,
+            zero,
+        );
+        let next_pc = if bit_idx == 0 {
+            done_pc
+        } else {
+            iter_blocks[bit_idx as usize - 1]
+        };
+        b.finish(Terminator8::Goto(next_pc));
+    }
+
+    b.switch_to(done_pc);
+    (quotient_state, remainder_state)
+}
+
+fn lower_divrem_u32(b: &mut FuncBuilder, numer: Word, denom: Word, want_rem: bool) -> Word {
+    let zero_word = Word::from_u32_imm(0);
+    let denom_zero = lower_eq32_bit(b, denom, zero_word);
+    let trap_pc = b.alloc_block();
+    let cont_pc = b.alloc_block();
+
+    b.finish(Terminator8::Branch {
+        cond: denom_zero,
+        if_true: trap_pc,
+        if_false: cont_pc,
+    });
+
+    b.switch_to(trap_pc);
+    b.finish(Terminator8::Trap(TrapCode::DivisionByZero));
+
+    b.switch_to(cont_pc);
+    let (q, r) = divrem_u32_core(b, numer, denom);
+    if want_rem { r } else { q }
+}
+
+fn lower_divrem_s32(b: &mut FuncBuilder, numer: Word, denom: Word, want_rem: bool) -> Word {
+    let zero_word = Word::from_u32_imm(0);
+    let denom_zero = lower_eq32_bit(b, denom, zero_word);
+    let trap_pc = b.alloc_block();
+    let cont_pc = b.alloc_block();
+
+    b.finish(Terminator8::Branch {
+        cond: denom_zero,
+        if_true: trap_pc,
+        if_false: cont_pc,
+    });
+
+    b.switch_to(trap_pc);
+    b.finish(Terminator8::Trap(TrapCode::DivisionByZero));
+
+    b.switch_to(cont_pc);
+    let zero = Val8::imm(0);
+    let numer_sign = word_bit(b, numer, 31, zero);
+    let denom_sign = word_bit(b, denom, 31, zero);
+    let numer_neg = negate_word(b, numer);
+    let denom_neg = negate_word(b, denom);
+    let numer_abs = select_word(b, numer_sign, numer_neg, numer);
+    let denom_abs = select_word(b, denom_sign, denom_neg, denom);
+
+    let (mut q, mut r) = divrem_u32_core(b, numer_abs, denom_abs);
+    if want_rem {
+        let r_neg = negate_word(b, r);
+        r = select_word(b, numer_sign, r_neg, r);
+        r
+    } else {
+        let sign = b.alloc_reg();
+        b.emit(Inst8::with_dst(
+            sign,
+            Inst8Kind::Xor8(numer_sign, denom_sign),
+        ));
+        let q_neg = negate_word(b, q);
+        q = select_word(b, sign, q_neg, q);
+        q
+    }
+}
+
+fn word_const_u32(w: Word) -> Option<u32> {
+    // TODO(i64): constant folding only reconstructs 32-bit immediates.
+    let b0 = w.b0.imm_value()? as u32;
+    let b1 = w.b1.imm_value()? as u32;
+    let b2 = w.b2.imm_value()? as u32;
+    let b3 = w.b3.imm_value()? as u32;
+    Some(b0 | (b1 << 8) | (b2 << 16) | (b3 << 24))
+}
+
+fn lower_divrem_const_u32(
+    b: &mut FuncBuilder,
+    op: BinOp,
+    numer: Word,
+    denom_u32: u32,
+) -> Option<Word> {
+    let is_rem = matches!(op, BinOp::RemU);
+    if !matches!(op, BinOp::DivU | BinOp::RemU) {
+        return None;
+    }
+
+    if denom_u32 == 0 {
+        // Let runtime-trapping path handle divide-by-zero semantics.
+        return None;
+    }
+
+    if denom_u32 == 1 {
+        return Some(if is_rem { Word::from_u32_imm(0) } else { numer });
+    }
+
+    if denom_u32.is_power_of_two() {
+        if is_rem {
+            let mask = Word::from_u32_imm(denom_u32 - 1);
+            return Some(lower_word_bytewise_op(b, numer, mask, Inst8Kind::And8));
+        }
+        let sh = Word::from_u32_imm(denom_u32.trailing_zeros());
+        return Some(lower_builtin_binop(b, BUILTIN_SHR_U32, numer, sh));
+    }
+
+    // For non-trivial constants we prefer the shared helper to avoid
+    // large inlined unrolled division sequences.
+    None
+}
+
+fn lower_divrem_const_s32(
+    b: &mut FuncBuilder,
+    op: BinOp,
+    numer: Word,
+    denom_u32: u32,
+) -> Option<Word> {
+    let is_rem = matches!(op, BinOp::RemS);
+    if !matches!(op, BinOp::DivS | BinOp::RemS) {
+        return None;
+    }
+    if denom_u32 == 0 {
+        return None;
+    }
+
+    let denom_i32 = denom_u32 as i32;
+    if denom_i32 == 1 {
+        return Some(if is_rem { Word::from_u32_imm(0) } else { numer });
+    }
+
+    if denom_i32 == -1 {
+        return Some(if is_rem {
+            Word::from_u32_imm(0)
+        } else {
+            negate_word(b, numer)
+        });
+    }
+
+    None
+}
+
+fn lower_divrem_call_via_function(
+    b: &mut FuncBuilder,
+    op: BinOp,
+    lhs: Word,
+    rhs: Word,
+    live_after: &[IrNode],
+    allocs: &[FuncAlloc],
+    div_builtins: Option<DivBuiltinFuncs>,
+) -> anyhow::Result<Word> {
+    let div_builtins = div_builtins.context("div/rem helper table is unavailable")?;
+    let callee_id = div_builtins
+        .for_op(op)
+        .with_context(|| format!("expected div/rem op, got {:?}", op))?;
+    let callee_alloc = &allocs[callee_id as usize];
+    anyhow::ensure!(
+        callee_alloc.local_vregs.len() >= 2,
+        "builtin div/rem function {} is missing parameter vregs",
+        callee_id
+    );
+    let callee_arg_vregs = callee_alloc.local_vregs[..2].to_vec();
+    let callee_entry = Pc::new(callee_id as u16 * PC_STRIDE);
+    let cont = b.alloc_block();
+    let spill_words = collect_spill_words(live_after, &b.inst_map, &b.local_vregs);
+    b.emit_cs_save(cont, &spill_words);
+
+    b.finish(Terminator8::CallSetup {
+        callee_entry,
+        cont,
+        args: vec![lhs, rhs],
+        callee_arg_vregs,
+    });
+    b.switch_to(cont);
+    b.emit_cs_restore(&spill_words);
+
+    let dst = b.alloc_word();
+    b.copy_ret_to_word(dst);
+    Ok(dst)
+}
+
+fn lower_builtin_unop(b: &mut FuncBuilder, builtin: Pc, operand: Word) -> Word {
+    let arg0_dst = b.alloc_word();
+    let cont = b.alloc_block();
+    b.finish(Terminator8::CallSetup {
+        callee_entry: builtin,
+        cont,
+        args: vec![operand],
+        callee_arg_vregs: vec![arg0_dst],
+    });
+    b.switch_to(cont);
+    let dst = b.alloc_word();
+    b.copy_ret_to_word(dst);
+    dst
+}
+
+fn lower_builtin_binop(b: &mut FuncBuilder, builtin: Pc, lhs: Word, rhs: Word) -> Word {
+    let arg0_dst = b.alloc_word();
+    let arg1_dst = b.alloc_word();
+    let cont = b.alloc_block();
+    b.finish(Terminator8::CallSetup {
+        callee_entry: builtin,
+        cont,
+        args: vec![lhs, rhs],
+        callee_arg_vregs: vec![arg0_dst, arg1_dst],
+    });
+    b.switch_to(cont);
+    let dst = b.alloc_word();
+    b.copy_ret_to_word(dst);
+    dst
+}
+
+fn lower_binary(b: &mut FuncBuilder, op: BinOp, lhs: Word, rhs: Word) -> anyhow::Result<Word> {
+    // TODO(i64): binary op lowering routes through 32-bit helpers/builtins only.
+    Ok(match op {
+        BinOp::Add => lower_add32(b, lhs, rhs),
+        BinOp::Sub => lower_sub32(b, lhs, rhs),
+        BinOp::And => lower_word_bytewise_op(b, lhs, rhs, Inst8Kind::And8),
+        BinOp::Or => lower_word_bytewise_op(b, lhs, rhs, Inst8Kind::Or8),
+        BinOp::Xor => lower_word_bytewise_op(b, lhs, rhs, Inst8Kind::Xor8),
+        BinOp::Mul => lower_mul32(b, lhs, rhs),
+        BinOp::DivU => lower_divrem_u32(b, lhs, rhs, false),
+        BinOp::RemU => lower_divrem_u32(b, lhs, rhs, true),
+        BinOp::DivS => lower_divrem_s32(b, lhs, rhs, false),
+        BinOp::RemS => lower_divrem_s32(b, lhs, rhs, true),
+        BinOp::Shl => lower_builtin_binop(b, BUILTIN_SHL_32, lhs, rhs),
+        BinOp::ShrU => lower_builtin_binop(b, BUILTIN_SHR_U32, lhs, rhs),
+        BinOp::ShrS => lower_builtin_binop(b, BUILTIN_SHR_S32, lhs, rhs),
+        BinOp::Rotl => lower_builtin_binop(b, BUILTIN_ROTL_32, lhs, rhs),
+        BinOp::Rotr => lower_builtin_binop(b, BUILTIN_ROTR_32, lhs, rhs),
+    })
+}
+
+fn add_bytes(b: &mut FuncBuilder, terms: &[Val8]) -> (Val8, Val8) {
+    debug_assert!(!terms.is_empty());
+    if terms.len() == 1 {
+        return (terms[0], Val8::imm(0));
+    }
+    let mut acc = terms[0];
+    let mut carry = Val8::imm(0);
+    for &t in &terms[1..] {
+        let new_acc = b.alloc_reg();
+        b.emit(Inst8::with_dst(new_acc, Inst8Kind::Add(acc, t)));
+        let this_carry = b.alloc_reg();
+        b.emit(Inst8::with_dst(this_carry, Inst8Kind::Carry(acc, t)));
+        let new_carry = b.alloc_reg();
+        b.emit(Inst8::with_dst(
+            new_carry,
+            Inst8Kind::Add(carry, this_carry),
+        ));
+        acc = new_acc;
+        carry = new_carry;
+    }
+    (acc, carry)
+}
+
+fn lower_mul32(b: &mut FuncBuilder, lhs: Word, rhs: Word) -> Word {
+    macro_rules! mul_lo {
+        ($x:expr, $y:expr) => {{
+            let v = b.alloc_reg();
+            b.emit(Inst8::with_dst(v, Inst8Kind::MulLo($x, $y)));
+            v
+        }};
+    }
+    macro_rules! mul_hi {
+        ($x:expr, $y:expr) => {{
+            let v = b.alloc_reg();
+            b.emit(Inst8::with_dst(v, Inst8Kind::MulHi($x, $y)));
+            v
+        }};
+    }
+
+    let p00_lo = mul_lo!(lhs.b0, rhs.b0);
+    let p00_hi = mul_hi!(lhs.b0, rhs.b0);
+    let p01_lo = mul_lo!(lhs.b0, rhs.b1);
+    let p01_hi = mul_hi!(lhs.b0, rhs.b1);
+    let p10_lo = mul_lo!(lhs.b1, rhs.b0);
+    let p10_hi = mul_hi!(lhs.b1, rhs.b0);
+    let p02_lo = mul_lo!(lhs.b0, rhs.b2);
+    let p02_hi = mul_hi!(lhs.b0, rhs.b2);
+    let p11_lo = mul_lo!(lhs.b1, rhs.b1);
+    let p11_hi = mul_hi!(lhs.b1, rhs.b1);
+    let p20_lo = mul_lo!(lhs.b2, rhs.b0);
+    let p20_hi = mul_hi!(lhs.b2, rhs.b0);
+    let p03_lo = mul_lo!(lhs.b0, rhs.b3);
+    let p12_lo = mul_lo!(lhs.b1, rhs.b2);
+    let p21_lo = mul_lo!(lhs.b2, rhs.b1);
+    let p30_lo = mul_lo!(lhs.b3, rhs.b0);
+
+    let b0 = p00_lo;
+    let (b1, c1) = add_bytes(b, &[p00_hi, p01_lo, p10_lo]);
+    let (b2, c2) = add_bytes(b, &[p01_hi, p10_hi, p02_lo, p11_lo, p20_lo, c1]);
+    let (b3, _) = add_bytes(
+        b,
+        &[p02_hi, p11_hi, p20_hi, p03_lo, p12_lo, p21_lo, p30_lo, c2],
+    );
+
+    Word::new(b0, b1, b2, b3)
+}
+
+fn bool32(b: &mut FuncBuilder, val: Word) -> Val8 {
+    // TODO(i64): truthiness reduction currently checks only the low 32 bits.
+    let zero = Val8::imm(0);
+    let nz0 = b.alloc_reg();
+    b.emit(Inst8::with_dst(nz0, Inst8Kind::Ne(val.b0, zero)));
+    let nz1 = b.alloc_reg();
+    b.emit(Inst8::with_dst(nz1, Inst8Kind::Ne(val.b1, zero)));
+    let nz2 = b.alloc_reg();
+    b.emit(Inst8::with_dst(nz2, Inst8Kind::Ne(val.b2, zero)));
+    let nz3 = b.alloc_reg();
+    b.emit(Inst8::with_dst(nz3, Inst8Kind::Ne(val.b3, zero)));
+    emit_bool_chain(b, &[nz0, nz1, nz2, nz3], Inst8Kind::BoolOr)
+}
+
+fn bool_to_word(b: &mut FuncBuilder, bit: Val8) -> Word {
+    let dst = b.alloc_word();
+    b.set_word_from_byte(dst, bit);
+    dst
+}
+
+fn lower_eq32(b: &mut FuncBuilder, lhs: Word, rhs: Word) -> Word {
+    let bit = lower_eq32_bit(b, lhs, rhs);
+    bool_to_word(b, bit)
+}
+
+fn lower_ne32(b: &mut FuncBuilder, lhs: Word, rhs: Word) -> Word {
+    let ne0 = b.alloc_reg();
+    b.emit(Inst8::with_dst(ne0, Inst8Kind::Ne(lhs.b0, rhs.b0)));
+    let ne1 = b.alloc_reg();
+    b.emit(Inst8::with_dst(ne1, Inst8Kind::Ne(lhs.b1, rhs.b1)));
+    let ne2 = b.alloc_reg();
+    b.emit(Inst8::with_dst(ne2, Inst8Kind::Ne(lhs.b2, rhs.b2)));
+    let ne3 = b.alloc_reg();
+    b.emit(Inst8::with_dst(ne3, Inst8Kind::Ne(lhs.b3, rhs.b3)));
+    let bit = emit_bool_chain(b, &[ne0, ne1, ne2, ne3], Inst8Kind::BoolOr);
+    bool_to_word(b, bit)
+}
+
+fn lower_ltu32(b: &mut FuncBuilder, lhs: Word, rhs: Word) -> Word {
+    let bit = lower_ltu32_bit(b, lhs, rhs);
+    bool_to_word(b, bit)
+}
+
+fn lower_gtu32(b: &mut FuncBuilder, lhs: Word, rhs: Word) -> Word {
+    lower_ltu32(b, rhs, lhs)
+}
+
+fn lower_leu32(b: &mut FuncBuilder, lhs: Word, rhs: Word) -> Word {
+    let gt = lower_gtu32(b, lhs, rhs);
+    let bit = b.alloc_reg();
+    b.emit(Inst8::with_dst(bit, Inst8Kind::BoolNot(gt.b0)));
+    bool_to_word(b, bit)
+}
+
+fn lower_geu32(b: &mut FuncBuilder, lhs: Word, rhs: Word) -> Word {
+    let lt = lower_ltu32(b, lhs, rhs);
+    let bit = b.alloc_reg();
+    b.emit(Inst8::with_dst(bit, Inst8Kind::BoolNot(lt.b0)));
+    bool_to_word(b, bit)
+}
+
+fn flip_sign(b: &mut FuncBuilder, value: Word) -> Word {
+    let mask = Val8::imm(0x80);
+    let flipped = b.alloc_reg();
+    b.emit(Inst8::with_dst(flipped, Inst8Kind::Xor8(value.b3, mask)));
+    Word::new(value.b0, value.b1, value.b2, flipped)
+}
+
+fn lower_compare(b: &mut FuncBuilder, op: RelOp, lhs: Word, rhs: Word) -> anyhow::Result<Word> {
+    // TODO(i64): compare lowering is currently specialized to 32-bit words.
+    Ok(match op {
+        RelOp::Eq => lower_eq32(b, lhs, rhs),
+        RelOp::Ne => lower_ne32(b, lhs, rhs),
+        RelOp::LtU => lower_ltu32(b, lhs, rhs),
+        RelOp::GtU => lower_gtu32(b, lhs, rhs),
+        RelOp::LeU => lower_leu32(b, lhs, rhs),
+        RelOp::GeU => lower_geu32(b, lhs, rhs),
+        // Signed: XOR sign bits to convert to unsigned order.
+        RelOp::LtS => {
+            let (lhs2, rhs2) = (flip_sign(b, lhs), flip_sign(b, rhs));
+            lower_ltu32(b, lhs2, rhs2)
+        }
+        RelOp::GtS => {
+            let (lhs2, rhs2) = (flip_sign(b, lhs), flip_sign(b, rhs));
+            lower_gtu32(b, lhs2, rhs2)
+        }
+        RelOp::LeS => {
+            let (lhs2, rhs2) = (flip_sign(b, lhs), flip_sign(b, rhs));
+            lower_leu32(b, lhs2, rhs2)
+        }
+        RelOp::GeS => {
+            let (lhs2, rhs2) = (flip_sign(b, lhs), flip_sign(b, rhs));
+            lower_geu32(b, lhs2, rhs2)
+        }
+    })
+}
+
+fn lower_unary(b: &mut FuncBuilder, op: UnOp, operand: Word) -> anyhow::Result<Word> {
+    // TODO(i64): unary lowering dispatches only 32-bit builtins/semantics.
+    Ok(match op {
+        UnOp::Eqz => {
+            // eqz(a) = (a == 0)
+            let zero_const = Word::from_u32_imm(0);
+            lower_eq32(b, operand, zero_const)
+        }
+        UnOp::Extend8S => {
+            let dst = b.alloc_word();
+            let thresh = Val8::imm(0x80);
+            let is_neg = b.alloc_reg();
+            b.emit(Inst8::with_dst(is_neg, Inst8Kind::GeU(operand.b0, thresh)));
+            let zero = Val8::imm(0);
+            let fill = b.alloc_reg();
+            b.emit(Inst8::with_dst(fill, Inst8Kind::Sub(zero, is_neg)));
+            b.emit(Inst8::with_dst(dst.b0, Inst8Kind::Copy(operand.b0)));
+            b.emit(Inst8::with_dst(dst.b1, Inst8Kind::Copy(fill)));
+            b.emit(Inst8::with_dst(dst.b2, Inst8Kind::Copy(fill)));
+            b.emit(Inst8::with_dst(dst.b3, Inst8Kind::Copy(fill)));
+            dst
+        }
+        UnOp::Extend16S => {
+            let dst = b.alloc_word();
+            let thresh = Val8::imm(0x80);
+            let is_neg = b.alloc_reg();
+            b.emit(Inst8::with_dst(is_neg, Inst8Kind::GeU(operand.b1, thresh)));
+            let zero = Val8::imm(0);
+            let fill = b.alloc_reg();
+            b.emit(Inst8::with_dst(fill, Inst8Kind::Sub(zero, is_neg)));
+            b.emit(Inst8::with_dst(dst.b0, Inst8Kind::Copy(operand.b0)));
+            b.emit(Inst8::with_dst(dst.b1, Inst8Kind::Copy(operand.b1)));
+            b.emit(Inst8::with_dst(dst.b2, Inst8Kind::Copy(fill)));
+            b.emit(Inst8::with_dst(dst.b3, Inst8Kind::Copy(fill)));
+            dst
+        }
+        UnOp::Clz => lower_builtin_unop(b, BUILTIN_CLZ_32, operand),
+        UnOp::Ctz => lower_builtin_unop(b, BUILTIN_CTZ_32, operand),
+        UnOp::Popcnt => lower_builtin_unop(b, BUILTIN_POPCNT_32, operand),
+    })
+}
+
+fn lower_terminator(
+    b: &mut FuncBuilder,
+    module: &Module,
+    term: &Terminator,
+    allocs: &[FuncAlloc],
+) -> anyhow::Result<()> {
+    match term {
+        Terminator::Goto(target) => {
+            b.finish(Terminator8::Goto(b.pc_of(*target)));
+        }
+        Terminator::Branch {
+            cond,
+            if_true,
+            if_false,
+        } => {
+            let cv = b.get_word(*cond);
+            let cond_bit = bool32(b, cv);
+            b.finish(Terminator8::Branch {
+                cond: cond_bit,
+                if_true: b.pc_of(*if_true),
+                if_false: b.pc_of(*if_false),
+            });
+        }
+        Terminator::Switch {
+            index,
+            targets,
+            default,
+        } => {
+            let iv = b.get_word(*index);
+            b.finish(Terminator8::Switch {
+                index: iv.b0,
+                targets: targets.iter().map(|t| b.pc_of(*t)).collect(),
+                default: b.pc_of(*default),
+            });
+        }
+        Terminator::TailCall { func, args } => {
+            if b.is_main {
+                anyhow::bail!("main function must not contain tail_call terminators");
+            }
+            let t8 = calls::lower_tail_call(b, *func, args, allocs)?;
+            b.finish(t8);
+        }
+        Terminator::TailCallIndirect {
+            type_index,
+            table_index,
+            index,
+            args,
+        } => {
+            if b.is_main {
+                anyhow::bail!("main function must not contain tail_call_indirect terminators");
+            }
+            calls::lower_tail_call_indirect(
+                b,
+                module,
+                *type_index,
+                *table_index,
+                *index,
+                args,
+                allocs,
+            )?;
+        }
+        Terminator::Return(val_ref) => {
+            let val = val_ref.map(|r| b.get_word(r));
+            if b.is_main {
+                b.finish(Terminator8::Exit { val });
+            } else {
+                calls::emit_non_main_return_sequence(b, val);
+            }
+        }
+        Terminator::Unreachable => {
+            b.finish(Terminator8::Trap(TrapCode::Unreachable));
+        }
+    };
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum DivBuiltinKind {
+    DivU,
+    RemU,
+    DivS,
+    RemS,
+}
+
+fn lower_divrem_builtin_function(
+    func_id: u32,
+    local_vregs: Vec<Word>,
+    vreg_start: u16,
+    kind: DivBuiltinKind,
+) -> anyhow::Result<(Vec<BasicBlock8>, FrameInfo, u16)> {
+    anyhow::ensure!(
+        local_vregs.len() >= 2,
+        "builtin div/rem function {} expects two parameter words",
+        func_id
+    );
+    let mut b = FuncBuilder::new(func_id, false, vreg_start, local_vregs);
+    let entry = b.alloc_block();
+    b.switch_to(entry);
+
+    let numer = b.local_vregs[0];
+    let denom = b.local_vregs[1];
+    let ret = match kind {
+        // TODO(i64): synthetic div/rem helper functions exist only for 32-bit integer ops.
+        DivBuiltinKind::DivU => lower_divrem_u32(&mut b, numer, denom, false),
+        DivBuiltinKind::RemU => lower_divrem_u32(&mut b, numer, denom, true),
+        DivBuiltinKind::DivS => lower_divrem_s32(&mut b, numer, denom, false),
+        DivBuiltinKind::RemS => lower_divrem_s32(&mut b, numer, denom, true),
+    };
+
+    calls::emit_non_main_return_sequence(&mut b, Some(ret));
+
+    let fi = FrameInfo {
+        entry: Pc::new(func_id as u16 * PC_STRIDE),
+        num_locals: 2, // two parameter words
+    };
+    Ok((b.blocks, fi, b.vreg_counter))
+}
+
+pub fn lower8_module(module: &Module, memory_bytes_cap: u32) -> anyhow::Result<Ir8Program> {
+    lower8_module_with_config(module, memory_bytes_cap, Lower8Config::default())
+}
+
+pub fn lower8_module_with_config(
+    module: &Module,
+    memory_bytes_cap: u32,
+    config: Lower8Config,
+) -> anyhow::Result<Ir8Program> {
+    let main_func_id = module.main_export().context("no main export")? as usize;
+    let global_init = build_global_init(module)?;
+    let stack_pointer = global_init.first().copied();
+    let memory_layout = build_memory_layout(module, memory_bytes_cap, stack_pointer)?;
+    let (mut allocs, mut vreg_counter) = prealloc_locals(module);
+
+    let div_builtins = if config.js_coprocessor {
+        None
+    } else {
+        let user_func_count = module.functions_ir().len() as u32;
+        let builtins = DivBuiltinFuncs {
+            div_u: user_func_count,
+            rem_u: user_func_count + 1,
+            div_s: user_func_count + 2,
+            rem_s: user_func_count + 3,
+        };
+        allocs.push(alloc_builtin_div_params(&mut vreg_counter));
+        allocs.push(alloc_builtin_div_params(&mut vreg_counter));
+        allocs.push(alloc_builtin_div_params(&mut vreg_counter));
+        allocs.push(alloc_builtin_div_params(&mut vreg_counter));
+        Some(builtins)
+    };
+
+    let mut func_blocks: Vec<Vec<BasicBlock8>> =
+        Vec::with_capacity(module.functions_ir().len() + 4);
+    let mut frame_infos: Vec<FrameInfo> = Vec::with_capacity(module.functions_ir().len() + 4);
+    let lower_ctx = Lower8Context {
+        module,
+        allocs: &allocs,
+        div_builtins,
+        js_coprocessor: config.js_coprocessor,
+    };
+
+    for (func_id, func) in module.functions_ir().iter().enumerate() {
+        let is_main = func_id == main_func_id;
+        let local_vregs = allocs[func_id].local_vregs.clone();
+
+        let (blocks, fi, new_counter) = lower_function(
+            &lower_ctx,
+            func,
+            func_id as u32,
+            is_main,
+            local_vregs,
+            vreg_counter,
+        )?;
+
+        vreg_counter = new_counter;
+        func_blocks.push(blocks);
+        frame_infos.push(fi);
+    }
+
+    if let Some(div_builtins) = div_builtins {
+        let div_u_entry = Pc::new(div_builtins.div_u as u16 * PC_STRIDE);
+        let rem_u_entry = Pc::new(div_builtins.rem_u as u16 * PC_STRIDE);
+        let div_s_entry = Pc::new(div_builtins.div_s as u16 * PC_STRIDE);
+        let rem_s_entry = Pc::new(div_builtins.rem_s as u16 * PC_STRIDE);
+
+        let mut need_div_u = false;
+        let mut need_rem_u = false;
+        let mut need_div_s = false;
+        let mut need_rem_s = false;
+        for blocks in &func_blocks {
+            for bb in blocks {
+                if let Terminator8::CallSetup { callee_entry, .. } = bb.terminator {
+                    if callee_entry == div_u_entry {
+                        need_div_u = true;
+                    } else if callee_entry == rem_u_entry {
+                        need_rem_u = true;
+                    } else if callee_entry == div_s_entry {
+                        need_div_s = true;
+                    } else if callee_entry == rem_s_entry {
+                        need_rem_s = true;
+                    }
+                }
+            }
+        }
+
+        for (func_id, kind, needed) in [
+            (div_builtins.div_u, DivBuiltinKind::DivU, need_div_u),
+            (div_builtins.rem_u, DivBuiltinKind::RemU, need_rem_u),
+            (div_builtins.div_s, DivBuiltinKind::DivS, need_div_s),
+            (div_builtins.rem_s, DivBuiltinKind::RemS, need_rem_s),
+        ] {
+            if needed {
+                let local_vregs = allocs[func_id as usize].local_vregs.clone();
+                let (blocks, fi, new_counter) =
+                    lower_divrem_builtin_function(func_id, local_vregs, vreg_counter, kind)?;
+                vreg_counter = new_counter;
+                func_blocks.push(blocks);
+                frame_infos.push(fi);
+            } else {
+                func_blocks.push(Vec::new());
+                frame_infos.push(FrameInfo {
+                    entry: Pc::new(func_id as u16 * PC_STRIDE),
+                    num_locals: 2,
+                });
+            }
+        }
+    }
+
+    Ok(Ir8Program {
+        entry_func: main_func_id as u32,
+        num_vregs: vreg_counter,
+        func_blocks,
+        cycles: Vec::new(),
+        frame_infos,
+        memory_layout,
+        global_init,
+    })
+}
+
+fn lower_function(
+    ctx: &Lower8Context<'_>,
+    func: &IrFuncInfo,
+    func_id: u32,
+    is_main: bool,
+    local_vregs: Vec<Word>,
+    vreg_start: u16,
+) -> anyhow::Result<(Vec<BasicBlock8>, FrameInfo, u16)> {
+    let body = match func.body() {
+        Some(b) => b,
+        None => {
+            let fi = FrameInfo {
+                entry: Pc::new(0),
+                num_locals: 0,
+            };
+            return Ok((Vec::new(), fi, vreg_start));
+        }
+    };
+
+    let num_locals = body.locals().len() as u32;
+    let mut b = FuncBuilder::new(func_id, is_main, vreg_start, local_vregs);
+
+    let live_after_by_block = compute_live_after_by_block(body);
+
+    for ir_block in body.blocks() {
+        let pc = b.alloc_block();
+        b.block_pc_map.insert(ir_block.id, pc);
+    }
+
+    for (block_idx, ir_block) in body.blocks().iter().enumerate() {
+        let blk_pc = b.block_pc_map[&ir_block.id];
+        b.switch_to(blk_pc);
+
+        let ref_base = BasicBlock::ref_base(body.blocks(), block_idx);
+        for (i, inst) in ir_block.insts.iter().enumerate() {
+            ops::lower_inst(
+                &mut b,
+                ctx,
+                inst,
+                ref_base + i,
+                &live_after_by_block[block_idx][i],
+            )?;
+        }
+
+        lower_terminator(&mut b, ctx.module, &ir_block.terminator, ctx.allocs)?;
+    }
+
+    let vreg_end = b.vreg_counter;
+    let fi = FrameInfo {
+        entry: Pc::new(func_id as u16 * PC_STRIDE),
+        num_locals,
+    };
+    Ok((b.blocks, fi, vreg_end))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wasmparser::{RefType, ValType};
+
+    const fn bid(value: usize) -> BlockId {
+        BlockId::new(value)
+    }
+
+    const fn r(value: usize) -> IrNode {
+        IrNode::new(value)
+    }
+
+    fn mk_sig(params: &[ValType], results: &[ValType]) -> crate::module::FuncType {
+        crate::module::FuncType::new(
+            params.to_vec().into_boxed_slice(),
+            results.to_vec().into_boxed_slice(),
+        )
+    }
+
+    fn mk_single_main_module(main_block: BasicBlock) -> Module {
+        let mut module = Module::new();
+        module.set_num_pages(1);
+        module.set_main_export(Some(0));
+        *module.functions_ir_mut() = vec![IrFuncInfo::new(
+            mk_sig(&[], &[ValType::I32]),
+            Some(crate::module::IrFuncBody::new(
+                vec![],
+                bid(0),
+                vec![main_block],
+            )),
+        )];
+        module
+    }
+
+    fn mk_module_with(f: impl FnOnce(&mut Module)) -> Module {
+        let mut module = Module::new();
+        f(&mut module);
+        module
+    }
+
+    fn mk_ir_body(locals: Vec<ValType>, blocks: Vec<BasicBlock>) -> crate::module::IrFuncBody {
+        crate::module::IrFuncBody::new(locals, bid(0), blocks)
+    }
+
+    fn mk_table(entries: Vec<Option<u32>>) -> crate::module::TableInfo {
+        crate::module::TableInfo::new(RefType::FUNCREF, entries)
+    }
+
+    fn find_main_return_word(blocks: &[BasicBlock8]) -> Word {
+        blocks
+            .iter()
+            .find_map(|bb| match bb.terminator {
+                Terminator8::Exit { val: Some(v) } => Some(v),
+                _ => None,
+            })
+            .expect("expected main function exit value")
+    }
+
+    fn find_inst_def_kind(blocks: &[BasicBlock8], reg: Val8) -> &Inst8Kind {
+        blocks
+            .iter()
+            .flat_map(|bb| bb.insts.iter())
+            .find_map(|inst| (inst.dst == Some(reg)).then_some(&inst.kind))
+            .unwrap_or_else(|| panic!("missing definition for v{}", reg.reg_index().unwrap()))
+    }
+
+    fn mk_trivial_main_block() -> BasicBlock {
+        BasicBlock {
+            id: bid(0),
+            insts: vec![Inst::I32Const(0)],
+            terminator: Terminator::Return(Some(r(0))),
+        }
+    }
+
+    fn assert_lower8_error_contains(module: &Module, memory_bytes_cap: u32, expected: &str) {
+        let err = lower8_module(module, memory_bytes_cap)
+            .err()
+            .expect("expected lower8_module to fail");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains(expected),
+            "expected error containing {expected:?}, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn lower8_memory_end_uses_explicit_memory_cap() {
+        let mut module = mk_single_main_module(mk_trivial_main_block());
+        module.globals_mut().push(crate::module::GlobalInfo::new(
+            ValType::I32,
+            true,
+            crate::ast::Node::I32Const(4096),
+        ));
+
+        let program = lower8_module(&module, 2048).expect("lower8_module should succeed");
+        assert_eq!(program.memory_layout.memory_end, 2048);
+    }
+
+    #[test]
+    fn lower8_memory_end_uses_global0_when_memory_cap_is_zero() {
+        let mut module = mk_single_main_module(mk_trivial_main_block());
+        module.globals_mut().push(crate::module::GlobalInfo::new(
+            ValType::I32,
+            true,
+            crate::ast::Node::I32Const(4096),
+        ));
+
+        let program = lower8_module(&module, 0).expect("lower8_module should succeed");
+        assert_eq!(program.memory_layout.memory_end, 4096);
+    }
+
+    #[test]
+    fn lower8_zero_memory_cap_requires_global0_stack_pointer() {
+        let module = mk_single_main_module(mk_trivial_main_block());
+        assert_lower8_error_contains(
+            &module,
+            0,
+            "memory bytes cap is 0, but global 0 (stack pointer) is missing",
+        );
+    }
+
+    #[test]
+    fn lower8_reject_memory_cap_above_16bit_address_space_limit() {
+        let module = mk_single_main_module(mk_trivial_main_block());
+        assert_lower8_error_contains(
+            &module,
+            crate::constants::MAX_ADDRESSABLE_MEMORY_BYTES + 1,
+            "memory bytes cap 65537 exceeds 16-bit address space limit 65536",
+        );
+    }
+
+    #[test]
+    fn lower8_reject_memory_larger_than_16bit_addressing() {
+        let mut module = mk_single_main_module(mk_trivial_main_block());
+        module.set_num_pages(2);
+
+        assert_lower8_error_contains(
+            &module,
+            65536,
+            "linear memory too large for 16-bit addressing (131072 bytes)",
+        );
+    }
+
+    #[test]
+    fn lower8_reject_out_of_bounds_data_segment() {
+        let mut module = mk_single_main_module(mk_trivial_main_block());
+        module.preloaded_data_mut().push((65535, vec![0xaa, 0xbb]));
+
+        assert_lower8_error_contains(&module, 65536, "data segment out of bounds");
+    }
+
+    #[test]
+    fn lower8_reject_non_i32_global_type() {
+        let mut module = mk_single_main_module(mk_trivial_main_block());
+        module.globals_mut().push(crate::module::GlobalInfo::new(
+            ValType::I64,
+            true,
+            crate::ast::Node::I32Const(0),
+        ));
+
+        assert_lower8_error_contains(&module, 65536, "global 0 type I64 is unsupported");
+    }
+
+    #[test]
+    fn lower8_reject_non_constant_global_init_expr() {
+        let mut module = mk_single_main_module(mk_trivial_main_block());
+        module.globals_mut().push(crate::module::GlobalInfo::new(
+            ValType::I32,
+            true,
+            crate::ast::Node::GlobalGet(0),
+        ));
+
+        assert_lower8_error_contains(&module, 65536, "global 0 has unsupported init expr");
+    }
+
+    #[test]
+    fn lower8_reject_out_of_range_word_mem_offset() {
+        let module = mk_single_main_module(BasicBlock {
+            id: bid(0),
+            insts: vec![
+                Inst::I32Const(0),
+                Inst::Load {
+                    size: 32,
+                    signed: false,
+                    offset: 0x1234_5678,
+                    addr: r(0),
+                },
+            ],
+            terminator: Terminator::Return(Some(r(1))),
+        });
+
+        assert_lower8_error_contains(
+            &module,
+            65536,
+            "load offset 0x12345678 exceeds 16-bit address space",
+        );
+    }
+
+    #[test]
+    fn lower8_reject_out_of_range_halfword_mem_offset() {
+        let module = mk_single_main_module(BasicBlock {
+            id: bid(0),
+            insts: vec![
+                Inst::I32Const(0),
+                Inst::I32Const(0),
+                Inst::Store {
+                    size: 16,
+                    offset: u16::MAX as u32,
+                    addr: r(0),
+                    val: r(1),
+                },
+            ],
+            terminator: Terminator::Return(Some(r(0))),
+        });
+
+        assert_lower8_error_contains(
+            &module,
+            65536,
+            "store offset 0xffff exceeds 16-bit address space for 2-byte access",
+        );
+    }
+
+    #[test]
+    fn lower8_reject_legacy_one_byte_load_width_alias() {
+        let module = mk_single_main_module(BasicBlock {
+            id: bid(0),
+            insts: vec![
+                Inst::I32Const(0),
+                Inst::Load {
+                    size: 1,
+                    signed: false,
+                    offset: 0,
+                    addr: r(0),
+                },
+            ],
+            terminator: Terminator::Return(Some(r(1))),
+        });
+
+        assert_lower8_error_contains(
+            &module,
+            65536,
+            "load i32 memory width 1 is unsupported (expected 8/16/32 bits)",
+        );
+    }
+
+    #[test]
+    fn lower8_reject_legacy_four_byte_store_width_alias() {
+        let module = mk_single_main_module(BasicBlock {
+            id: bid(0),
+            insts: vec![
+                Inst::I32Const(0),
+                Inst::I32Const(0),
+                Inst::Store {
+                    size: 4,
+                    offset: 0,
+                    addr: r(0),
+                    val: r(1),
+                },
+            ],
+            terminator: Terminator::Return(Some(r(0))),
+        });
+
+        assert_lower8_error_contains(
+            &module,
+            65536,
+            "store i32 memory width 4 is unsupported (expected 8/16/32 bits)",
+        );
+    }
+
+    #[test]
+    fn lower8_divrem_lowering_uses_shared_helpers_and_keeps_trap_path() {
+        let module = mk_single_main_module(BasicBlock {
+            id: bid(0),
+            insts: vec![
+                Inst::I32Const(100),                   // 0
+                Inst::I32Const(7),                     // 1
+                Inst::Binary(BinOp::DivU, r(0), r(1)), // 2
+                Inst::Binary(BinOp::RemU, r(0), r(1)), // 3
+                Inst::Binary(BinOp::DivS, r(0), r(1)), // 4
+                Inst::Binary(BinOp::RemS, r(0), r(1)), // 5
+                Inst::Binary(BinOp::Add, r(2), r(3)),  // 6
+                Inst::Binary(BinOp::Add, r(4), r(5)),  // 7
+                Inst::Binary(BinOp::Add, r(6), r(7)),  // 8
+            ],
+            terminator: Terminator::Return(Some(r(8))),
+        });
+
+        let program = lower8_module(&module, 65536).expect("lower8_module should succeed");
+        let main_blocks = &program.func_blocks[0];
+
+        assert!(
+            main_blocks.iter().any(|bb| matches!(
+                bb.terminator,
+                Terminator8::CallSetup {
+                    callee_entry,
+                    ..
+                } if callee_entry == Pc::new(PC_STRIDE)
+                    || callee_entry == Pc::new(2 * PC_STRIDE)
+                    || callee_entry == Pc::new(3 * PC_STRIDE)
+                    || callee_entry == Pc::new(4 * PC_STRIDE)
+            )),
+            "expected non-trivial div/rem constants to call shared helper functions"
+        );
+        assert!(
+            program.func_blocks.iter().skip(1).any(|blocks| blocks
+                .iter()
+                .any(|bb| matches!(bb.terminator, Terminator8::Trap(TrapCode::DivisionByZero)))),
+            "expected divide-by-zero trap blocks in shared helper functions"
+        );
+    }
+
+    #[test]
+    fn lower8_variable_divrem_calls_shared_builtin_function() {
+        let module = mk_single_main_module(BasicBlock {
+            id: bid(0),
+            insts: vec![
+                Inst::I32Const(100),
+                Inst::Getchar,
+                Inst::Binary(BinOp::DivU, r(0), r(1)),
+            ],
+            terminator: Terminator::Return(Some(r(2))),
+        });
+
+        let program = lower8_module(&module, 65536).expect("lower8_module should succeed");
+        assert_eq!(
+            program.func_blocks.len(),
+            5,
+            "helper function-id slots are preserved; only referenced helpers have non-empty blocks"
+        );
+
+        let main_blocks = &program.func_blocks[0];
+        let div_u_entry = Pc::new(PC_STRIDE);
+        assert!(
+            main_blocks.iter().any(|bb| {
+                matches!(
+                    bb.terminator,
+                    Terminator8::CallSetup { callee_entry, .. } if callee_entry == div_u_entry
+                )
+            }),
+            "expected variable division to call shared builtin function entry {}",
+            div_u_entry.index()
+        );
+        assert!(
+            !program.func_blocks[1].is_empty(),
+            "div_u helper should be emitted when referenced"
+        );
+        assert!(
+            program.func_blocks[2].is_empty()
+                && program.func_blocks[3].is_empty()
+                && program.func_blocks[4].is_empty(),
+            "unused helpers should not emit blocks"
+        );
+    }
+
+    #[test]
+    fn lower8_variable_divrem_uses_js_coprocessor_builtins_when_enabled() {
+        let module = mk_single_main_module(BasicBlock {
+            id: bid(0),
+            insts: vec![
+                Inst::Getchar,
+                Inst::I32Const(7),
+                Inst::Binary(BinOp::DivU, r(0), r(1)),
+                Inst::Binary(BinOp::RemU, r(0), r(1)),
+            ],
+            terminator: Terminator::Return(Some(r(3))),
+        });
+
+        let program = lower8_module_with_config(
+            &module,
+            65536,
+            Lower8Config {
+                js_coprocessor: true,
+            },
+        )
+        .expect("lower8_module_with_config should succeed");
+
+        assert_eq!(
+            program.func_blocks.len(),
+            1,
+            "js coprocessor mode should not append div/rem helper functions"
+        );
+        let main_blocks = &program.func_blocks[0];
+        assert!(
+            main_blocks.iter().any(|bb| {
+                matches!(
+                    bb.terminator,
+                    Terminator8::CallSetup { callee_entry, .. } if callee_entry == BUILTIN_DIV_U32
+                )
+            }),
+            "expected div_u builtin call when js coprocessor lowering is enabled"
+        );
+        assert!(
+            main_blocks.iter().any(|bb| {
+                matches!(
+                    bb.terminator,
+                    Terminator8::CallSetup { callee_entry, .. } if callee_entry == BUILTIN_REM_U32
+                )
+            }),
+            "expected rem_u builtin call when js coprocessor lowering is enabled"
+        );
+    }
+
+    #[test]
+    fn lower8_const_nontrivial_divrem_uses_shared_helpers() {
+        let module = mk_single_main_module(BasicBlock {
+            id: bid(0),
+            insts: vec![
+                Inst::I32Const(123456789),
+                Inst::I32Const(10),
+                Inst::Binary(BinOp::DivU, r(0), r(1)),
+                Inst::Binary(BinOp::RemU, r(0), r(1)),
+                Inst::Binary(BinOp::Add, r(2), r(3)),
+            ],
+            terminator: Terminator::Return(Some(r(4))),
+        });
+
+        let program = lower8_module(&module, 65536).expect("lower8_module should succeed");
+        let main_blocks = &program.func_blocks[0];
+        assert_eq!(
+            program.func_blocks.len(),
+            5,
+            "helper function-id slots are preserved for div/rem helpers"
+        );
+        let div_u_entry = Pc::new(PC_STRIDE);
+        let rem_u_entry = Pc::new(2 * PC_STRIDE);
+
+        assert!(
+            main_blocks.iter().any(|bb| {
+                matches!(
+                    bb.terminator,
+                    Terminator8::CallSetup { callee_entry, .. }
+                        if callee_entry == div_u_entry || callee_entry == rem_u_entry
+                )
+            }),
+            "non-trivial constant div/rem should call shared div/rem helper functions"
+        );
+        assert!(
+            !main_blocks
+                .iter()
+                .any(|bb| { matches!(bb.terminator, Terminator8::Trap(TrapCode::DivisionByZero)) }),
+            "divide-by-zero trap should be inside shared helper, not caller block"
+        );
+        assert!(
+            !program.func_blocks[1].is_empty() && !program.func_blocks[2].is_empty(),
+            "div_u/rem_u helpers should be emitted when referenced"
+        );
+        assert!(
+            program.func_blocks[3].is_empty() && program.func_blocks[4].is_empty(),
+            "unused signed helpers should not emit blocks"
+        );
+    }
+
+    #[test]
+    fn lower8_divrem_helper_dispatches_on_high_dividend_bytes() {
+        let module = mk_single_main_module(BasicBlock {
+            id: bid(0),
+            insts: vec![
+                Inst::I32Const(100),
+                Inst::Getchar,
+                Inst::Binary(BinOp::DivU, r(0), r(1)),
+            ],
+            terminator: Terminator::Return(Some(r(2))),
+        });
+
+        let program = lower8_module(&module, 65536).expect("lower8_module should succeed");
+        let div_u_entry = Pc::new(PC_STRIDE);
+        let main_blocks = &program.func_blocks[0];
+        let helper_numer_word = main_blocks
+            .iter()
+            .find_map(|bb| match bb.terminator {
+                Terminator8::CallSetup {
+                    callee_entry,
+                    ref callee_arg_vregs,
+                    ..
+                } if callee_entry == div_u_entry => callee_arg_vregs.first().copied(),
+                _ => None,
+            })
+            .expect("main should call div_u helper with argument vregs");
+
+        let mut saw_b3_check = false;
+        let mut saw_b2_check = false;
+        let mut saw_b1_check = false;
+        let helper_blocks = &program.func_blocks[1];
+        for bb in helper_blocks {
+            for inst in &bb.insts {
+                if let Inst8Kind::Eq(lhs, rhs) = inst.kind {
+                    let checks = |byte: Val8| {
+                        (lhs == byte && rhs.imm_value() == Some(0))
+                            || (rhs == byte && lhs.imm_value() == Some(0))
+                    };
+                    saw_b3_check |= checks(helper_numer_word.b3);
+                    saw_b2_check |= checks(helper_numer_word.b2);
+                    saw_b1_check |= checks(helper_numer_word.b1);
+                }
+            }
+        }
+
+        assert!(
+            saw_b3_check && saw_b2_check && saw_b1_check,
+            "expected div_u helper to check dividend high bytes b3/b2/b1 for short-path dispatch"
+        );
+    }
+
+    #[test]
+    fn lower8_divrem_helper_reuses_subtract_borrow_instead_of_ltu_chain() {
+        let module = mk_single_main_module(BasicBlock {
+            id: bid(0),
+            insts: vec![
+                Inst::Getchar,
+                Inst::Getchar,
+                Inst::Binary(BinOp::DivU, r(0), r(1)),
+            ],
+            terminator: Terminator::Return(Some(r(2))),
+        });
+
+        let program = lower8_module(&module, 65536).expect("lower8_module should succeed");
+        let div_u_entry = Pc::new(PC_STRIDE);
+        let main_blocks = &program.func_blocks[0];
+        let helper_denom_word = main_blocks
+            .iter()
+            .find_map(|bb| match bb.terminator {
+                Terminator8::CallSetup {
+                    callee_entry,
+                    ref callee_arg_vregs,
+                    ..
+                } if callee_entry == div_u_entry => callee_arg_vregs.get(1).copied(),
+                _ => None,
+            })
+            .expect("main should call div_u helper with denominator vregs");
+
+        let helper_blocks = &program.func_blocks[1];
+        assert!(
+            helper_blocks
+                .iter()
+                .flat_map(|bb| bb.insts.iter())
+                .all(|inst| !matches!(inst.kind, Inst8Kind::LtU(_, _))),
+            "div_u helper should derive restore-step ordering from subtract borrow, not lt_u chain"
+        );
+
+        let mut defs = HashMap::new();
+        for bb in helper_blocks {
+            for inst in &bb.insts {
+                if let Some(dst) = inst.dst {
+                    defs.insert(dst, inst.kind);
+                }
+            }
+        }
+
+        assert!(
+            helper_blocks
+                .iter()
+                .flat_map(|bb| bb.insts.iter())
+                .any(|inst| {
+                    let Inst8Kind::BoolNot(src) = inst.kind else {
+                        return false;
+                    };
+                    matches!(defs.get(&src), Some(Inst8Kind::Sub32Borrow { rhs, .. }) if *rhs == helper_denom_word)
+                }),
+            "div_u helper should negate the final high-byte subtract borrow to form the quotient bit"
+        );
+    }
+
+    #[test]
+    fn lower8_load8_s_sign_extends_to_word() {
+        let module = mk_single_main_module(BasicBlock {
+            id: bid(0),
+            insts: vec![
+                Inst::I32Const(0),
+                Inst::Load {
+                    size: 8,
+                    signed: true,
+                    offset: 5,
+                    addr: r(0),
+                },
+            ],
+            terminator: Terminator::Return(Some(r(1))),
+        });
+
+        let program = lower8_module(&module, 65536).expect("lower8_module should succeed");
+        let blocks = &program.func_blocks[0];
+        let ret = find_main_return_word(blocks);
+
+        let loads: Vec<(u16, u8)> = blocks
+            .iter()
+            .flat_map(|bb| bb.insts.iter())
+            .filter_map(|inst| match inst.kind {
+                Inst8Kind::LoadMem { base, lane, .. } => Some((base, lane)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(loads, vec![(5, 0)], "load8_s should load only one byte");
+
+        let b1_fill = match find_inst_def_kind(blocks, ret.b1) {
+            Inst8Kind::Copy(src) => *src,
+            other => panic!("expected b1 sign fill copy, got {other:?}"),
+        };
+        let b2_fill = match find_inst_def_kind(blocks, ret.b2) {
+            Inst8Kind::Copy(src) => *src,
+            other => panic!("expected b2 sign fill copy, got {other:?}"),
+        };
+        let b3_fill = match find_inst_def_kind(blocks, ret.b3) {
+            Inst8Kind::Copy(src) => *src,
+            other => panic!("expected b3 sign fill copy, got {other:?}"),
+        };
+        assert_eq!(b1_fill, b2_fill);
+        assert_eq!(b1_fill, b3_fill);
+        let is_neg = match find_inst_def_kind(blocks, b1_fill) {
+            Inst8Kind::Sub(zero, is_neg) if zero.imm_value() == Some(0) => *is_neg,
+            other => panic!(
+                "expected sign fill to come from subtracting a boolean from zero, got {other:?}"
+            ),
+        };
+        assert!(
+            matches!(find_inst_def_kind(blocks, is_neg), Inst8Kind::GeU(src, thresh) if *src == ret.b0 && thresh.imm_value() == Some(0x80)),
+            "expected load8_s sign fill to test the high bit with >= 0x80"
+        );
+    }
+
+    #[test]
+    fn lower8_load16_s_sign_extends_to_word() {
+        let module = mk_single_main_module(BasicBlock {
+            id: bid(0),
+            insts: vec![
+                Inst::I32Const(0),
+                Inst::Load {
+                    size: 16,
+                    signed: true,
+                    offset: 6,
+                    addr: r(0),
+                },
+            ],
+            terminator: Terminator::Return(Some(r(1))),
+        });
+
+        let program = lower8_module(&module, 65536).expect("lower8_module should succeed");
+        let blocks = &program.func_blocks[0];
+        let ret = find_main_return_word(blocks);
+
+        let loads: Vec<(u16, u8)> = blocks
+            .iter()
+            .flat_map(|bb| bb.insts.iter())
+            .filter_map(|inst| match inst.kind {
+                Inst8Kind::LoadMem { base, lane, .. } => Some((base, lane)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            loads,
+            vec![(6, 0), (6, 1)],
+            "load16_s should load exactly two bytes"
+        );
+
+        let b2_fill = match find_inst_def_kind(blocks, ret.b2) {
+            Inst8Kind::Copy(src) => *src,
+            other => panic!("expected b2 sign fill copy, got {other:?}"),
+        };
+        let b3_fill = match find_inst_def_kind(blocks, ret.b3) {
+            Inst8Kind::Copy(src) => *src,
+            other => panic!("expected b3 sign fill copy, got {other:?}"),
+        };
+        assert_eq!(b2_fill, b3_fill);
+        let is_neg = match find_inst_def_kind(blocks, b2_fill) {
+            Inst8Kind::Sub(zero, is_neg) if zero.imm_value() == Some(0) => *is_neg,
+            other => panic!(
+                "expected sign fill to come from subtracting a boolean from zero, got {other:?}"
+            ),
+        };
+        assert!(
+            matches!(find_inst_def_kind(blocks, is_neg), Inst8Kind::GeU(src, thresh) if *src == ret.b1 && thresh.imm_value() == Some(0x80)),
+            "expected load16_s sign fill to test the high bit with >= 0x80"
+        );
+    }
+
+    #[test]
+    fn lower8_load16_u_zero_extends_to_word() {
+        let module = mk_single_main_module(BasicBlock {
+            id: bid(0),
+            insts: vec![
+                Inst::I32Const(0),
+                Inst::Load {
+                    size: 16,
+                    signed: false,
+                    offset: 6,
+                    addr: r(0),
+                },
+            ],
+            terminator: Terminator::Return(Some(r(1))),
+        });
+
+        let program = lower8_module(&module, 65536).expect("lower8_module should succeed");
+        let blocks = &program.func_blocks[0];
+        let ret = find_main_return_word(blocks);
+
+        let loads: Vec<(u16, u8)> = blocks
+            .iter()
+            .flat_map(|bb| bb.insts.iter())
+            .filter_map(|inst| match inst.kind {
+                Inst8Kind::LoadMem { base, lane, .. } => Some((base, lane)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            loads,
+            vec![(6, 0), (6, 1)],
+            "load16_u should load two bytes"
+        );
+
+        let b2_fill = match find_inst_def_kind(blocks, ret.b2) {
+            Inst8Kind::Copy(src) => *src,
+            other => panic!("expected b2 zero fill copy, got {other:?}"),
+        };
+        let b3_fill = match find_inst_def_kind(blocks, ret.b3) {
+            Inst8Kind::Copy(src) => *src,
+            other => panic!("expected b3 zero fill copy, got {other:?}"),
+        };
+        assert_eq!(b2_fill, b3_fill);
+        assert!(
+            b2_fill == Val8::imm(0),
+            "expected zero extension fill to be constant zero"
+        );
+    }
+
+    #[test]
+    fn lower8_store16_writes_two_bytes() {
+        let module = mk_single_main_module(BasicBlock {
+            id: bid(0),
+            insts: vec![
+                Inst::I32Const(0),
+                Inst::I32Const(0x1122_3344),
+                Inst::Store {
+                    size: 16,
+                    offset: 9,
+                    addr: r(0),
+                    val: r(1),
+                },
+            ],
+            terminator: Terminator::Return(Some(r(0))),
+        });
+
+        let program = lower8_module(&module, 65536).expect("lower8_module should succeed");
+        let blocks = &program.func_blocks[0];
+        let mut stores: Vec<(u16, u8)> = blocks
+            .iter()
+            .flat_map(|bb| bb.insts.iter())
+            .filter_map(|inst| match inst.kind {
+                Inst8Kind::StoreMem { base, lane, .. } => Some((base, lane)),
+                _ => None,
+            })
+            .collect();
+        stores.sort_unstable();
+        assert_eq!(stores, vec![(9, 0), (9, 1)]);
+    }
+
+    #[test]
+    fn lower8_table_size_returns_table_entry_count() {
+        let mut module = mk_single_main_module(BasicBlock {
+            id: bid(0),
+            insts: vec![Inst::TableSize(0)],
+            terminator: Terminator::Return(Some(r(0))),
+        });
+        module
+            .tables_mut()
+            .push(mk_table(vec![None, None, Some(0)]));
+
+        let program = lower8_module(&module, 65536).expect("lower8_module should succeed");
+        let ret = find_main_return_word(&program.func_blocks[0]);
+        assert_eq!(
+            ret,
+            Word::from_u32_imm(3),
+            "table.size should lower to the table's entry count"
+        );
+    }
+
+    #[test]
+    fn lower8_table_size_rejects_missing_table() {
+        let module = mk_single_main_module(BasicBlock {
+            id: bid(0),
+            insts: vec![Inst::TableSize(1)],
+            terminator: Terminator::Return(Some(r(0))),
+        });
+
+        assert_lower8_error_contains(
+            &module,
+            65536,
+            "table.size references table 1 which does not exist",
+        );
+    }
+
+    #[test]
+    fn lower8_call_spills_live_non_local_address_word() {
+        let fib_sig = mk_sig(&[ValType::I32], &[ValType::I32]);
+        let main_sig = mk_sig(&[], &[ValType::I32]);
+
+        let fib_block = BasicBlock {
+            id: bid(0),
+            insts: vec![
+                Inst::LocalGet(0),                    // 0: n
+                Inst::I32Const(4),                    // 1
+                Inst::Binary(BinOp::Mul, r(0), r(1)), // 2: n*4
+                Inst::I32Const(16),                   // 3: memo base
+                Inst::Binary(BinOp::Add, r(3), r(2)), // 4: addr
+                Inst::I32Const(1),                    // 5
+                Inst::Binary(BinOp::Sub, r(0), r(5)), // 6: n-1
+                Inst::Call {
+                    func: 0,
+                    args: vec![r(6)],
+                }, // 7
+                Inst::I32Const(2),                    // 8
+                Inst::Binary(BinOp::Sub, r(0), r(8)), // 9: n-2
+                Inst::Call {
+                    func: 0,
+                    args: vec![r(9)],
+                }, // 10
+                Inst::Binary(BinOp::Add, r(7), r(10)), // 11: fib(n-1)+fib(n-2)
+                Inst::Store {
+                    size: 32,
+                    offset: 0,
+                    addr: r(4),
+                    val: r(11),
+                }, // 12: memo[n] = sum
+            ],
+            terminator: Terminator::Return(Some(r(11))),
+        };
+
+        let main_block = BasicBlock {
+            id: bid(0),
+            insts: vec![
+                Inst::I32Const(8),
+                Inst::Call {
+                    func: 0,
+                    args: vec![r(0)],
+                },
+            ],
+            terminator: Terminator::Return(Some(r(1))),
+        };
+
+        let module = mk_module_with(|module| {
+            module.set_num_pages(1);
+            module.set_main_export(Some(1));
+            *module.functions_ir_mut() = vec![
+                IrFuncInfo::new(
+                    fib_sig.clone(),
+                    Some(mk_ir_body(vec![ValType::I32], vec![fib_block])),
+                ),
+                IrFuncInfo::new(main_sig, Some(mk_ir_body(vec![], vec![main_block]))),
+            ];
+        });
+
+        let program = lower8_module(&module, 65536).expect("lower8_module should succeed");
+        let fib_blocks = &program.func_blocks[0];
+
+        let mut memo_store_addr: Option<crate::ir8::Addr> = None;
+        for blk in fib_blocks {
+            for inst in &blk.insts {
+                if let Inst8Kind::StoreMem { base, addr, .. } = &inst.kind
+                    && *base == 0
+                {
+                    memo_store_addr = Some(*addr);
+                    break;
+                }
+            }
+            if memo_store_addr.is_some() {
+                break;
+            }
+        }
+        let addr = memo_store_addr.expect("expected lowered memo store");
+
+        // One local word (n) => byte offsets [0..3] are local saves. Any spill must be >= 4.
+        let spill_base = 4u16;
+        let mut lo_spilled = false;
+        let mut hi_spilled = false;
+        let mut lo_restored = false;
+        let mut hi_restored = false;
+
+        for blk in fib_blocks {
+            for inst in &blk.insts {
+                match &inst.kind {
+                    Inst8Kind::CsStore { offset, val } if *offset >= spill_base => {
+                        if addr.lo.reg_index() == val.reg_index() {
+                            lo_spilled = true;
+                        }
+                        if addr.hi.reg_index() == val.reg_index() {
+                            hi_spilled = true;
+                        }
+                    }
+                    Inst8Kind::CsLoad { offset } if *offset >= spill_base => {
+                        if addr.lo.reg_index() == inst.dst.unwrap().reg_index() {
+                            lo_restored = true;
+                        }
+                        if addr.hi.reg_index() == inst.dst.unwrap().reg_index() {
+                            hi_restored = true;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        assert!(
+            lo_spilled,
+            "memo address lo byte was not spilled around call"
+        );
+        assert!(
+            hi_spilled,
+            "memo address hi byte was not spilled around call"
+        );
+        assert!(
+            lo_restored,
+            "memo address lo byte was not restored after call"
+        );
+        assert!(
+            hi_restored,
+            "memo address hi byte was not restored after call"
+        );
+    }
+
+    #[test]
+    fn lower8_call_indirect_uses_dispatch_and_callstack_ra() {
+        let callee_sig = mk_sig(&[ValType::I32], &[ValType::I32]);
+        let main_sig = mk_sig(&[], &[ValType::I32]);
+
+        let callee_block = BasicBlock {
+            id: bid(0),
+            insts: vec![Inst::LocalGet(0)],
+            terminator: Terminator::Return(Some(r(0))),
+        };
+
+        let main_block = BasicBlock {
+            id: bid(0),
+            insts: vec![
+                Inst::I32Const(7),
+                Inst::I32Const(0),
+                Inst::CallIndirect {
+                    type_index: 0,
+                    table_index: 0,
+                    index: r(1),
+                    args: vec![r(0)],
+                },
+            ],
+            terminator: Terminator::Return(Some(r(2))),
+        };
+
+        let module = mk_module_with(|module| {
+            module.set_num_pages(1);
+            module.set_main_export(Some(1));
+            *module.types_mut() = vec![callee_sig.clone()];
+            *module.tables_mut() = vec![mk_table(vec![Some(0)])];
+            *module.functions_ir_mut() = vec![
+                IrFuncInfo::new(
+                    callee_sig,
+                    Some(mk_ir_body(vec![ValType::I32], vec![callee_block])),
+                ),
+                IrFuncInfo::new(main_sig, Some(mk_ir_body(vec![], vec![main_block]))),
+            ];
+        });
+
+        let program = lower8_module(&module, 65536).expect("lower8_module should succeed");
+        let main_blocks = &program.func_blocks[1];
+
+        assert!(
+            main_blocks
+                .iter()
+                .any(|bb| matches!(bb.terminator, Terminator8::Switch { .. })),
+            "expected indirect call dispatch switch in main"
+        );
+        assert!(
+            main_blocks.iter().any(|bb| matches!(
+                bb.terminator,
+                Terminator8::CallSetup { callee_entry, .. } if callee_entry == Pc::new(0)
+            )),
+            "expected call_indirect to call function 0"
+        );
+        assert!(
+            main_blocks
+                .iter()
+                .flat_map(|bb| bb.insts.iter())
+                .any(|inst| matches!(inst.kind, Inst8Kind::CsStorePc { .. })),
+            "expected call_indirect to spill RA onto the call stack"
+        );
+        assert!(
+            main_blocks
+                .iter()
+                .any(|bb| matches!(bb.terminator, Terminator8::Trap(TrapCode::Unreachable))),
+            "expected invalid indirect targets to trap"
+        );
+    }
+
+    #[test]
+    fn lower8_call_indirect_rejects_missing_table() {
+        let main_block = BasicBlock {
+            id: bid(0),
+            insts: vec![
+                Inst::I32Const(0),
+                Inst::CallIndirect {
+                    type_index: 0,
+                    table_index: 1,
+                    index: r(0),
+                    args: vec![],
+                },
+            ],
+            terminator: Terminator::Return(Some(r(1))),
+        };
+
+        let module = mk_module_with(|module| {
+            module.set_num_pages(1);
+            module.set_main_export(Some(0));
+            *module.types_mut() = vec![mk_sig(&[], &[ValType::I32])];
+            *module.functions_ir_mut() = vec![IrFuncInfo::new(
+                mk_sig(&[], &[ValType::I32]),
+                Some(mk_ir_body(vec![], vec![main_block])),
+            )];
+        });
+
+        let err = match lower8_module(&module, 65536) {
+            Ok(_) => panic!("missing call_indirect table should fail"),
+            Err(err) => err,
+        };
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("call_indirect references table 1 which does not exist"),
+            "unexpected lower8 error: {msg}"
+        );
+    }
+
+    #[test]
+    fn lower8_call_indirect_rejects_signature_arg_mismatch() {
+        let main_block = BasicBlock {
+            id: bid(0),
+            insts: vec![
+                Inst::I32Const(0),
+                Inst::CallIndirect {
+                    type_index: 0,
+                    table_index: 0,
+                    index: r(0),
+                    args: vec![],
+                },
+            ],
+            terminator: Terminator::Return(Some(r(1))),
+        };
+
+        let module = mk_module_with(|module| {
+            module.set_num_pages(1);
+            module.set_main_export(Some(0));
+            *module.types_mut() = vec![mk_sig(&[ValType::I32], &[ValType::I32])];
+            *module.tables_mut() = vec![mk_table(vec![None])];
+            *module.functions_ir_mut() = vec![IrFuncInfo::new(
+                mk_sig(&[], &[ValType::I32]),
+                Some(mk_ir_body(vec![], vec![main_block])),
+            )];
+        });
+
+        let err = match lower8_module(&module, 65536) {
+            Ok(_) => panic!("call_indirect arg mismatch should fail"),
+            Err(err) => err,
+        };
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("call_indirect type 0 expects 1 arg(s), got 0"),
+            "unexpected lower8 error: {msg}"
+        );
+    }
+
+    #[test]
+    fn lower8_call_indirect_rejects_table_larger_than_256_entries() {
+        let main_block = BasicBlock {
+            id: bid(0),
+            insts: vec![
+                Inst::I32Const(0),
+                Inst::CallIndirect {
+                    type_index: 0,
+                    table_index: 0,
+                    index: r(0),
+                    args: vec![],
+                },
+            ],
+            terminator: Terminator::Return(Some(r(1))),
+        };
+
+        let module = mk_module_with(|module| {
+            module.set_num_pages(1);
+            module.set_main_export(Some(0));
+            *module.types_mut() = vec![mk_sig(&[], &[ValType::I32])];
+            *module.tables_mut() = vec![mk_table(vec![None; 257])];
+            *module.functions_ir_mut() = vec![IrFuncInfo::new(
+                mk_sig(&[], &[ValType::I32]),
+                Some(mk_ir_body(vec![], vec![main_block])),
+            )];
+        });
+
+        let err = match lower8_module(&module, 65536) {
+            Ok(_) => panic!("oversized call_indirect table should fail"),
+            Err(err) => err,
+        };
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("call_indirect table 0 has 257 entries; max supported is 256"),
+            "unexpected lower8 error: {msg}"
+        );
+    }
+
+    #[test]
+    fn lower8_tail_call_direct_skips_caller_callstack_traffic() {
+        let callee_sig = mk_sig(&[ValType::I32], &[ValType::I32]);
+        let caller_sig = mk_sig(&[], &[ValType::I32]);
+
+        let callee_block = BasicBlock {
+            id: bid(0),
+            insts: vec![Inst::LocalGet(0)],
+            terminator: Terminator::Return(Some(r(0))),
+        };
+
+        let caller_block = BasicBlock {
+            id: bid(0),
+            insts: vec![Inst::I32Const(42)],
+            terminator: Terminator::TailCall {
+                func: 0,
+                args: vec![r(0)],
+            },
+        };
+
+        let module = mk_module_with(|module| {
+            module.set_num_pages(1);
+            module.set_main_export(Some(0));
+            *module.functions_ir_mut() = vec![
+                IrFuncInfo::new(
+                    callee_sig,
+                    Some(mk_ir_body(vec![ValType::I32], vec![callee_block])),
+                ),
+                IrFuncInfo::new(caller_sig, Some(mk_ir_body(vec![], vec![caller_block]))),
+            ];
+        });
+
+        let program = lower8_module(&module, 65536).expect("lower8_module should succeed");
+        let caller_blocks = &program.func_blocks[1];
+
+        assert!(caller_blocks.iter().any(|bb| matches!(
+            bb.terminator,
+            Terminator8::CallSetup {
+                callee_entry,
+                cont,
+                ..
+            } if callee_entry == Pc::new(0) && cont == Pc::new(0)
+        )));
+        assert!(
+            caller_blocks
+                .iter()
+                .flat_map(|bb| bb.insts.iter())
+                .all(|inst| !matches!(
+                    inst.kind,
+                    Inst8Kind::CsStore { .. }
+                        | Inst8Kind::CsLoad { .. }
+                        | Inst8Kind::CsStorePc { .. }
+                        | Inst8Kind::CsLoadPc { .. }
+                        | Inst8Kind::CsAlloc(_)
+                        | Inst8Kind::CsFree(_)
+                )),
+            "tail-call direct should not emit caller callstack save/restore instructions"
+        );
+    }
+
+    #[test]
+    fn lower8_tail_call_indirect_direct_target_skips_caller_callstack_traffic() {
+        let callee_sig = mk_sig(&[ValType::I32], &[ValType::I32]);
+        let caller_sig = mk_sig(&[], &[ValType::I32]);
+
+        let callee_block = BasicBlock {
+            id: bid(0),
+            insts: vec![Inst::LocalGet(0)],
+            terminator: Terminator::Return(Some(r(0))),
+        };
+
+        let caller_block = BasicBlock {
+            id: bid(0),
+            insts: vec![Inst::I32Const(7), Inst::I32Const(0)],
+            terminator: Terminator::TailCallIndirect {
+                type_index: 0,
+                table_index: 0,
+                index: r(1),
+                args: vec![r(0)],
+            },
+        };
+
+        let module = mk_module_with(|module| {
+            module.set_num_pages(1);
+            module.set_main_export(Some(0));
+            *module.types_mut() = vec![callee_sig.clone()];
+            *module.tables_mut() = vec![mk_table(vec![Some(0)])];
+            *module.functions_ir_mut() = vec![
+                IrFuncInfo::new(
+                    callee_sig,
+                    Some(mk_ir_body(vec![ValType::I32], vec![callee_block])),
+                ),
+                IrFuncInfo::new(caller_sig, Some(mk_ir_body(vec![], vec![caller_block]))),
+            ];
+        });
+
+        let program = lower8_module(&module, 65536).expect("lower8_module should succeed");
+        let caller_blocks = &program.func_blocks[1];
+
+        assert!(
+            caller_blocks
+                .iter()
+                .any(|bb| matches!(bb.terminator, Terminator8::Switch { .. })),
+            "expected indirect dispatch switch in caller"
+        );
+        assert!(caller_blocks.iter().any(|bb| matches!(
+            bb.terminator,
+            Terminator8::CallSetup {
+                callee_entry,
+                cont,
+                ..
+            } if callee_entry == Pc::new(0) && cont == Pc::new(0)
+        )));
+        assert!(
+            caller_blocks
+                .iter()
+                .flat_map(|bb| bb.insts.iter())
+                .all(|inst| !matches!(
+                    inst.kind,
+                    Inst8Kind::CsStore { .. }
+                        | Inst8Kind::CsLoad { .. }
+                        | Inst8Kind::CsStorePc { .. }
+                        | Inst8Kind::CsLoadPc { .. }
+                        | Inst8Kind::CsAlloc(_)
+                        | Inst8Kind::CsFree(_)
+                )),
+            "tail-call indirect direct target should not emit caller callstack save/restore instructions"
+        );
+    }
+
+    #[test]
+    fn lower8_tail_call_rejects_missing_function() {
+        let helper_sig = mk_sig(&[], &[ValType::I32]);
+        let main_sig = mk_sig(&[], &[ValType::I32]);
+
+        let helper_block = BasicBlock {
+            id: bid(0),
+            insts: vec![],
+            terminator: Terminator::TailCall {
+                func: 99,
+                args: vec![],
+            },
+        };
+
+        let main_block = BasicBlock {
+            id: bid(0),
+            insts: vec![Inst::I32Const(0)],
+            terminator: Terminator::Return(Some(r(0))),
+        };
+
+        let module = mk_module_with(|module| {
+            module.set_num_pages(1);
+            module.set_main_export(Some(1));
+            *module.functions_ir_mut() = vec![
+                IrFuncInfo::new(helper_sig, Some(mk_ir_body(vec![], vec![helper_block]))),
+                IrFuncInfo::new(main_sig, Some(mk_ir_body(vec![], vec![main_block]))),
+            ];
+        });
+
+        let err = match lower8_module(&module, 65536) {
+            Ok(_) => panic!("tail_call to missing function should fail"),
+            Err(err) => err,
+        };
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("tail_call references missing function 99"),
+            "unexpected lower8 error: {msg}"
+        );
+    }
+
+    #[test]
+    fn lower8_tail_call_indirect_rejects_signature_arg_mismatch() {
+        let helper_sig = mk_sig(&[], &[ValType::I32]);
+        let main_sig = mk_sig(&[], &[ValType::I32]);
+
+        let helper_block = BasicBlock {
+            id: bid(0),
+            insts: vec![Inst::I32Const(0)],
+            terminator: Terminator::TailCallIndirect {
+                type_index: 0,
+                table_index: 0,
+                index: r(0),
+                args: vec![],
+            },
+        };
+
+        let main_block = BasicBlock {
+            id: bid(0),
+            insts: vec![Inst::I32Const(0)],
+            terminator: Terminator::Return(Some(r(0))),
+        };
+
+        let module = mk_module_with(|module| {
+            module.set_num_pages(1);
+            module.set_main_export(Some(1));
+            *module.types_mut() = vec![mk_sig(&[ValType::I32], &[ValType::I32])];
+            *module.tables_mut() = vec![mk_table(vec![None])];
+            *module.functions_ir_mut() = vec![
+                IrFuncInfo::new(helper_sig, Some(mk_ir_body(vec![], vec![helper_block]))),
+                IrFuncInfo::new(main_sig, Some(mk_ir_body(vec![], vec![main_block]))),
+            ];
+        });
+
+        let err = match lower8_module(&module, 65536) {
+            Ok(_) => panic!("tail_call_indirect arg mismatch should fail"),
+            Err(err) => err,
+        };
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("tail_call_indirect type 0 expects 1 arg(s), got 0"),
+            "unexpected lower8 error: {msg}"
+        );
+    }
+
+    #[test]
+    fn lower8_tail_call_indirect_rejects_table_larger_than_256_entries() {
+        let helper_sig = mk_sig(&[], &[ValType::I32]);
+        let main_sig = mk_sig(&[], &[ValType::I32]);
+
+        let helper_block = BasicBlock {
+            id: bid(0),
+            insts: vec![Inst::I32Const(0)],
+            terminator: Terminator::TailCallIndirect {
+                type_index: 0,
+                table_index: 0,
+                index: r(0),
+                args: vec![],
+            },
+        };
+
+        let main_block = BasicBlock {
+            id: bid(0),
+            insts: vec![Inst::I32Const(0)],
+            terminator: Terminator::Return(Some(r(0))),
+        };
+
+        let module = mk_module_with(|module| {
+            module.set_num_pages(1);
+            module.set_main_export(Some(1));
+            *module.types_mut() = vec![mk_sig(&[], &[ValType::I32])];
+            *module.tables_mut() = vec![mk_table(vec![None; 257])];
+            *module.functions_ir_mut() = vec![
+                IrFuncInfo::new(helper_sig, Some(mk_ir_body(vec![], vec![helper_block]))),
+                IrFuncInfo::new(main_sig, Some(mk_ir_body(vec![], vec![main_block]))),
+            ];
+        });
+
+        let err = match lower8_module(&module, 65536) {
+            Ok(_) => panic!("oversized tail_call_indirect table should fail"),
+            Err(err) => err,
+        };
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("tail_call_indirect table 0 has 257 entries; max supported is 256"),
+            "unexpected lower8 error: {msg}"
+        );
+    }
+
+    #[test]
+    fn lower8_tail_call_indirect_builtin_returns_through_caller_ra() {
+        let putchar_sig = mk_sig(&[ValType::I32], &[ValType::I32]);
+        let main_sig = mk_sig(&[], &[ValType::I32]);
+
+        let caller_block = BasicBlock {
+            id: bid(0),
+            insts: vec![Inst::I32Const(b'X' as i32), Inst::I32Const(0)],
+            terminator: Terminator::TailCallIndirect {
+                type_index: 0,
+                table_index: 0,
+                index: r(1),
+                args: vec![r(0)],
+            },
+        };
+
+        let main_block = BasicBlock {
+            id: bid(0),
+            insts: vec![Inst::I32Const(0)],
+            terminator: Terminator::Return(Some(r(0))),
+        };
+
+        let module = mk_module_with(|module| {
+            module.set_num_pages(1);
+            module.set_num_imported_funcs(1);
+            module.set_putchar_import(Some(0));
+            module.set_main_export(Some(2));
+            *module.types_mut() = vec![putchar_sig.clone()];
+            *module.tables_mut() = vec![mk_table(vec![Some(0)])];
+            *module.functions_ir_mut() = vec![
+                IrFuncInfo::new(putchar_sig.clone(), None),
+                IrFuncInfo::new(
+                    main_sig.clone(),
+                    Some(mk_ir_body(vec![], vec![caller_block])),
+                ),
+                IrFuncInfo::new(main_sig, Some(mk_ir_body(vec![], vec![main_block]))),
+            ];
+        });
+
+        let program = lower8_module(&module, 65536).expect("lower8_module should succeed");
+        let caller_blocks = &program.func_blocks[1];
+        assert!(
+            caller_blocks
+                .iter()
+                .flat_map(|bb| bb.insts.iter())
+                .any(|inst| matches!(inst.kind, Inst8Kind::Putchar(_))),
+            "expected builtin putchar path in tail_call_indirect"
+        );
+        assert!(
+            caller_blocks
+                .iter()
+                .flat_map(|bb| bb.insts.iter())
+                .any(|inst| matches!(inst.kind, Inst8Kind::CsFree(1))),
+            "expected tail_call_indirect builtin path to pop caller RA"
+        );
+        assert!(
+            caller_blocks
+                .iter()
+                .flat_map(|bb| bb.insts.iter())
+                .any(|inst| matches!(inst.kind, Inst8Kind::CsLoadPc { offset: 0 })),
+            "expected tail_call_indirect builtin path to reload caller RA"
+        );
+        assert!(
+            caller_blocks
+                .iter()
+                .any(|bb| matches!(bb.terminator, Terminator8::Return { .. })),
+            "expected builtin tail_call_indirect to return through caller RA"
+        );
+    }
+
+    #[test]
+    fn lower8_main_tail_call_terminator_is_rejected() {
+        let module = mk_module_with(|module| {
+            module.set_num_pages(1);
+            module.set_main_export(Some(0));
+            *module.functions_ir_mut() = vec![IrFuncInfo::new(
+                mk_sig(&[], &[ValType::I32]),
+                Some(mk_ir_body(
+                    vec![],
+                    vec![BasicBlock {
+                        id: bid(0),
+                        insts: vec![],
+                        terminator: Terminator::TailCall {
+                            func: 0,
+                            args: vec![],
+                        },
+                    }],
+                )),
+            )];
+        });
+
+        let err = match lower8_module(&module, 65536) {
+            Ok(_) => panic!("main tail_call should fail"),
+            Err(err) => err,
+        };
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("main function must not contain tail_call terminators"),
+            "unexpected lower8 error: {msg}"
+        );
+    }
+
+    #[test]
+    fn lower8_main_tail_call_indirect_terminator_is_rejected() {
+        let module = mk_module_with(|module| {
+            module.set_num_pages(1);
+            module.set_main_export(Some(0));
+            *module.functions_ir_mut() = vec![IrFuncInfo::new(
+                mk_sig(&[], &[ValType::I32]),
+                Some(mk_ir_body(
+                    vec![],
+                    vec![BasicBlock {
+                        id: bid(0),
+                        insts: vec![Inst::I32Const(0)],
+                        terminator: Terminator::TailCallIndirect {
+                            type_index: 0,
+                            table_index: 0,
+                            index: r(0),
+                            args: vec![],
+                        },
+                    }],
+                )),
+            )];
+        });
+
+        let err = match lower8_module(&module, 65536) {
+            Ok(_) => panic!("main tail_call_indirect should fail"),
+            Err(err) => err,
+        };
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("main function must not contain tail_call_indirect terminators"),
+            "unexpected lower8 error: {msg}"
+        );
+    }
+
+    #[test]
+    fn lower8_reject_module_without_main_export() {
+        let module = Module::default();
+        let err = match lower8_module(&module, 65536) {
+            Ok(_) => panic!("module without main export should fail"),
+            Err(err) => err,
+        };
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("no main export"),
+            "unexpected lower8 error: {msg}"
+        );
+    }
+}

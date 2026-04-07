@@ -1,0 +1,630 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Program</title>
+<style>
+body { margin: 0; background: #f5f5f5; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+.terminal { display: flex; flex-direction: column; gap: 12px; width: min(980px, calc(100vw - 24px)); }
+.screen { background: #fff; color: #222; font-size: clamp(0.85rem, 2vw, 1.05rem); line-height: 1.35; padding: 1rem; border-radius: 8px; border: 1px solid #ddd; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05); height: 15lh; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; }
+.screen::before { content: ""; display: block; flex: 1 0 auto; }
+/*__WSS_KEEP_KB_CSS_START__*/
+.kb { background: #fff; padding: 10px; border-radius: 8px; border: 1px solid #ddd; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05); display: flex; flex-direction: column; gap: 6px; position: relative; }
+.row { display: flex; gap: 6px; }
+.key { flex: 1; min-width: 0; padding: 8px 0; appearance: none; background: #f5f5f5; color: #222; font-family: inherit; font-size: clamp(0.68rem, 1.4vw, 0.85rem); font-weight: 600; text-align: center; border: 1px solid #ddd; border-radius: 6px; cursor: pointer; user-select: none; touch-action: none; }
+.key:hover { background: #eee; }
+.key:hover:active { background: #ddd; }
+.key.wide { flex: 1.8; }
+.key.space { flex: 6; }
+.key.dual { display: flex; flex-direction: column-reverse; align-items: center; justify-content: center; padding: 4px 0; }
+.key.dual .shift-char, .key.dual .char { font-size: 0.8em; line-height: 1.2; transition: opacity 0.15s; }
+.key.dual .char { opacity: 1; }
+.key.dual .shift-char { opacity: 0.3; }
+.shift-state { display: none; }
+.shift-state:checked~.row .key.dual .char { opacity: 0.3; }
+.shift-state:checked~.row .key.dual .shift-char { opacity: 1; }
+.shift-label { flex: 1.6; min-width: 0; padding: 8px 0; background: #f5f5f5; color: #222; font-family: inherit; font-size: clamp(0.68rem, 1.4vw, 0.85rem); font-weight: 600; text-align: center; border: 1px solid #ddd; border-radius: 6px; cursor: pointer; user-select: none; touch-action: none; transition: background 0.15s, box-shadow 0.15s; }
+.shift-label:hover { background: #eee; }
+.shift-label:hover:active { background: #ddd; }
+.shift-state:checked~.row .shift-label { background: #c8c8c8; border-color: #aaa; box-shadow: inset 0 2px 4px rgba(0,0,0,0.2); }
+/*__WSS_KEEP_KB_CSS_END__*/
+/*__WSS_KEEP_MEM_VISUALIZER_CSS_START__*/
+.memvis-frame { width: 100%; max-width: 100vw; box-sizing: border-box; overflow: auto; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); outline: 1px solid #ddd; margin: 0 auto; background: #fff; }
+.memvis { background: none; border: none; box-shadow: none; display: flex; align-items: center; position: relative; overflow: hidden; }
+.memvis::after { content: ""; position: absolute; left: -8px; top: -8px; width: 8px; height: 8px; background: transparent; z-index: 1; }
+/*__WSS_KEEP_MEM_VISUALIZER_CSS_END__*/
+/*__WSS_KEEP_CS_VISUALIZER_CSS_START__*/
+.csvis-frame { width: 100%; max-width: 100vw; box-sizing: border-box; overflow: auto; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); outline: 1px solid #ddd; margin: 0 auto; background: #fff; }
+.csvis { background: none; border: none; box-shadow: none; display: flex; align-items: center; position: relative; overflow: hidden; }
+.csvis::after { content: ""; position: absolute; left: -8px; top: -8px; width: 8px; height: 8px; background: transparent; z-index: 1; }
+/*__WSS_KEEP_CS_VISUALIZER_CSS_END__*/
+.unsupported { --support: --support-test(); display: if(style(--support:2):none; else:flex); position: fixed; inset: 0; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.85); color: #fff; padding: 2rem; text-align: center; font-size: 1rem; line-height: 1.5; }
+.inds { width: 100%; display: flex; gap: 8px; flex-wrap: wrap; margin: 4px 0 8px; }
+.ind { flex: 1 1 170px; min-width: 0; display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 6px 8px; border-radius: 6px; border: 1px solid #ddd; background: #fff; }
+.ind .k { color: #666; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; }
+.ind .v { color: #222; font-size: 0.75rem; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ind .v::before { content: "0"; }
+/*__WSS_KEEP_JS_CLOCK_DEBUGGER_CSS_START__*/
+.wss-debug-trigger { position: fixed; right: 14px; bottom: 14px; z-index: 20; appearance: none; border: 1px solid #cfcfcf; border-radius: 999px; padding: 6px 12px; background: rgba(255, 255, 255, 0.96); color: #222; font: inherit; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.02em; cursor: pointer; box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1); }
+.wss-debug-trigger:hover { background: #fff; }
+.wss-debug-popup { position: fixed; right: 14px; bottom: 52px; z-index: 20; width: min(320px, calc(100vw - 24px)); padding: 10px; border: 1px solid #d4d4d4; border-radius: 10px; background: rgba(255, 255, 255, 0.98); box-shadow: 0 10px 22px rgba(0, 0, 0, 0.16); color: #222; }
+.wss-debug-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.wss-debug-title { margin: 0; font-size: 0.78rem; font-weight: 800; letter-spacing: 0.02em; text-transform: uppercase; }
+.wss-debug-close { appearance: none; border: 1px solid #d5d5d5; border-radius: 6px; padding: 2px 7px; background: #fff; color: #555; font: inherit; font-size: 0.69rem; font-weight: 700; cursor: pointer; }
+.wss-debug-close:hover { color: #222; border-color: #bbb; }
+.wss-debug-speed { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; font-size: 0.72rem; font-weight: 700; color: #555; }
+.wss-debug-speed-readout { color: #111; font-size: 0.77rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.wss-debug-range { width: 100%; margin: 0; accent-color: #444; }
+.wss-debug-actions { display: flex; gap: 6px; margin-bottom: 8px; }
+.wss-debug-btn { flex: 1 1 0; appearance: none; border: 1px solid #d4d4d4; border-radius: 7px; padding: 6px 10px; background: #f7f7f7; color: #222; font: inherit; font-size: 0.72rem; font-weight: 700; cursor: pointer; }
+.wss-debug-btn:hover { background: #ececec; }
+.wss-debug-btn:disabled { opacity: 0.5; cursor: default; }
+.wss-debug-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin: 0; }
+.wss-debug-stat { border: 1px solid #e1e1e1; border-radius: 7px; padding: 5px 6px; background: #fafafa; }
+.wss-debug-stat dt { margin: 0; font-size: 0.62rem; font-weight: 700; color: #666; text-transform: uppercase; letter-spacing: 0.04em; }
+.wss-debug-stat dd { margin: 2px 0 0; font-size: 0.76rem; font-weight: 700; font-variant-numeric: tabular-nums; color: #111; }
+@media (max-width: 720px) {
+    .wss-debug-popup { right: 10px; left: 10px; width: auto; bottom: 50px; }
+    .wss-debug-trigger { right: 10px; bottom: 10px; }
+}
+/*__WSS_KEEP_JS_CLOCK_DEBUGGER_CSS_END__*/
+/*__WSS_KEEP_KB_HINT_CSS_START__*/
+.input-hint { position: absolute; top: -9px; left: -9px; margin: 0; padding: 2px 5px; border-radius: 999px; border: 1px solid #ddd; background: rgba(248, 248, 248); color: #666; font-size: 0.64rem; font-weight: 600; line-height: 1.2; letter-spacing: 0.01em; opacity: 0; transform: translateY(-2px); transition: opacity 120ms ease, transform 120ms ease; pointer-events: none; z-index: 2; box-shadow: 0 0 0 2px #fff;}
+.input-hint::before { content: "i"; }
+@container style(--wait_input: 1) { .input-hint { opacity: 0.92; transform: translateY(0); } }
+/*__WSS_KEEP_KB_HINT_CSS_END__*/
+#ind-pc::before { counter-reset: ind-pc var(--pc); content: counter(ind-pc); }
+/*__WSS_KEEP_SP_INDICATOR_CSS_START__*/
+#ind-sp::before { counter-reset: ind-sp var(--cs_sp); content: counter(ind-sp); }
+/*__WSS_KEEP_SP_INDICATOR_CSS_END__*/
+#ind-g0::before {
+    --g0b0: mod(calc(var(--g0_0, 0) + 256), 256);
+    --g0b1: mod(calc(var(--g0_1, 0) + 256), 256);
+    --g0b2: mod(calc(var(--g0_2, 0) + 256), 256);
+    --g0b3: mod(calc(var(--g0_3, 0) + 256), 256);
+    content: "0x"
+        --hex(round(down, calc(var(--g0b3) / 16))) --hex(mod(var(--g0b3), 16))
+        --hex(round(down, calc(var(--g0b2) / 16))) --hex(mod(var(--g0b2), 16))
+        --hex(round(down, calc(var(--g0b1) / 16))) --hex(mod(var(--g0b1), 16))
+        --hex(round(down, calc(var(--g0b0) / 16))) --hex(mod(var(--g0b0), 16));
+}
+
+@function --support-test() returns <integer> { result: calc(1 + 1); }
+@property --clk { syntax: "<integer>"; initial-value: 0; inherits: true; }
+/*__WSS_KEEP_PROP_FB_START__*/
+@property --fb { syntax: "<content-list>"; initial-value: ""; inherits: true; }
+/*__WSS_KEEP_PROP_FB_END__*/
+/*__WSS_KEEP_PROP_RA_START__*/
+@property --ra { syntax: "<content-list>"; initial-value: "0x00000000"; inherits: true; }
+/*__WSS_KEEP_PROP_RA_END__*/
+/*__WSS_KEEP_PROP_KB_START__*/
+@property --kb { syntax: "<integer>"; initial-value: -1; inherits: true; }
+/*__WSS_KEEP_PROP_KB_END__*/
+
+/*__WSS_PROPS__*/
+
+.clk {
+    animation: anim-play 1024ms steps(4, jump-end) infinite;
+    --clk: 0;
+    /*__WSS_KEEP_KB_CLK_DEFAULT_START__*/
+    --kb: -1;
+    /*__WSS_KEEP_KB_CLK_DEFAULT_END__*/
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+@keyframes anim-play {
+    0% { --clk: 0 }
+    25% { --clk: 1 }
+    50% { --clk: 2 }
+    75% { --clk: 3 }
+}
+.terminal {
+    animation: store 1ms infinite, execute 1ms infinite;
+    animation-play-state: paused, paused;
+    @container style(--clk: 1) { animation-play-state: running, paused }
+    @container style(--clk: 3) { animation-play-state: paused, running }
+/*__WSS_LOGIC__*/
+}
+/*__WSS_KEEP_KB_INPUT_CSS_START__*/
+.clk:has(.kb .key[data-key="96"]:hover:active):not(:has(.shift-state:checked)) { --kb: 96; } .clk:has(.kb .key[data-key="96"]:hover:active):has(.shift-state:checked) { --kb: 126; }
+.clk:has(.kb .key[data-key="49"]:hover:active):not(:has(.shift-state:checked)) { --kb: 49; } .clk:has(.kb .key[data-key="49"]:hover:active):has(.shift-state:checked) { --kb: 33; }
+.clk:has(.kb .key[data-key="50"]:hover:active):not(:has(.shift-state:checked)) { --kb: 50; } .clk:has(.kb .key[data-key="50"]:hover:active):has(.shift-state:checked) { --kb: 64; }
+.clk:has(.kb .key[data-key="51"]:hover:active):not(:has(.shift-state:checked)) { --kb: 51; } .clk:has(.kb .key[data-key="51"]:hover:active):has(.shift-state:checked) { --kb: 35; }
+.clk:has(.kb .key[data-key="52"]:hover:active):not(:has(.shift-state:checked)) { --kb: 52; } .clk:has(.kb .key[data-key="52"]:hover:active):has(.shift-state:checked) { --kb: 36; }
+.clk:has(.kb .key[data-key="53"]:hover:active):not(:has(.shift-state:checked)) { --kb: 53; } .clk:has(.kb .key[data-key="53"]:hover:active):has(.shift-state:checked) { --kb: 37; }
+.clk:has(.kb .key[data-key="54"]:hover:active):not(:has(.shift-state:checked)) { --kb: 54; } .clk:has(.kb .key[data-key="54"]:hover:active):has(.shift-state:checked) { --kb: 94; }
+.clk:has(.kb .key[data-key="55"]:hover:active):not(:has(.shift-state:checked)) { --kb: 55; } .clk:has(.kb .key[data-key="55"]:hover:active):has(.shift-state:checked) { --kb: 38; }
+.clk:has(.kb .key[data-key="56"]:hover:active):not(:has(.shift-state:checked)) { --kb: 56; } .clk:has(.kb .key[data-key="56"]:hover:active):has(.shift-state:checked) { --kb: 42; }
+.clk:has(.kb .key[data-key="57"]:hover:active):not(:has(.shift-state:checked)) { --kb: 57; } .clk:has(.kb .key[data-key="57"]:hover:active):has(.shift-state:checked) { --kb: 40; }
+.clk:has(.kb .key[data-key="48"]:hover:active):not(:has(.shift-state:checked)) { --kb: 48; } .clk:has(.kb .key[data-key="48"]:hover:active):has(.shift-state:checked) { --kb: 41; }
+.clk:has(.kb .key[data-key="45"]:hover:active):not(:has(.shift-state:checked)) { --kb: 45; } .clk:has(.kb .key[data-key="45"]:hover:active):has(.shift-state:checked) { --kb: 95; }
+.clk:has(.kb .key[data-key="61"]:hover:active):not(:has(.shift-state:checked)) { --kb: 61; } .clk:has(.kb .key[data-key="61"]:hover:active):has(.shift-state:checked) { --kb: 43; }
+.clk:has(.kb .key[data-key="8"]:hover:active) { --kb: 8; }
+.clk:has(.kb .key[data-key="9"]:hover:active) { --kb: 9; }
+.clk:has(.kb .key[data-key="113"]:hover:active):not(:has(.shift-state:checked)) { --kb: 113; } .clk:has(.kb .key[data-key="113"]:hover:active):has(.shift-state:checked) { --kb: 81; }
+.clk:has(.kb .key[data-key="119"]:hover:active):not(:has(.shift-state:checked)) { --kb: 119; } .clk:has(.kb .key[data-key="119"]:hover:active):has(.shift-state:checked) { --kb: 87; }
+.clk:has(.kb .key[data-key="101"]:hover:active):not(:has(.shift-state:checked)) { --kb: 101; } .clk:has(.kb .key[data-key="101"]:hover:active):has(.shift-state:checked) { --kb: 69; }
+.clk:has(.kb .key[data-key="114"]:hover:active):not(:has(.shift-state:checked)) { --kb: 114; } .clk:has(.kb .key[data-key="114"]:hover:active):has(.shift-state:checked) { --kb: 82; }
+.clk:has(.kb .key[data-key="116"]:hover:active):not(:has(.shift-state:checked)) { --kb: 116; } .clk:has(.kb .key[data-key="116"]:hover:active):has(.shift-state:checked) { --kb: 84; }
+.clk:has(.kb .key[data-key="121"]:hover:active):not(:has(.shift-state:checked)) { --kb: 121; } .clk:has(.kb .key[data-key="121"]:hover:active):has(.shift-state:checked) { --kb: 89; }
+.clk:has(.kb .key[data-key="117"]:hover:active):not(:has(.shift-state:checked)) { --kb: 117; } .clk:has(.kb .key[data-key="117"]:hover:active):has(.shift-state:checked) { --kb: 85; }
+.clk:has(.kb .key[data-key="105"]:hover:active):not(:has(.shift-state:checked)) { --kb: 105; } .clk:has(.kb .key[data-key="105"]:hover:active):has(.shift-state:checked) { --kb: 73; }
+.clk:has(.kb .key[data-key="111"]:hover:active):not(:has(.shift-state:checked)) { --kb: 111; } .clk:has(.kb .key[data-key="111"]:hover:active):has(.shift-state:checked) { --kb: 79; }
+.clk:has(.kb .key[data-key="112"]:hover:active):not(:has(.shift-state:checked)) { --kb: 112; } .clk:has(.kb .key[data-key="112"]:hover:active):has(.shift-state:checked) { --kb: 80; }
+.clk:has(.kb .key[data-key="91"]:hover:active):not(:has(.shift-state:checked)) { --kb: 91; } .clk:has(.kb .key[data-key="91"]:hover:active):has(.shift-state:checked) { --kb: 123; }
+.clk:has(.kb .key[data-key="93"]:hover:active):not(:has(.shift-state:checked)) { --kb: 93; } .clk:has(.kb .key[data-key="93"]:hover:active):has(.shift-state:checked) { --kb: 125; }
+.clk:has(.kb .key[data-key="92"]:hover:active):not(:has(.shift-state:checked)) { --kb: 92; } .clk:has(.kb .key[data-key="92"]:hover:active):has(.shift-state:checked) { --kb: 124; }
+.clk:has(.kb .key[data-key="97"]:hover:active):not(:has(.shift-state:checked)) { --kb: 97; } .clk:has(.kb .key[data-key="97"]:hover:active):has(.shift-state:checked) { --kb: 65; }
+.clk:has(.kb .key[data-key="115"]:hover:active):not(:has(.shift-state:checked)) { --kb: 115; } .clk:has(.kb .key[data-key="115"]:hover:active):has(.shift-state:checked) { --kb: 83; }
+.clk:has(.kb .key[data-key="100"]:hover:active):not(:has(.shift-state:checked)) { --kb: 100; } .clk:has(.kb .key[data-key="100"]:hover:active):has(.shift-state:checked) { --kb: 68; }
+.clk:has(.kb .key[data-key="102"]:hover:active):not(:has(.shift-state:checked)) { --kb: 102; } .clk:has(.kb .key[data-key="102"]:hover:active):has(.shift-state:checked) { --kb: 70; }
+.clk:has(.kb .key[data-key="103"]:hover:active):not(:has(.shift-state:checked)) { --kb: 103; } .clk:has(.kb .key[data-key="103"]:hover:active):has(.shift-state:checked) { --kb: 71; }
+.clk:has(.kb .key[data-key="104"]:hover:active):not(:has(.shift-state:checked)) { --kb: 104; } .clk:has(.kb .key[data-key="104"]:hover:active):has(.shift-state:checked) { --kb: 72; }
+.clk:has(.kb .key[data-key="106"]:hover:active):not(:has(.shift-state:checked)) { --kb: 106; } .clk:has(.kb .key[data-key="106"]:hover:active):has(.shift-state:checked) { --kb: 74; }
+.clk:has(.kb .key[data-key="107"]:hover:active):not(:has(.shift-state:checked)) { --kb: 107; } .clk:has(.kb .key[data-key="107"]:hover:active):has(.shift-state:checked) { --kb: 75; }
+.clk:has(.kb .key[data-key="108"]:hover:active):not(:has(.shift-state:checked)) { --kb: 108; } .clk:has(.kb .key[data-key="108"]:hover:active):has(.shift-state:checked) { --kb: 76; }
+.clk:has(.kb .key[data-key="59"]:hover:active):not(:has(.shift-state:checked)) { --kb: 59; } .clk:has(.kb .key[data-key="59"]:hover:active):has(.shift-state:checked) { --kb: 58; }
+.clk:has(.kb .key[data-key="39"]:hover:active):not(:has(.shift-state:checked)) { --kb: 39; } .clk:has(.kb .key[data-key="39"]:hover:active):has(.shift-state:checked) { --kb: 34; }
+.clk:has(.kb .key[data-key="122"]:hover:active):not(:has(.shift-state:checked)) { --kb: 122; } .clk:has(.kb .key[data-key="122"]:hover:active):has(.shift-state:checked) { --kb: 90; }
+.clk:has(.kb .key[data-key="120"]:hover:active):not(:has(.shift-state:checked)) { --kb: 120; } .clk:has(.kb .key[data-key="120"]:hover:active):has(.shift-state:checked) { --kb: 88; }
+.clk:has(.kb .key[data-key="99"]:hover:active):not(:has(.shift-state:checked)) { --kb: 99; } .clk:has(.kb .key[data-key="99"]:hover:active):has(.shift-state:checked) { --kb: 67; }
+.clk:has(.kb .key[data-key="118"]:hover:active):not(:has(.shift-state:checked)) { --kb: 118; } .clk:has(.kb .key[data-key="118"]:hover:active):has(.shift-state:checked) { --kb: 86; }
+.clk:has(.kb .key[data-key="98"]:hover:active):not(:has(.shift-state:checked)) { --kb: 98; } .clk:has(.kb .key[data-key="98"]:hover:active):has(.shift-state:checked) { --kb: 66; }
+.clk:has(.kb .key[data-key="110"]:hover:active):not(:has(.shift-state:checked)) { --kb: 110; } .clk:has(.kb .key[data-key="110"]:hover:active):has(.shift-state:checked) { --kb: 78; }
+.clk:has(.kb .key[data-key="109"]:hover:active):not(:has(.shift-state:checked)) { --kb: 109; } .clk:has(.kb .key[data-key="109"]:hover:active):has(.shift-state:checked) { --kb: 77; }
+.clk:has(.kb .key[data-key="44"]:hover:active):not(:has(.shift-state:checked)) { --kb: 44; } .clk:has(.kb .key[data-key="44"]:hover:active):has(.shift-state:checked) { --kb: 60; }
+.clk:has(.kb .key[data-key="46"]:hover:active):not(:has(.shift-state:checked)) { --kb: 46; } .clk:has(.kb .key[data-key="46"]:hover:active):has(.shift-state:checked) { --kb: 62; }
+.clk:has(.kb .key[data-key="47"]:hover:active):not(:has(.shift-state:checked)) { --kb: 47; } .clk:has(.kb .key[data-key="47"]:hover:active):has(.shift-state:checked) { --kb: 63; }
+.clk:has(.kb .key[data-key="10"]:hover:active) { --kb: 10; }
+.clk:has(.kb .key[data-key="32"]:hover:active) { --kb: 32; }
+.clk:has(.kb .key[data-key="27"]:hover:active) { --kb: 27; }
+/*__WSS_KEEP_KB_INPUT_CSS_END__*/
+
+/*__WSS_KEEP_FN_SEL_START__*/
+@function --sel(--c <integer>, --t <number>, --f <number>) returns <number> { result: if(style(--c: 0): var(--f); else: var(--t)); }
+/*__WSS_KEEP_FN_SEL_END__*/
+/*__WSS_KEEP_FN_EQZ_START__*/
+@function --eqz(--a <number>) returns <integer> { result: if(style(--a: 0): 1; else: 0); }
+/*__WSS_KEEP_FN_EQZ_END__*/
+/*__WSS_KEEP_FN_NEZ_START__*/
+@function --nez(--a <number>) returns <integer> { result: calc(1 - --eqz(var(--a))); }
+/*__WSS_KEEP_FN_NEZ_END__*/
+/*__WSS_KEEP_FN_EQ_START__*/
+@function --eq(--a <number>, --b <number>) returns <integer> { result: --eqz(round(down, calc(var(--a) - var(--b)))); }
+/*__WSS_KEEP_FN_EQ_END__*/
+@function --eq1(--a <number>) returns <integer> { result: if(style(--a: 1): 1; else: 0); }
+/*__WSS_KEEP_FN_NE_START__*/
+@function --ne(--a <number>, --b <number>) returns <integer> { result: --nez(calc(var(--a) - var(--b))); }
+/*__WSS_KEEP_FN_NE_END__*/
+/*__WSS_KEEP_FN_LT_START__*/
+@function --lt(--a <number>, --b <number>) returns <integer> { result: round(down, calc((1 - sign(calc(var(--a) - var(--b)))) / 2)); }
+/*__WSS_KEEP_FN_LT_END__*/
+/*__WSS_KEEP_FN_ADDR16_START__*/
+@function --addr16(--lo <number>, --hi <number>, --imm <number>) returns <integer> { result: round(down, calc(var(--imm) + var(--lo) + 256 * var(--hi))); }
+/*__WSS_KEEP_FN_ADDR16_END__*/
+/*__WSS_KEEP_FN_MHALF_START__*/
+@function --mhalf(--byte <number>) returns <integer> { result: round(down, calc(var(--byte) / 2)); }
+/*__WSS_KEEP_FN_MHALF_END__*/
+/*__WSS_KEEP_FN_MPAR_START__*/
+@function --mpar(--byte <number>) returns <integer> { result: mod(var(--byte), 2); }
+/*__WSS_KEEP_FN_MPAR_END__*/
+/*__WSS_KEEP_FN_MLO_START__*/
+@function --mlo(--w <number>) returns <integer> { result: mod(var(--w), 256); }
+/*__WSS_KEEP_FN_MLO_END__*/
+/*__WSS_KEEP_FN_MHI_START__*/
+@function --mhi(--w <number>) returns <integer> { result: mod(round(down, calc(var(--w) / 256)), 256); }
+/*__WSS_KEEP_FN_MHI_END__*/
+/*__WSS_KEEP_FN_M16_START__*/
+@function --m16(--lo <number>, --hi <number>) returns <integer> { result: calc(var(--lo) + 256 * var(--hi)); }
+/*__WSS_KEEP_FN_M16_END__*/
+/*__WSS_KEEP_FN_MLOAD_START__*/
+@function --mload(--byte <number>) returns <integer> { result: calc((--eqz(--mpar(var(--byte)))) * mod(--read_m16(--mhalf(var(--byte))), 256) + (--nez(--mpar(var(--byte)))) * mod(round(down, calc(--read_m16(--mhalf(var(--byte))) / 256)), 256)); }
+/*__WSS_KEEP_FN_MLOAD_END__*/
+/*__WSS_SUPPORT__*/
+</style>
+</head>
+<body>
+<div class="unsupported">
+The required CSS features are not supported by your browser.<br>
+Please try an up-to-date Chromium-based browser.
+</div>
+<div class="clk" tabindex="0" style="outline: none;">
+<div class="terminal">
+<div class="screen"></div>
+<!--__WSS_KEEP_KB_HTML_START__-->
+<div class="kb">
+    <input type="checkbox" id="shift-toggle" class="shift-state">
+    <div class="input-hint" aria-live="polite"></div>
+    <div class="row"><button class="key" data-key="27">Esc</button><button class="key dual" data-key="96"><span class="char">`</span><span class="shift-char">~</span></button><button class="key dual" data-key="49"><span class="char">1</span><span class="shift-char">!</span></button><button class="key dual" data-key="50"><span class="char">2</span><span class="shift-char">@</span></button><button class="key dual" data-key="51"><span class="char">3</span><span class="shift-char">#</span></button><button class="key dual" data-key="52"><span class="char">4</span><span class="shift-char">$</span></button><button class="key dual" data-key="53"><span class="char">5</span><span class="shift-char">%</span></button><button class="key dual" data-key="54"><span class="char">6</span><span class="shift-char">^</span></button><button class="key dual" data-key="55"><span class="char">7</span><span class="shift-char">&amp;</span></button><button class="key dual" data-key="56"><span class="char">8</span><span class="shift-char">*</span></button><button class="key dual" data-key="57"><span class="char">9</span><span class="shift-char">(</span></button><button class="key dual" data-key="48"><span class="char">0</span><span class="shift-char">)</span></button><button class="key dual" data-key="45"><span class="char">-</span><span class="shift-char">_</span></button><button class="key dual" data-key="61"><span class="char">=</span><span class="shift-char">+</span></button><button class="key wide" data-key="8">Bksp</button></div>
+    <div class="row"><button class="key wide" data-key="9">Tab</button><button class="key dual" data-key="113"><span class="char">q</span><span class="shift-char">Q</span></button><button class="key dual" data-key="119"><span class="char">w</span><span class="shift-char">W</span></button><button class="key dual" data-key="101"><span class="char">e</span><span class="shift-char">E</span></button><button class="key dual" data-key="114"><span class="char">r</span><span class="shift-char">R</span></button><button class="key dual" data-key="116"><span class="char">t</span><span class="shift-char">T</span></button><button class="key dual" data-key="121"><span class="char">y</span><span class="shift-char">Y</span></button><button class="key dual" data-key="117"><span class="char">u</span><span class="shift-char">U</span></button><button class="key dual" data-key="105"><span class="char">i</span><span class="shift-char">I</span></button><button class="key dual" data-key="111"><span class="char">o</span><span class="shift-char">O</span></button><button class="key dual" data-key="112"><span class="char">p</span><span class="shift-char">P</span></button><button class="key dual" data-key="91"><span class="char">[</span><span class="shift-char">{</span></button><button class="key dual" data-key="93"><span class="char">]</span><span class="shift-char">}</span></button><button class="key dual" data-key="92"><span class="char">\</span><span class="shift-char">|</span></button></div>
+    <div class="row"><button class="key dual" data-key="97"><span class="char">a</span><span class="shift-char">A</span></button><button class="key dual" data-key="115"><span class="char">s</span><span class="shift-char">S</span></button><button class="key dual" data-key="100"><span class="char">d</span><span class="shift-char">D</span></button><button class="key dual" data-key="102"><span class="char">f</span><span class="shift-char">F</span></button><button class="key dual" data-key="103"><span class="char">g</span><span class="shift-char">G</span></button><button class="key dual" data-key="104"><span class="char">h</span><span class="shift-char">H</span></button><button class="key dual" data-key="106"><span class="char">j</span><span class="shift-char">J</span></button><button class="key dual" data-key="107"><span class="char">k</span><span class="shift-char">K</span></button><button class="key dual" data-key="108"><span class="char">l</span><span class="shift-char">L</span></button><button class="key dual" data-key="59"><span class="char">;</span><span class="shift-char">:</span></button><button class="key dual" data-key="39"><span class="char">'</span><span class="shift-char">"</span></button><button class="key wide" data-key="10">Enter</button></div>
+    <div class="row"><label for="shift-toggle" class="shift-label">Shift</label><button class="key dual" data-key="122"><span class="char">z</span><span class="shift-char">Z</span></button><button class="key dual" data-key="120"><span class="char">x</span><span class="shift-char">X</span></button><button class="key dual" data-key="99"><span class="char">c</span><span class="shift-char">C</span></button><button class="key dual" data-key="118"><span class="char">v</span><span class="shift-char">V</span></button><button class="key dual" data-key="98"><span class="char">b</span><span class="shift-char">B</span></button><button class="key dual" data-key="110"><span class="char">n</span><span class="shift-char">N</span></button><button class="key dual" data-key="109"><span class="char">m</span><span class="shift-char">M</span></button><button class="key dual" data-key="44"><span class="char">,</span><span class="shift-char">&lt;</span></button><button class="key dual" data-key="46"><span class="char">.</span><span class="shift-char">&gt;</span></button><button class="key dual" data-key="47"><span class="char">/</span><span class="shift-char">?</span></button></div>
+    <div class="row"><button class="key space" data-key="32">Space</button></div>
+</div>
+<!--__WSS_KEEP_KB_HTML_END__-->
+<div class="inds" aria-live="off">
+    <div class="ind"><span class="k">PC</span><span id="ind-pc" class="v"></span></div>
+    <!--__WSS_KEEP_SP_INDICATOR_HTML_START__-->
+    <div class="ind"><span class="k">SP</span><span id="ind-sp" class="v"></span></div>
+    <!--__WSS_KEEP_SP_INDICATOR_HTML_END__-->
+    <div class="ind"><span class="k">G0</span><span id="ind-g0" class="v"></span></div>
+</div>
+<!--__WSS_KEEP_CS_VISUALIZER_HTML_START__-->
+<div class="csvis-frame"><div class="csvis"></div></div>
+<!--__WSS_KEEP_CS_VISUALIZER_HTML_END__-->
+<!--__WSS_KEEP_MEM_VISUALIZER_HTML_START__-->
+<div class="memvis-frame"><div class="memvis"></div></div>
+<!--__WSS_KEEP_MEM_VISUALIZER_HTML_END__-->
+</div>
+</div>
+<!--__WSS_KEEP_JS_CLOCK_RUNTIME_START__-->
+<script>
+(() => {
+    const clkEl = document.querySelector(".clk");
+    const terminalEl = document.querySelector(".terminal");
+    const screenEl = document.querySelector(".screen");
+    if (!clkEl || !terminalEl || !screenEl) return;
+    const jsClockEnabled = __WSS_JS_CLOCK_ENABLED__;
+    const jsClockDebuggerEnabled = __WSS_JS_CLOCK_DEBUGGER_ENABLED__;
+    /*__WSS_KEEP_JS_COPROCESSOR_RUNTIME_START__*/
+    const jsCoprocessorEnabled = __WSS_JS_COPROCESSOR_ENABLED__;
+    /*__WSS_KEEP_JS_COPROCESSOR_RUNTIME_END__*/
+    if (!jsClockEnabled) return;
+
+    let clock = 0;
+    const phasesPerInstruction = 4;
+    const terminalPcs = new Set([-1, -2, -3, -4, -5]);
+    const followSlackPx = 4;
+    const minSpeedMultiplier = 0.25;
+    const maxSpeedMultiplier = 16;
+    let followScreenBottom = true;
+    let speedMultiplier = 1;
+    let speedCarry = 0;
+    let pendingStepCount = 0;
+    let paused = jsClockDebuggerEnabled;
+    let halted = false;
+    let animationPending = false;
+    let debugRunBtn = null;
+    let debugStepBtn = null;
+    let debugSpeedOut = null;
+    let debugStateOut = null;
+    let debugPcOut = null;
+    let debugClockOut = null;
+
+    function isNearScreenBottom() {
+        return screenEl.scrollHeight - screenEl.clientHeight - screenEl.scrollTop <= followSlackPx;
+    }
+
+    function scrollScreenToBottom() {
+        screenEl.scrollTop = screenEl.scrollHeight;
+    }
+
+    screenEl.addEventListener(
+        "scroll",
+        () => {
+            followScreenBottom = isNearScreenBottom();
+        },
+        { passive: true }
+    );
+
+    function readIntStyle(style, name, fallback = 0) {
+        const parsed = Number.parseInt(style.getPropertyValue(name), 10);
+        if (Number.isNaN(parsed)) return fallback;
+        return parsed;
+    }
+
+    function formatSpeedLabel(value) {
+        const rounded = Math.round(value * 100) / 100;
+        return `${rounded.toFixed(rounded % 1 === 0 ? 0 : 2)}x`;
+    }
+
+    function readPc(style) {
+        return readIntStyle(style, "--pc", readIntStyle(style, "--_1pc", 0));
+    }
+
+    function refreshDebuggerLabels(style) {
+        if (!jsClockDebuggerEnabled || !debugStateOut) return;
+        const pc = readPc(style);
+        debugStateOut.textContent = halted ? "halted" : paused ? "paused" : "running";
+        debugPcOut.textContent = Number.isNaN(pc) ? "?" : String(pc);
+        debugClockOut.textContent = String(clock);
+        if (debugRunBtn) {
+            debugRunBtn.textContent = paused ? "Run" : "Pause";
+        }
+        if (debugStepBtn) {
+            debugStepBtn.disabled = halted || !paused;
+        }
+        if (debugSpeedOut) {
+            debugSpeedOut.textContent = formatSpeedLabel(speedMultiplier);
+        }
+    }
+
+    function scheduleAnimation() {
+        if (animationPending || halted) return;
+        animationPending = true;
+        requestAnimationFrame(animate);
+    }
+
+    /*__WSS_KEEP_JS_COPROCESSOR_RUNTIME_START__*/
+    function readByteStyle(style, name) {
+        return readIntStyle(style, name, 0) & 0xff;
+    }
+
+    function readCopWord(style, prefix) {
+        return (
+            readByteStyle(style, `${prefix}0`) |
+            (readByteStyle(style, `${prefix}1`) << 8) |
+            (readByteStyle(style, `${prefix}2`) << 16) |
+            (readByteStyle(style, `${prefix}3`) << 24)
+        ) >>> 0;
+    }
+
+    function writeCopOutputBytes(b0, b1, b2, b3) {
+        terminalEl.style.setProperty("--cop_o0", String(b0), "important");
+        terminalEl.style.setProperty("--cop_o1", String(b1), "important");
+        terminalEl.style.setProperty("--cop_o2", String(b2), "important");
+        terminalEl.style.setProperty("--cop_o3", String(b3), "important");
+    }
+
+    function writeCopOutputWord(value) {
+        const word = value >>> 0;
+        writeCopOutputBytes(word & 0xff, (word >>> 8) & 0xff, (word >>> 16) & 0xff, (word >>> 24) & 0xff);
+    }
+
+    function popcnt32(value) {
+        let v = value >>> 0;
+        let count = 0;
+        while (v !== 0) {
+            v &= v - 1;
+            count++;
+        }
+        return count >>> 0;
+    }
+
+    function runCoprocessor(style) {
+        if (!jsCoprocessorEnabled) return;
+        const op = readIntStyle(style, "--cop_op", 0);
+        if (op === 0) {
+            writeCopOutputWord(0);
+            return;
+        }
+
+        const lhsU = readCopWord(style, "--cop_a");
+        const rhsU = readCopWord(style, "--cop_b");
+        const lhsS = lhsU | 0;
+        const rhsS = rhsU | 0;
+
+        switch (op) {
+            case 1: // div_u32
+                if (rhsU === 0) {
+                    writeCopOutputBytes(-1, 0, 0, 0);
+                    return;
+                }
+                writeCopOutputWord(Math.trunc(lhsU / rhsU));
+                return;
+            case 2: // rem_u32
+                if (rhsU === 0) {
+                    writeCopOutputBytes(-1, 0, 0, 0);
+                    return;
+                }
+                writeCopOutputWord(lhsU % rhsU);
+                return;
+            case 3: // div_s32
+                if (rhsU === 0) {
+                    writeCopOutputBytes(-1, 0, 0, 0);
+                    return;
+                }
+                writeCopOutputWord((lhsS / rhsS) | 0);
+                return;
+            case 4: // rem_s32
+                if (rhsU === 0) {
+                    writeCopOutputBytes(-1, 0, 0, 0);
+                    return;
+                }
+                writeCopOutputWord((lhsS % rhsS) | 0);
+                return;
+            case 5: { // shl_32
+                const shift = rhsU & 31;
+                writeCopOutputWord(lhsU << shift);
+                return;
+            }
+            case 6: { // shr_u32
+                const shift = rhsU & 31;
+                writeCopOutputWord(lhsU >>> shift);
+                return;
+            }
+            case 7: { // shr_s32
+                const shift = rhsU & 31;
+                writeCopOutputWord(lhsS >> shift);
+                return;
+            }
+            case 8: { // rotl_32
+                const shift = rhsU & 31;
+                writeCopOutputWord((lhsU << shift) | (lhsU >>> ((32 - shift) & 31)));
+                return;
+            }
+            case 9: { // rotr_32
+                const shift = rhsU & 31;
+                writeCopOutputWord((lhsU >>> shift) | (lhsU << ((32 - shift) & 31)));
+                return;
+            }
+            case 10: // clz_32
+                writeCopOutputWord(Math.clz32(lhsU));
+                return;
+            case 11: // ctz_32
+                writeCopOutputWord(lhsU === 0 ? 32 : (31 - Math.clz32((lhsU & -lhsU) >>> 0)));
+                return;
+            case 12: // popcnt_32
+                writeCopOutputWord(popcnt32(lhsU));
+                return;
+            default:
+                writeCopOutputWord(0);
+        }
+    }
+    /*__WSS_KEEP_JS_COPROCESSOR_RUNTIME_END__*/
+
+    function tickSingleInstruction() {
+        for (let i = 0; i < phasesPerInstruction; i++) {
+            const phase = clock;
+            clkEl.style.setProperty("--clk", String(phase), "important");
+            /*__WSS_KEEP_JS_COPROCESSOR_RUNTIME_START__*/
+            if (phase === 2) {
+                runCoprocessor(getComputedStyle(terminalEl));
+            }
+            /*__WSS_KEEP_JS_COPROCESSOR_RUNTIME_END__*/
+            clock = (clock + 1) & 3;
+            getComputedStyle(terminalEl).getPropertyValue("--_1pc");
+        }
+    }
+
+    function runInstructionBatch(instructionCount) {
+        let style = getComputedStyle(terminalEl);
+        let pc = readPc(style);
+        for (let i = 0; i < instructionCount; i++) {
+            tickSingleInstruction();
+            style = getComputedStyle(terminalEl);
+            pc = readPc(style);
+            if (!Number.isNaN(pc) && terminalPcs.has(pc)) {
+                return { style, pc, halted: true };
+            }
+        }
+        return { style, pc, halted: !Number.isNaN(pc) && terminalPcs.has(pc) };
+    }
+
+    function animate() {
+        animationPending = false;
+        if (halted) return;
+
+        let instructionsThisFrame = 0;
+        if (pendingStepCount > 0) {
+            instructionsThisFrame = pendingStepCount;
+            pendingStepCount = 0;
+            paused = true;
+        } else if (!paused) {
+            speedCarry += speedMultiplier;
+            instructionsThisFrame = Math.floor(speedCarry);
+            speedCarry -= instructionsThisFrame;
+        }
+
+        let style = getComputedStyle(terminalEl);
+        let pc = readPc(style);
+        if (instructionsThisFrame > 0) {
+            const batch = runInstructionBatch(instructionsThisFrame);
+            style = batch.style;
+            pc = batch.pc;
+            halted = batch.halted;
+        }
+
+        if (followScreenBottom) {
+            scrollScreenToBottom();
+        }
+        if (!Number.isNaN(pc) && terminalPcs.has(pc)) {
+            halted = true;
+        }
+        if (halted) {
+            paused = true;
+        }
+        refreshDebuggerLabels(style);
+        if (!halted && (!paused || pendingStepCount > 0)) {
+            scheduleAnimation();
+        }
+    }
+
+    function clampSpeed(value) {
+        if (!Number.isFinite(value)) return 1;
+        return Math.min(maxSpeedMultiplier, Math.max(minSpeedMultiplier, value));
+    }
+
+    function initializeDebuggerPopup() {
+        if (!jsClockDebuggerEnabled) return;
+
+        const toggleBtn = document.createElement("button");
+        toggleBtn.type = "button";
+        toggleBtn.className = "wss-debug-trigger";
+        toggleBtn.textContent = "Debugger";
+
+        const popup = document.createElement("div");
+        popup.className = "wss-debug-popup";
+        popup.hidden = false;
+        popup.innerHTML = `
+            <div class="wss-debug-head">
+                <h2 class="wss-debug-title">Step Debugger</h2>
+                <button type="button" class="wss-debug-close" data-wss-debug-close="1">Close</button>
+            </div>
+            <label class="wss-debug-speed">
+                Clock Speed
+                <input class="wss-debug-range" type="range" min="${minSpeedMultiplier}" max="${maxSpeedMultiplier}" step="0.25" value="1" data-wss-debug-speed="1">
+                <span class="wss-debug-speed-readout" data-wss-debug-speed-value="1">1x</span>
+            </label>
+            <div class="wss-debug-actions">
+                <button type="button" class="wss-debug-btn" data-wss-debug-run="1">Run</button>
+                <button type="button" class="wss-debug-btn" data-wss-debug-step="1">Step</button>
+            </div>
+            <dl class="wss-debug-stats">
+                <div class="wss-debug-stat"><dt>State</dt><dd data-wss-debug-state="1">paused</dd></div>
+                <div class="wss-debug-stat"><dt>PC</dt><dd data-wss-debug-pc="1">0</dd></div>
+                <div class="wss-debug-stat"><dt>CLK</dt><dd data-wss-debug-clock="1">0</dd></div>
+            </dl>
+        `;
+
+        document.body.append(toggleBtn, popup);
+
+        const closeBtn = popup.querySelector("[data-wss-debug-close='1']");
+        const speedInput = popup.querySelector("[data-wss-debug-speed='1']");
+        debugSpeedOut = popup.querySelector("[data-wss-debug-speed-value='1']");
+        debugRunBtn = popup.querySelector("[data-wss-debug-run='1']");
+        debugStepBtn = popup.querySelector("[data-wss-debug-step='1']");
+        debugStateOut = popup.querySelector("[data-wss-debug-state='1']");
+        debugPcOut = popup.querySelector("[data-wss-debug-pc='1']");
+        debugClockOut = popup.querySelector("[data-wss-debug-clock='1']");
+        if (!(speedInput instanceof HTMLInputElement) || !closeBtn || !debugRunBtn || !debugStepBtn) {
+            return;
+        }
+
+        toggleBtn.addEventListener("click", () => {
+            popup.hidden = !popup.hidden;
+        });
+        closeBtn.addEventListener("click", () => {
+            popup.hidden = true;
+        });
+        speedInput.addEventListener("input", () => {
+            speedMultiplier = clampSpeed(Number.parseFloat(speedInput.value));
+            if (debugSpeedOut) {
+                debugSpeedOut.textContent = formatSpeedLabel(speedMultiplier);
+            }
+            if (!paused && !halted) {
+                scheduleAnimation();
+            }
+        });
+        debugRunBtn.addEventListener("click", () => {
+            if (halted) return;
+            paused = !paused;
+            refreshDebuggerLabels(getComputedStyle(terminalEl));
+            if (!paused) {
+                scheduleAnimation();
+            }
+        });
+        debugStepBtn.addEventListener("click", () => {
+            if (halted) return;
+            paused = true;
+            pendingStepCount += 1;
+            refreshDebuggerLabels(getComputedStyle(terminalEl));
+            scheduleAnimation();
+        });
+    }
+
+    clkEl.style.setProperty("--clk", "0", "important");
+    scrollScreenToBottom();
+    initializeDebuggerPopup();
+    refreshDebuggerLabels(getComputedStyle(terminalEl));
+    if (!paused) {
+        scheduleAnimation();
+    }
+})();
+</script>
+<!--__WSS_KEEP_JS_CLOCK_RUNTIME_END__-->
+</body>
+</html>

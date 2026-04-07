@@ -1,0 +1,166 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  rust:
+    name: Rust
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Lint (rustfmt)
+        run: cargo fmt --all -- --check
+
+      - name: Lint (clippy)
+        run: cargo clippy --all-targets --all-features
+
+      - name: Build
+        run: cargo build --verbose
+
+      - name: Test
+        run: cargo test --verbose
+
+  blackbox:
+    name: Blackbox
+    needs: rust
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install LLVM/Clang 22
+        shell: bash
+        run: |
+          set -euo pipefail
+          wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh
+          chmod +x /tmp/llvm.sh
+          sudo /tmp/llvm.sh 22
+          echo "/usr/lib/llvm-22/bin" >> "$GITHUB_PATH"
+          export PATH="/usr/lib/llvm-22/bin:${PATH}"
+          clang --version | tee /tmp/clang-version.txt
+          grep -q "clang version 22" /tmp/clang-version.txt
+          clang++ --version | tee /tmp/clangxx-version.txt
+          grep -q "clang version 22" /tmp/clangxx-version.txt
+
+      - name: Install Chrome
+        id: chrome
+        uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
+
+      - name: Create CI Chrome wrapper (no sandbox)
+        id: chrome_wrapper
+        shell: bash
+        env:
+          CHROME_REAL: ${{ steps.chrome.outputs.chrome-path }}
+        run: |
+          set -euo pipefail
+          wrapper="${RUNNER_TEMP}/wss-chrome-no-sandbox"
+          printf '%s\n' '#!/usr/bin/env bash' \
+            "exec \"${CHROME_REAL}\" --no-sandbox --disable-setuid-sandbox \"\$@\"" \
+            > "${wrapper}"
+          chmod +x "${wrapper}"
+          echo "path=${wrapper}" >> "$GITHUB_OUTPUT"
+
+      - name: Blackbox
+        shell: bash
+        env:
+          WSS_CHROME: ${{ steps.chrome_wrapper.outputs.path }}
+          WSS_DUMP_TIMEOUT_BUFFER_MS: "60000"
+          WSS_CASE_NODE_HEAP_MB: "3072"
+        run: |
+          set -euo pipefail
+          node tests/run_blackbox.js --retries=3 --jobs=2
+
+  blackbox-lengthy:
+    name: Blackbox (Lengthy)
+    needs: blackbox
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install LLVM/Clang 22
+        shell: bash
+        run: |
+          set -euo pipefail
+          wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh
+          chmod +x /tmp/llvm.sh
+          sudo /tmp/llvm.sh 22
+          echo "/usr/lib/llvm-22/bin" >> "$GITHUB_PATH"
+          export PATH="/usr/lib/llvm-22/bin:${PATH}"
+          clang --version | tee /tmp/clang-version.txt
+          grep -q "clang version 22" /tmp/clang-version.txt
+          clang++ --version | tee /tmp/clangxx-version.txt
+          grep -q "clang version 22" /tmp/clangxx-version.txt
+
+      - name: Install Chrome
+        id: chrome
+        uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
+
+      - name: Create CI Chrome wrapper (no sandbox)
+        id: chrome_wrapper
+        shell: bash
+        env:
+          CHROME_REAL: ${{ steps.chrome.outputs.chrome-path }}
+        run: |
+          set -euo pipefail
+          wrapper="${RUNNER_TEMP}/wss-chrome-no-sandbox"
+          printf '%s\n' '#!/usr/bin/env bash' \
+            "exec \"${CHROME_REAL}\" --no-sandbox --disable-setuid-sandbox \"\$@\"" \
+            > "${wrapper}"
+          chmod +x "${wrapper}"
+          echo "path=${wrapper}" >> "$GITHUB_OUTPUT"
+
+      - name: Blackbox (Lengthy)
+        shell: bash
+        env:
+          WSS_CHROME: ${{ steps.chrome_wrapper.outputs.path }}
+          WSS_DUMP_TIMEOUT_BUFFER_MS: "60000"
+          WSS_CASE_NODE_HEAP_MB: "3072"
+        run: |
+          set -euo pipefail
+          node tests/run_blackbox.js --only-lengthy --retries=3 --jobs=2

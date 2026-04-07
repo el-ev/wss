@@ -1,0 +1,1417 @@
+[
+  {
+    "id": "hello_exit",
+    "source": "tests/cases/hello_exit.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x0000002a",
+      "rendered_includes": [
+        "Hi",
+        "Program exited with code",
+        "0x0000002a"
+      ]
+    }
+  },
+  {
+    "id": "putchar_banner",
+    "source": "tests/cases/putchar_banner.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000007",
+      "rendered_includes": [
+        "OK",
+        "Program exited with code",
+        "0x00000007"
+      ]
+    }
+  },
+  {
+    "id": "getchar_echo_once",
+    "source": "tests/cases/getchar_echo_once.c",
+    "console_input": "Q",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000051",
+      "rendered_includes": [
+        "Q",
+        "Program exited with code",
+        "0x00000051"
+      ]
+    }
+  },
+  {
+    "id": "getchar_shift_triplet",
+    "source": "tests/cases/getchar_shift_triplet.c",
+    "console_input": "aB3",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00614233",
+      "rendered_includes": [
+        "bC4",
+        "Program exited with code",
+        "0x00614233"
+      ]
+    }
+  },
+  {
+    "id": "getchar_match_pair",
+    "source": "tests/cases/getchar_match_pair.c",
+    "console_input": "ok",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000123",
+      "rendered_includes": [
+        "Y",
+        "Program exited with code",
+        "0x00000123"
+      ]
+    }
+  },
+  {
+    "id": "arithmetic_basic",
+    "source": "tests/cases/arithmetic_basic.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000027",
+      "rendered_includes": [
+        "Program exited with code",
+        "0x00000027"
+      ]
+    }
+  },
+  {
+    "id": "addsub_i32_stress",
+    "source": "tests/cases/addsub_i32_stress.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x9fe2e067",
+      "rendered_includes": [
+        "0x9fe2e067"
+      ]
+    }
+  },
+  {
+    "id": "basic_mul_i32_stress",
+    "source": "tests/cases/basic_mul_i32_stress.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0xf6d6eb15",
+      "rendered_includes": [
+        "0xf6d6eb15"
+      ]
+    }
+  },
+  {
+    "id": "basic_udivrem_i32_stress",
+    "source": "tests/cases/basic_udivrem_i32_stress.c",
+    "tags": [
+      "lengthy"
+    ],
+    "virtual_time_budget_ms": 60000,
+    "expect": {
+      "pc": -1,
+      "ra": "0xd2639a07",
+      "rendered_includes": [
+        "0xd2639a07"
+      ]
+    }
+  },
+  {
+    "id": "basic_sdivrem_i32_stress",
+    "source": "tests/cases/basic_sdivrem_i32_stress.c",
+    "tags": [
+      "lengthy"
+    ],
+    "virtual_time_budget_ms": 60000,
+    "expect": {
+      "pc": -1,
+      "ra": "0xb966f6cc",
+      "rendered_includes": [
+        "0xb966f6cc"
+      ]
+    }
+  },
+  {
+    "id": "basic_bitwise_i32_stress",
+    "source": "tests/cases/basic_bitwise_i32_stress.c",
+    "tags": [
+      "lengthy"
+    ],
+    "virtual_time_budget_ms": 30000,
+    "expect": {
+      "pc": -1,
+      "ra": "0x5b37eeae",
+      "rendered_includes": [
+        "0x5b37eeae"
+      ]
+    }
+  },
+  {
+    "id": "basic_relops_i32_stress",
+    "source": "tests/cases/basic_relops_i32_stress.c",
+    "tags": [
+      "lengthy"
+    ],
+    "virtual_time_budget_ms": 30000,
+    "expect": {
+      "pc": -1,
+      "ra": "0x52339709",
+      "rendered_includes": [
+        "0x52339709"
+      ]
+    }
+  },
+  {
+    "id": "basic_relops_u32_stress",
+    "source": "tests/cases/basic_relops_u32_stress.c",
+    "tags": [
+      "lengthy"
+    ],
+    "virtual_time_budget_ms": 30000,
+    "expect": {
+      "pc": -1,
+      "ra": "0x2f4f1b66",
+      "rendered_includes": [
+        "0x2f4f1b66"
+      ]
+    }
+  },
+  {
+    "id": "bitwise_shift",
+    "source": "tests/cases/bitwise_shift.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x1ffe1ffe",
+      "rendered_includes": [
+        "0x1ffe1ffe"
+      ]
+    }
+  },
+  {
+    "id": "bitwise_shift_coprocessor",
+    "source": "tests/cases/bitwise_shift.c",
+    "js_coprocessor": true,
+    "expect": {
+      "pc": -1,
+      "ra": "0x1ffe1ffe",
+      "rendered_includes": [
+        "0x1ffe1ffe"
+      ]
+    }
+  },
+  {
+    "id": "comparisons",
+    "source": "tests/cases/comparisons.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000039",
+      "rendered_includes": [
+        "0x00000039"
+      ]
+    }
+  },
+  {
+    "id": "bool_logic_mix",
+    "source": "tests/cases/bool_logic_mix.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x0000003d",
+      "rendered_includes": [
+        "0x0000003d"
+      ]
+    }
+  },
+  {
+    "id": "loop_if_else",
+    "source": "tests/cases/loop_if_else.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000055",
+      "rendered_includes": [
+        "0x00000055"
+      ]
+    }
+  },
+  {
+    "id": "loop_break_continue_do_while",
+    "source": "tests/cases/loop_break_continue_do_while.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x0000007c",
+      "rendered_includes": [
+        "0x0000007c"
+      ]
+    }
+  },
+  {
+    "id": "short_circuit_side_effects",
+    "source": "tests/cases/short_circuit_side_effects.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000170",
+      "rendered_includes": [
+        "0x00000170"
+      ]
+    }
+  },
+  {
+    "id": "switch_dense",
+    "source": "tests/cases/switch_dense.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x0000009a",
+      "rendered_includes": [
+        "0x0000009a"
+      ]
+    }
+  },
+  {
+    "id": "switch_sparse",
+    "source": "tests/cases/switch_sparse.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000043",
+      "rendered_includes": [
+        "0x00000043"
+      ]
+    }
+  },
+  {
+    "id": "switch_fallthrough_default",
+    "source": "tests/cases/switch_fallthrough_default.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000091",
+      "rendered_includes": [
+        "0x00000091"
+      ]
+    }
+  },
+  {
+    "id": "direct_calls",
+    "source": "tests/cases/direct_calls.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x0000001a",
+      "rendered_includes": [
+        "0x0000001a"
+      ]
+    }
+  },
+  {
+    "id": "recursion_fib",
+    "source": "tests/cases/recursion_fib.c",
+    "max_frames": 800,
+    "virtual_time_budget_ms": 20000,
+    "tags": [
+      "lengthy"
+    ],
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000003",
+      "rendered_includes": [
+        "0x00000003"
+      ]
+    }
+  },
+  {
+    "id": "call_indirect",
+    "source": "tests/cases/call_indirect.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000031",
+      "rendered_includes": [
+        "0x00000031"
+      ]
+    }
+  },
+  {
+    "id": "call_indirect_putchar",
+    "source": "tests/cases/call_indirect_putchar.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000052",
+      "rendered_includes": [
+        "Q",
+        "0x00000052"
+      ]
+    }
+  },
+  {
+    "id": "table_size_funcref",
+    "source": "tests/cases/table_size_funcref.ll",
+    "reference_types": true,
+    "expect": {
+      "pc": -1,
+      "ra": "0x0000002b",
+      "rendered_includes": [
+        "0x0000002b"
+      ]
+    }
+  },
+  {
+    "id": "tail_call_direct",
+    "source": "tests/cases/tail_call_direct.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000060",
+      "rendered_includes": [
+        "0x00000060"
+      ]
+    }
+  },
+  {
+    "id": "tail_call_indirect",
+    "source": "tests/cases/tail_call_indirect.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x0000002a",
+      "rendered_includes": [
+        "0x0000002a"
+      ]
+    }
+  },
+  {
+    "id": "tail_call_void",
+    "source": "tests/cases/tail_call_void.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000027",
+      "rendered_includes": [
+        "0x00000027"
+      ]
+    }
+  },
+  {
+    "id": "tail_call_direct_negative",
+    "source": "tests/cases/tail_call_direct_negative.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0xffffffc0",
+      "rendered_includes": [
+        "0xffffffc0"
+      ]
+    }
+  },
+  {
+    "id": "tail_call_indirect_putchar",
+    "source": "tests/cases/tail_call_indirect_putchar.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x0000005a",
+      "rendered_includes": [
+        "Z",
+        "0x0000005a"
+      ]
+    }
+  },
+  {
+    "id": "tail_call_void_multi",
+    "source": "tests/cases/tail_call_void_multi.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000015",
+      "rendered_includes": [
+        "0x00000015"
+      ]
+    }
+  },
+  {
+    "id": "select_ternary",
+    "source": "tests/cases/select_ternary.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x0000002f",
+      "rendered_includes": [
+        "0x0000002f"
+      ]
+    }
+  },
+  {
+    "id": "memory_rw",
+    "source": "tests/cases/memory_rw.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000043",
+      "rendered_includes": [
+        "0x00000043"
+      ]
+    }
+  },
+  {
+    "id": "memory_boundary_word_rw",
+    "source": "tests/cases/memory_boundary_word_rw.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x89abcdef",
+      "rendered_includes": [
+        "0x89abcdef"
+      ],
+      "memory_words": {
+        "--m3fc": 52719,
+        "--m3fe": 35243
+      }
+    }
+  },
+  {
+    "id": "memory_boundary_byte_rw",
+    "source": "tests/cases/memory_boundary_byte_rw.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x0000005a",
+      "rendered_includes": [
+        "0x0000005a"
+      ]
+    }
+  },
+  {
+    "id": "memory_boundary_halfword_rw",
+    "source": "tests/cases/memory_boundary_halfword_rw.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x0000beef",
+      "rendered_includes": [
+        "0x0000beef"
+      ],
+      "memory_words": {
+        "--m3fe": 48879
+      }
+    }
+  },
+  {
+    "id": "memory_unaligned_word_rw",
+    "source": "tests/cases/memory_unaligned_word_rw.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x12345678",
+      "rendered_includes": [
+        "0x12345678"
+      ]
+    }
+  },
+  {
+    "id": "memory_unaligned_halfword_rw",
+    "source": "tests/cases/memory_unaligned_halfword_rw.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x0000a1b2",
+      "rendered_includes": [
+        "0x0000a1b2"
+      ]
+    }
+  },
+  {
+    "id": "memory_partial_store_merge",
+    "source": "tests/cases/memory_partial_store_merge.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0xa1b23344",
+      "rendered_includes": [
+        "0xa1b23344"
+      ],
+      "memory_words": {
+        "--m030": 13124,
+        "--m032": 41394
+      }
+    }
+  },
+  {
+    "id": "narrow_load8_s",
+    "source": "tests/cases/narrow_load8_s.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0xffffff80",
+      "rendered_includes": [
+        "0xffffff80"
+      ],
+      "memory_words": {
+        "--m020": 128
+      }
+    }
+  },
+  {
+    "id": "narrow_load8_u",
+    "source": "tests/cases/narrow_load8_u.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000080",
+      "rendered_includes": [
+        "0x00000080"
+      ],
+      "memory_words": {
+        "--m020": 128
+      }
+    }
+  },
+  {
+    "id": "narrow_load16_s",
+    "source": "tests/cases/narrow_load16_s.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0xffff8001",
+      "rendered_includes": [
+        "0xffff8001"
+      ],
+      "memory_words": {
+        "--m040": 32769
+      }
+    }
+  },
+  {
+    "id": "narrow_load16_u",
+    "source": "tests/cases/narrow_load16_u.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00008001",
+      "rendered_includes": [
+        "0x00008001"
+      ],
+      "memory_words": {
+        "--m040": 32769
+      }
+    }
+  },
+  {
+    "id": "global_state",
+    "source": "tests/cases/global_state.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000072",
+      "rendered_includes": [
+        "0x00000072"
+      ]
+    }
+  },
+  {
+    "id": "global_init_mutation",
+    "source": "tests/cases/global_init_mutation.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00001a12",
+      "rendered_includes": [
+        "0x00001a12"
+      ]
+    }
+  },
+  {
+    "id": "division_remainder",
+    "source": "tests/cases/division_remainder.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x0000001c",
+      "rendered_includes": [
+        "0x0000001c"
+      ]
+    }
+  },
+  {
+    "id": "division_remainder_coprocessor",
+    "source": "tests/cases/division_remainder.c",
+    "js_coprocessor": true,
+    "expect": {
+      "pc": -1,
+      "ra": "0x0000001c",
+      "rendered_includes": [
+        "0x0000001c"
+      ]
+    }
+  },
+  {
+    "id": "division_large_unsigned",
+    "source": "tests/cases/division_large_unsigned.c",
+    "tags": [
+      "lengthy"
+    ],
+    "max_frames": 120000,
+    "virtual_time_budget_ms": 50000,
+    "expect": {
+      "pc": -1,
+      "ra": "0xf29d507c",
+      "rendered_includes": [
+        "0xf29d507c"
+      ]
+    }
+  },
+  {
+    "id": "division_large_unsigned_coprocessor",
+    "source": "tests/cases/division_large_unsigned.c",
+    "js_coprocessor": true,
+    "expect": {
+      "pc": -1,
+      "ra": "0xf29d507c",
+      "rendered_includes": [
+        "0xf29d507c"
+      ]
+    }
+  },
+  {
+    "id": "division_ret_lane_coprocessor",
+    "source": "tests/cases/division_ret_lane_coprocessor.c",
+    "js_coprocessor": true,
+    "expect": {
+      "pc": -1,
+      "ra": "0x28000000",
+      "rendered_includes": [
+        "0x28000000"
+      ]
+    }
+  },
+  {
+    "id": "division_large_signed",
+    "source": "tests/cases/division_large_signed.c",
+    "tags": [
+      "lengthy"
+    ],
+    "max_frames": 120000,
+    "virtual_time_budget_ms": 30000,
+    "expect": {
+      "pc": -1,
+      "ra": "0xfeca6443",
+      "rendered_includes": [
+        "0xfeca6443"
+      ]
+    }
+  },
+  {
+    "id": "division_large_signed_coprocessor",
+    "source": "tests/cases/division_large_signed.c",
+    "js_coprocessor": true,
+    "expect": {
+      "pc": -1,
+      "ra": "0xfeca6443",
+      "rendered_includes": [
+        "0xfeca6443"
+      ]
+    }
+  },
+  {
+    "id": "division_large_unsigned_callconst",
+    "source": "tests/cases/division_large_unsigned_callconst.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0xf29d507c",
+      "rendered_includes": [
+        "0xf29d507c"
+      ]
+    }
+  },
+  {
+    "id": "division_large_signed_callconst",
+    "source": "tests/cases/division_large_signed_callconst.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0xfeca6443",
+      "rendered_includes": [
+        "0xfeca6443"
+      ]
+    }
+  },
+  {
+    "id": "volatile_large_roundtrip_a",
+    "source": "tests/cases/volatile_large_roundtrip_a.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0xf1234567",
+      "rendered_includes": [
+        "0xf1234567"
+      ]
+    }
+  },
+  {
+    "id": "volatile_large_roundtrip_b",
+    "source": "tests/cases/volatile_large_roundtrip_b.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00fedcba",
+      "rendered_includes": [
+        "0x00fedcba"
+      ]
+    }
+  },
+  {
+    "id": "division_hazard_small_u24_remonly",
+    "source": "tests/cases/division_hazard_small_u24_remonly.c",
+    "tags": [
+      "lengthy"
+    ],
+    "virtual_time_budget_ms": 20000,
+    "expect": {
+      "pc": -1,
+      "ra": "0x0000374d",
+      "rendered_includes": [
+        "0x0000374d"
+      ]
+    }
+  },
+  {
+    "id": "shift_signed_unsigned",
+    "source": "tests/cases/shift_signed_unsigned.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x0000002b",
+      "rendered_includes": [
+        "0x0000002b"
+      ]
+    }
+  },
+  {
+    "id": "pointer_indexing",
+    "source": "tests/cases/pointer_indexing.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x000000a7",
+      "rendered_includes": [
+        "0x000000a7"
+      ]
+    }
+  },
+  {
+    "id": "shift_signed_unsigned_coprocessor",
+    "source": "tests/cases/shift_signed_unsigned.c",
+    "js_coprocessor": true,
+    "expect": {
+      "pc": -1,
+      "ra": "0x0000002b",
+      "rendered_includes": [
+        "0x0000002b"
+      ]
+    }
+  },
+  {
+    "id": "return_negative",
+    "source": "tests/cases/return_negative.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0xffffff85",
+      "rendered_includes": [
+        "0xffffff85"
+      ]
+    }
+  },
+  {
+    "id": "call_indirect_oob_trap",
+    "source": "tests/cases/call_indirect_oob_trap.c",
+    "expect": {
+      "pc": -2,
+      "rendered_includes": [
+        "Trap: unreachable"
+      ]
+    }
+  },
+  {
+    "id": "tail_call_indirect_oob_trap",
+    "source": "tests/cases/tail_call_indirect_oob_trap.c",
+    "expect": {
+      "pc": -2,
+      "rendered_includes": [
+        "Trap: unreachable"
+      ]
+    }
+  },
+  {
+    "id": "unreachable_trap",
+    "source": "tests/cases/unreachable_trap.c",
+    "expect": {
+      "pc": -2,
+      "rendered_includes": [
+        "Trap: unreachable"
+      ]
+    }
+  },
+  {
+    "id": "invalid_memory_load_trap",
+    "source": "tests/cases/invalid_memory_load_trap.c",
+    "expect": {
+      "pc": -3,
+      "rendered_includes": [
+        "Trap: invalid memory access"
+      ]
+    }
+  },
+  {
+    "id": "invalid_memory_store_trap",
+    "source": "tests/cases/invalid_memory_store_trap.c",
+    "expect": {
+      "pc": -3,
+      "rendered_includes": [
+        "Trap: invalid memory access"
+      ]
+    }
+  },
+  {
+    "id": "invalid_memory_edge_load_trap",
+    "source": "tests/cases/invalid_memory_edge_load_trap.c",
+    "expect": {
+      "pc": -3,
+      "rendered_includes": [
+        "Trap: invalid memory access"
+      ]
+    }
+  },
+  {
+    "id": "invalid_memory_edge_store_trap",
+    "source": "tests/cases/invalid_memory_edge_store_trap.c",
+    "expect": {
+      "pc": -3,
+      "rendered_includes": [
+        "Trap: invalid memory access"
+      ]
+    }
+  },
+  {
+    "id": "invalid_memory_halfword_edge_trap",
+    "source": "tests/cases/invalid_memory_halfword_edge_trap.c",
+    "expect": {
+      "pc": -3,
+      "rendered_includes": [
+        "Trap: invalid memory access"
+      ]
+    }
+  },
+  {
+    "id": "invalid_memory_byte_edge_trap",
+    "source": "tests/cases/invalid_memory_byte_edge_trap.c",
+    "expect": {
+      "pc": -3,
+      "rendered_includes": [
+        "Trap: invalid memory access"
+      ]
+    }
+  },
+  {
+    "id": "division_by_zero_trap",
+    "source": "tests/cases/division_by_zero_trap.c",
+    "expect": {
+      "pc": -4,
+      "rendered_includes": [
+        "Trap: division by zero"
+      ]
+    }
+  },
+  {
+    "id": "division_by_zero_trap_coprocessor",
+    "source": "tests/cases/division_by_zero_trap.c",
+    "js_coprocessor": true,
+    "expect": {
+      "pc": -4,
+      "rendered_includes": [
+        "Trap: division by zero"
+      ]
+    }
+  },
+  {
+    "id": "callstack_overflow_trap",
+    "source": "tests/cases/callstack_overflow_trap.c",
+    "stack_slots": 48,
+    "max_frames": 60000,
+    "expect": {
+      "pc": -5,
+      "rendered_includes": [
+        "Trap: callstack overflow"
+      ]
+    }
+  },
+  {
+    "id": "division_large_unsigned_divonly",
+    "source": "tests/cases/division_large_unsigned_divonly.c",
+    "tags": [
+      "lengthy"
+    ],
+    "max_frames": 120000,
+    "virtual_time_budget_ms": 30000,
+    "expect": {
+      "pc": -1,
+      "ra": "0x000000f2",
+      "rendered_includes": [
+        "0x000000f2"
+      ],
+      "memory_words": {
+        "--m108": 56506,
+        "--m10a": 254,
+        "--m10c": 17767,
+        "--m10e": 61731
+      }
+    }
+  },
+  {
+    "id": "division_large_unsigned_remonly",
+    "source": "tests/cases/division_large_unsigned_remonly.c",
+    "tags": [
+      "lengthy"
+    ],
+    "max_frames": 120000,
+    "virtual_time_budget_ms": 30000,
+    "expect": {
+      "pc": -1,
+      "ra": "0x00369d93",
+      "rendered_includes": [
+        "0x00369d93"
+      ]
+    }
+  },
+  {
+    "id": "division_large_signed_divonly",
+    "source": "tests/cases/division_large_signed_divonly.c",
+    "tags": [
+      "lengthy"
+    ],
+    "max_frames": 120000,
+    "virtual_time_budget_ms": 50000,
+    "expect": {
+      "pc": -1,
+      "ra": "0xffff1dfe",
+      "rendered_includes": [
+        "0xffff1dfe"
+      ]
+    }
+  },
+  {
+    "id": "division_large_signed_remonly",
+    "source": "tests/cases/division_large_signed_remonly.c",
+    "tags": [
+      "lengthy"
+    ],
+    "max_frames": 120000,
+    "virtual_time_budget_ms": 50000,
+    "expect": {
+      "pc": -1,
+      "ra": "0xffffa80d",
+      "rendered_includes": [
+        "0xffffa80d"
+      ]
+    }
+  },
+  {
+    "id": "up8cc_arith_inc_dec",
+    "source": "tests/cases/up8cc_arith_inc_dec.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000078",
+      "rendered_includes": [
+        "0x00000078"
+      ]
+    }
+  },
+  {
+    "id": "up8cc_arith_ternary_elvis",
+    "source": "tests/cases/up8cc_arith_ternary_elvis.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x000000c9",
+      "rendered_includes": [
+        "0x000000c9"
+      ]
+    }
+  },
+  {
+    "id": "up8cc_arith_comma_int",
+    "source": "tests/cases/up8cc_arith_comma_int.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000024",
+      "rendered_includes": [
+        "0x00000024"
+      ]
+    }
+  },
+  {
+    "id": "up8cc_bitop_mix",
+    "source": "tests/cases/up8cc_bitop_mix.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x0000005d",
+      "rendered_includes": [
+        "0x0000005d"
+      ]
+    }
+  },
+  {
+    "id": "up8cc_pointer_struct_chain",
+    "source": "tests/cases/up8cc_pointer_struct_chain.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000142",
+      "rendered_includes": [
+        "0x00000142"
+      ]
+    }
+  },
+  {
+    "id": "up8cc_pointer_compare_rel",
+    "source": "tests/cases/up8cc_pointer_compare_rel.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x000000ff",
+      "rendered_includes": [
+        "0x000000ff"
+      ]
+    }
+  },
+  {
+    "id": "upchibicc_control_break_continue",
+    "source": "tests/cases/upchibicc_control_break_continue.c",
+    "tags": [
+      "lengthy"
+    ],
+    "max_frames": 120000,
+    "virtual_time_budget_ms": 30000,
+    "expect": {
+      "pc": -1,
+      "ra": "0x0000016d",
+      "rendered_includes": [
+        "0x0000016d"
+      ]
+    }
+  },
+  {
+    "id": "upchibicc_control_switch_basic",
+    "source": "tests/cases/upchibicc_control_switch_basic.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x0000004c",
+      "rendered_includes": [
+        "0x0000004c"
+      ]
+    }
+  },
+  {
+    "id": "upchibicc_initializer_designated",
+    "source": "tests/cases/upchibicc_initializer_designated.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000047",
+      "rendered_includes": [
+        "0x00000047"
+      ]
+    }
+  },
+  {
+    "id": "upchibicc_pointer_array_index",
+    "source": "tests/cases/upchibicc_pointer_array_index.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000087",
+      "rendered_includes": [
+        "0x00000087"
+      ]
+    }
+  },
+  {
+    "id": "up8cc_control_if_chain",
+    "source": "tests/cases/up8cc_control_if_chain.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x000003f7",
+      "rendered_includes": [
+        "0x000003f7"
+      ]
+    }
+  },
+  {
+    "id": "up8cc_control_sum100",
+    "source": "tests/cases/up8cc_control_sum100.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x000013ba",
+      "rendered_includes": [
+        "0x000013ba"
+      ]
+    }
+  },
+  {
+    "id": "up8cc_control_duff27",
+    "source": "tests/cases/up8cc_control_duff27.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x0000001b",
+      "rendered_includes": [
+        "0x0000001b"
+      ]
+    }
+  },
+  {
+    "id": "bitops_signext_builtins",
+    "source": "tests/cases/bitops_signext_builtins.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0xea0f7eb7",
+      "rendered_includes": [
+        "0xea0f7eb7"
+      ]
+    }
+  },
+  {
+    "id": "builtin_clz_volatile_seed",
+    "source": "tests/cases/builtin_clz_volatile_seed.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000003",
+      "rendered_includes": [
+        "0x00000003"
+      ]
+    }
+  },
+  {
+    "id": "builtin_ctz_volatile_seed",
+    "source": "tests/cases/builtin_ctz_volatile_seed.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000003",
+      "rendered_includes": [
+        "0x00000003"
+      ]
+    }
+  },
+  {
+    "id": "builtin_popcount_volatile_seed",
+    "source": "tests/cases/builtin_popcount_volatile_seed.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x0000000d",
+      "rendered_includes": [
+        "0x0000000d"
+      ]
+    }
+  },
+  {
+    "id": "builtin_bitcount_sum_volatile_seed",
+    "source": "tests/cases/builtin_bitcount_sum_volatile_seed.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000013",
+      "rendered_includes": [
+        "0x00000013"
+      ]
+    }
+  },
+  {
+    "id": "global_set_stack_frame",
+    "source": "tests/cases/global_set_stack_frame.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x0000002b",
+      "rendered_includes": [
+        "0x0000002b"
+      ]
+    }
+  },
+  {
+    "id": "memory_size_builtin",
+    "source": "tests/cases/memory_size_builtin.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x0000002a",
+      "rendered_includes": [
+        "0x0000002a"
+      ]
+    }
+  },
+  {
+    "id": "switch_br_table_optnone",
+    "source": "tests/cases/switch_br_table_optnone.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000081",
+      "rendered_includes": [
+        "0x00000081"
+      ]
+    }
+  },
+  {
+    "id": "relops_signed_unsigned_full",
+    "source": "tests/cases/relops_signed_unsigned_full.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x0000003c",
+      "rendered_includes": [
+        "0x0000003c"
+      ]
+    }
+  },
+  {
+    "id": "return_call_direct",
+    "source": "tests/cases/return_call_direct.ll",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000010",
+      "rendered_includes": [
+        "0x00000010"
+      ]
+    }
+  },
+  {
+    "id": "return_call_indirect",
+    "source": "tests/cases/return_call_indirect.ll",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000010",
+      "rendered_includes": [
+        "0x00000010"
+      ]
+    }
+  },
+  {
+    "id": "if_else_nop_inlineasm",
+    "source": "tests/cases/if_else_nop_inlineasm.ll",
+    "expect": {
+      "pc": -1,
+      "ra": "0x0000004d",
+      "rendered_includes": [
+        "0x0000004d"
+      ]
+    }
+  },
+  {
+    "id": "control_switch_weave",
+    "source": "tests/cases/control_switch_weave.c",
+    "tags": [
+      "lengthy"
+    ],
+    "max_frames": 120000,
+    "virtual_time_budget_ms": 60000,
+    "expect": {
+      "pc": -1,
+      "rendered_includes": [
+        "Program exited with code"
+      ]
+    }
+  },
+  {
+    "id": "narrow_memory_signext",
+    "source": "tests/cases/narrow_memory_signext.c",
+    "expect": {
+      "pc": -1,
+      "rendered_includes": [
+        "Program exited with code"
+      ]
+    }
+  },
+  {
+    "id": "indirect_dispatch_switch",
+    "source": "tests/cases/indirect_dispatch_switch.c",
+    "expect": {
+      "pc": -1,
+      "rendered_includes": [
+        "Program exited with code"
+      ]
+    }
+  },
+  {
+    "id": "divrem_shift_paths",
+    "source": "tests/cases/divrem_shift_paths.c",
+    "tags": [
+      "lengthy"
+    ],
+    "max_frames": 120000,
+    "virtual_time_budget_ms": 60000,
+    "expect": {
+      "pc": -1,
+      "rendered_includes": [
+        "Program exited with code"
+      ]
+    }
+  },
+  {
+    "id": "early_return_paths",
+    "source": "tests/cases/early_return_paths.c",
+    "expect": {
+      "pc": -1,
+      "rendered_includes": [
+        "Program exited with code"
+      ]
+    }
+  },
+  {
+    "id": "memory_size_roundtrip",
+    "source": "tests/cases/memory_size_roundtrip.c",
+    "expect": {
+      "pc": -1,
+      "rendered_includes": [
+        "Program exited with code"
+      ]
+    }
+  },
+  {
+    "id": "bitcount_relop_blend",
+    "source": "tests/cases/bitcount_relop_blend.c",
+    "expect": {
+      "pc": -1,
+      "rendered_includes": [
+        "Program exited with code"
+      ]
+    }
+  },
+  {
+    "id": "pointer_fold_loop",
+    "source": "tests/cases/pointer_fold_loop.c",
+    "tags": [
+      "lengthy"
+    ],
+    "max_frames": 120000,
+    "virtual_time_budget_ms": 60000,
+    "expect": {
+      "pc": -1,
+      "rendered_includes": [
+        "Program exited with code"
+      ]
+    }
+  },
+  {
+    "id": "select_branch_blend",
+    "source": "tests/cases/select_branch_blend.c",
+    "tags": [
+      "lengthy"
+    ],
+    "max_frames": 120000,
+    "virtual_time_budget_ms": 60000,
+    "expect": {
+      "pc": -1,
+      "rendered_includes": [
+        "Program exited with code"
+      ]
+    }
+  },
+  {
+    "id": "nested_switch_walk",
+    "source": "tests/cases/nested_switch_walk.c",
+    "tags": [
+      "lengthy"
+    ],
+    "max_frames": 120000,
+    "virtual_time_budget_ms": 120000,
+    "expect": {
+      "pc": -1,
+      "rendered_includes": [
+        "Program exited with code"
+      ]
+    }
+  },
+  {
+    "id": "up8cc_pointer_ptrdiff_lp64",
+    "source": "tests/cases/up8cc_pointer_ptrdiff_lp64.c",
+    "tags": [
+      "broken"
+    ],
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000325",
+      "rendered_includes": [
+        "0x00000325"
+      ]
+    }
+  },
+  {
+    "id": "up8cc_type_pointer_size_lp64",
+    "source": "tests/cases/up8cc_type_pointer_size_lp64.c",
+    "tags": [
+      "broken"
+    ],
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000328",
+      "rendered_includes": [
+        "0x00000328"
+      ]
+    }
+  }
+]

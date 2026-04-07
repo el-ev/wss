@@ -1,0 +1,9 @@
+pub const DEFAULT_MEMORY_BYTES_CAP: u32 = 1024;
+// 1 slot = 2 bytes
+pub const DEFAULT_CALLSTACK_SLOTS_CAP: usize = 256;
+pub const MAX_ADDRESSABLE_MEMORY_BYTES: u32 = (u16::MAX as u32) + 1;
+pub const DEFAULT_MAX_PHYS_REGS: u16 = 256;
+
+pub const SCHEDULE_MAX_OPS_PER_CYCLE: usize = 64;
+pub const SCHEDULE_MAX_COMPLEXITY_PER_CYCLE: usize = 64;
+pub const SCHEDULE_MAX_STORE_MEM_PER_CYCLE: usize = 16;

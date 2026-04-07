@@ -1,0 +1,12 @@
+/target
+.vscode
+/*.html
+*.c
+*.wasm
+!tests/cases/
+!tests/cases/*.c
+tests/out/
+
+*.log
+.gitignore
+AGENTS.md

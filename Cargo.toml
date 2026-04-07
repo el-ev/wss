@@ -1,0 +1,15 @@
+[package]
+name = "wss"
+description = "A WebAssembly to CSS transpiler and runtime"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0"
+authors = ["Iris Shi <0.0@owo.li>"]
+repository = "https://github.com/el-ev/wss"
+
+[dependencies]
+anyhow = "1.0.102"
+bitflags = "2.11.0"
+chrono = "0.4.44"
+clap = { version = "4.6.0", features = ["derive"] }
+wasmparser = { version = "0.245.1", features = [] }
