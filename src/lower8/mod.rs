@@ -820,8 +820,8 @@ fn lower_terminator(
             });
         }
         Terminator::TailCall { func, args } => {
-            if b.is_main {
-                anyhow::bail!("main function must not contain tail_call terminators");
+            if b.is_entry {
+                anyhow::bail!("entry function '_start' must not contain tail_call terminators");
             }
             let t8 = calls::lower_tail_call(b, *func, args, allocs)?;
             b.finish(t8);
@@ -832,8 +832,10 @@ fn lower_terminator(
             index,
             args,
         } => {
-            if b.is_main {
-                anyhow::bail!("main function must not contain tail_call_indirect terminators");
+            if b.is_entry {
+                anyhow::bail!(
+                    "entry function '_start' must not contain tail_call_indirect terminators"
+                );
             }
             calls::lower_tail_call_indirect(
                 b,
@@ -847,7 +849,7 @@ fn lower_terminator(
         }
         Terminator::Return(val_ref) => {
             let val = val_ref.map(|r| b.get_word(r));
-            if b.is_main {
+            if b.is_entry {
                 b.finish(Terminator8::Exit { val });
             } else {
                 calls::emit_non_main_return_sequence(b, val);
@@ -911,7 +913,7 @@ pub fn lower8_module_with_config(
     memory_bytes_cap: u32,
     config: Lower8Config,
 ) -> anyhow::Result<Ir8Program> {
-    let main_func_id = module.main_export().context("no main export")? as usize;
+    let entry_func_id = module.entry_export().context("no '_start' export")? as usize;
     let global_init = build_global_init(module)?;
     let stack_pointer = global_init.first().copied();
     let memory_layout = build_memory_layout(module, memory_bytes_cap, stack_pointer)?;
@@ -945,14 +947,14 @@ pub fn lower8_module_with_config(
     };
 
     for (func_id, func) in module.functions_ir().iter().enumerate() {
-        let is_main = func_id == main_func_id;
+        let is_entry = func_id == entry_func_id;
         let local_vregs = allocs[func_id].local_vregs.clone();
 
         let (blocks, fi, new_counter) = lower_function(
             &lower_ctx,
             func,
             func_id as u32,
-            is_main,
+            is_entry,
             local_vregs,
             vreg_counter,
         )?;
@@ -1012,7 +1014,7 @@ pub fn lower8_module_with_config(
     }
 
     Ok(Ir8Program {
-        entry_func: main_func_id as u32,
+        entry_func: entry_func_id as u32,
         num_vregs: vreg_counter,
         func_blocks,
         cycles: Vec::new(),
@@ -1026,7 +1028,7 @@ fn lower_function(
     ctx: &Lower8Context<'_>,
     func: &IrFuncInfo,
     func_id: u32,
-    is_main: bool,
+    is_entry: bool,
     local_vregs: Vec<Word>,
     vreg_start: u16,
 ) -> anyhow::Result<(Vec<BasicBlock8>, FrameInfo, u16)> {
@@ -1042,7 +1044,7 @@ fn lower_function(
     };
 
     let num_locals = body.locals().len() as u32;
-    let mut b = FuncBuilder::new(func_id, is_main, vreg_start, local_vregs);
+    let mut b = FuncBuilder::new(func_id, is_entry, vreg_start, local_vregs);
 
     let live_after_by_block = compute_live_after_by_block(body);
 
@@ -1100,7 +1102,7 @@ mod tests {
     fn mk_single_main_module(main_block: BasicBlock) -> Module {
         let mut module = Module::new();
         module.set_num_pages(1);
-        module.set_main_export(Some(0));
+        module.set_entry_export(Some(0));
         *module.functions_ir_mut() = vec![IrFuncInfo::new(
             mk_sig(&[], &[ValType::I32]),
             Some(crate::module::IrFuncBody::new(
@@ -1916,7 +1918,7 @@ mod tests {
 
         let module = mk_module_with(|module| {
             module.set_num_pages(1);
-            module.set_main_export(Some(1));
+            module.set_entry_export(Some(1));
             *module.functions_ir_mut() = vec![
                 IrFuncInfo::new(
                     fib_sig.clone(),
@@ -2022,7 +2024,7 @@ mod tests {
 
         let module = mk_module_with(|module| {
             module.set_num_pages(1);
-            module.set_main_export(Some(1));
+            module.set_entry_export(Some(1));
             *module.types_mut() = vec![callee_sig.clone()];
             *module.tables_mut() = vec![mk_table(vec![Some(0)])];
             *module.functions_ir_mut() = vec![
@@ -2083,7 +2085,7 @@ mod tests {
 
         let module = mk_module_with(|module| {
             module.set_num_pages(1);
-            module.set_main_export(Some(0));
+            module.set_entry_export(Some(0));
             *module.types_mut() = vec![mk_sig(&[], &[ValType::I32])];
             *module.functions_ir_mut() = vec![IrFuncInfo::new(
                 mk_sig(&[], &[ValType::I32]),
@@ -2120,7 +2122,7 @@ mod tests {
 
         let module = mk_module_with(|module| {
             module.set_num_pages(1);
-            module.set_main_export(Some(0));
+            module.set_entry_export(Some(0));
             *module.types_mut() = vec![mk_sig(&[ValType::I32], &[ValType::I32])];
             *module.tables_mut() = vec![mk_table(vec![None])];
             *module.functions_ir_mut() = vec![IrFuncInfo::new(
@@ -2158,7 +2160,7 @@ mod tests {
 
         let module = mk_module_with(|module| {
             module.set_num_pages(1);
-            module.set_main_export(Some(0));
+            module.set_entry_export(Some(0));
             *module.types_mut() = vec![mk_sig(&[], &[ValType::I32])];
             *module.tables_mut() = vec![mk_table(vec![None; 257])];
             *module.functions_ir_mut() = vec![IrFuncInfo::new(
@@ -2200,7 +2202,7 @@ mod tests {
 
         let module = mk_module_with(|module| {
             module.set_num_pages(1);
-            module.set_main_export(Some(0));
+            module.set_entry_export(Some(0));
             *module.functions_ir_mut() = vec![
                 IrFuncInfo::new(
                     callee_sig,
@@ -2262,7 +2264,7 @@ mod tests {
 
         let module = mk_module_with(|module| {
             module.set_num_pages(1);
-            module.set_main_export(Some(0));
+            module.set_entry_export(Some(0));
             *module.types_mut() = vec![callee_sig.clone()];
             *module.tables_mut() = vec![mk_table(vec![Some(0)])];
             *module.functions_ir_mut() = vec![
@@ -2330,7 +2332,7 @@ mod tests {
 
         let module = mk_module_with(|module| {
             module.set_num_pages(1);
-            module.set_main_export(Some(1));
+            module.set_entry_export(Some(1));
             *module.functions_ir_mut() = vec![
                 IrFuncInfo::new(helper_sig, Some(mk_ir_body(vec![], vec![helper_block]))),
                 IrFuncInfo::new(main_sig, Some(mk_ir_body(vec![], vec![main_block]))),
@@ -2372,7 +2374,7 @@ mod tests {
 
         let module = mk_module_with(|module| {
             module.set_num_pages(1);
-            module.set_main_export(Some(1));
+            module.set_entry_export(Some(1));
             *module.types_mut() = vec![mk_sig(&[ValType::I32], &[ValType::I32])];
             *module.tables_mut() = vec![mk_table(vec![None])];
             *module.functions_ir_mut() = vec![
@@ -2416,7 +2418,7 @@ mod tests {
 
         let module = mk_module_with(|module| {
             module.set_num_pages(1);
-            module.set_main_export(Some(1));
+            module.set_entry_export(Some(1));
             *module.types_mut() = vec![mk_sig(&[], &[ValType::I32])];
             *module.tables_mut() = vec![mk_table(vec![None; 257])];
             *module.functions_ir_mut() = vec![
@@ -2462,7 +2464,7 @@ mod tests {
             module.set_num_pages(1);
             module.set_num_imported_funcs(1);
             module.set_putchar_import(Some(0));
-            module.set_main_export(Some(2));
+            module.set_entry_export(Some(2));
             *module.types_mut() = vec![putchar_sig.clone()];
             *module.tables_mut() = vec![mk_table(vec![Some(0)])];
             *module.functions_ir_mut() = vec![
@@ -2510,7 +2512,7 @@ mod tests {
     fn lower8_main_tail_call_terminator_is_rejected() {
         let module = mk_module_with(|module| {
             module.set_num_pages(1);
-            module.set_main_export(Some(0));
+            module.set_entry_export(Some(0));
             *module.functions_ir_mut() = vec![IrFuncInfo::new(
                 mk_sig(&[], &[ValType::I32]),
                 Some(mk_ir_body(
@@ -2533,7 +2535,7 @@ mod tests {
         };
         let msg = format!("{err:#}");
         assert!(
-            msg.contains("main function must not contain tail_call terminators"),
+            msg.contains("entry function '_start' must not contain tail_call terminators"),
             "unexpected lower8 error: {msg}"
         );
     }
@@ -2542,7 +2544,7 @@ mod tests {
     fn lower8_main_tail_call_indirect_terminator_is_rejected() {
         let module = mk_module_with(|module| {
             module.set_num_pages(1);
-            module.set_main_export(Some(0));
+            module.set_entry_export(Some(0));
             *module.functions_ir_mut() = vec![IrFuncInfo::new(
                 mk_sig(&[], &[ValType::I32]),
                 Some(mk_ir_body(
@@ -2567,21 +2569,21 @@ mod tests {
         };
         let msg = format!("{err:#}");
         assert!(
-            msg.contains("main function must not contain tail_call_indirect terminators"),
+            msg.contains("entry function '_start' must not contain tail_call_indirect terminators"),
             "unexpected lower8 error: {msg}"
         );
     }
 
     #[test]
-    fn lower8_reject_module_without_main_export() {
+    fn lower8_reject_module_without_start_export() {
         let module = Module::default();
         let err = match lower8_module(&module, 65536) {
-            Ok(_) => panic!("module without main export should fail"),
+            Ok(_) => panic!("module without _start export should fail"),
             Err(err) => err,
         };
         let msg = format!("{err:#}");
         assert!(
-            msg.contains("no main export"),
+            msg.contains("no '_start' export"),
             "unexpected lower8 error: {msg}"
         );
     }

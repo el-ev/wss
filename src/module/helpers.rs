@@ -24,5 +24,5 @@ pub(super) fn build_table_info(
 }
 
 pub(super) fn is_entry_export_name(name: &str) -> bool {
-    matches!(name, "main" | "$main" | "_start")
+    name == "_start"
 }

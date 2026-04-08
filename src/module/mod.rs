@@ -79,7 +79,7 @@ pub(crate) struct Module {
     num_imported_funcs: usize,
     putchar_import: Option<u32>,
     getchar_import: Option<u32>,
-    main_export: Option<u32>,
+    entry_export: Option<u32>,
     functions_ast: Vec<AstFuncInfo>,
     functions_ir: Vec<IrFuncInfo>,
 }
@@ -198,12 +198,12 @@ impl Module {
         self.getchar_import
     }
 
-    pub(crate) fn main_export(&self) -> Option<u32> {
-        self.main_export
+    pub(crate) fn entry_export(&self) -> Option<u32> {
+        self.entry_export
     }
 
-    pub(crate) fn set_main_export(&mut self, main_export: Option<u32>) {
-        self.main_export = main_export;
+    pub(crate) fn set_entry_export(&mut self, entry_export: Option<u32>) {
+        self.entry_export = entry_export;
     }
 
     pub(crate) fn functions_ast(&self) -> &[AstFuncInfo] {
@@ -323,7 +323,7 @@ impl Module {
                     for export in s {
                         let export = export.context("export")?;
                         if is_entry_export_name(export.name) && export.kind == ExternalKind::Func {
-                            module.set_main_export(Some(export.index));
+                            module.set_entry_export(Some(export.index));
                         }
                     }
                 }

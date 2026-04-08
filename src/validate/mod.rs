@@ -68,11 +68,13 @@ fn validate_imports_exports(module: &Module) -> anyhow::Result<()> {
             bail!("getchar must have signature () -> i32");
         }
     }
-    let main_idx = module.main_export().context("module must export 'main'")?;
-    let main_func = func_signature(module, main_idx)?;
-    // TODO(i64): top-level ABI currently requires `main` to return i32.
-    if main_func.results() != [ValType::I32] {
-        bail!("exported 'main' must return i32");
+    let entry_idx = module
+        .entry_export()
+        .context("module must export '_start'")?;
+    let entry_func = func_signature(module, entry_idx)?;
+    // TODO(i64): top-level ABI currently requires `_start` to return i32.
+    if entry_func.results() != [ValType::I32] {
+        bail!("exported '_start' must return i32");
     }
     Ok(())
 }
