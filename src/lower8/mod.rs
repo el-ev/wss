@@ -45,12 +45,7 @@ fn build_memory_layout(
     } else {
         memory_bytes_cap
     };
-    anyhow::ensure!(
-        memory_end <= crate::constants::MAX_ADDRESSABLE_MEMORY_BYTES,
-        "memory bytes cap {} exceeds 16-bit address space limit {}",
-        memory_end,
-        crate::constants::MAX_ADDRESSABLE_MEMORY_BYTES
-    );
+    crate::constants::validate_memory_bytes_cap(memory_end)?;
     if let Some(sp) = stack_pointer
         && sp > memory_end
     {
@@ -494,12 +489,7 @@ fn lower_divrem_call_via_function(
         .for_op(op)
         .with_context(|| format!("expected div/rem op, got {:?}", op))?;
     let callee_alloc = &allocs[callee_id as usize];
-    anyhow::ensure!(
-        callee_alloc.local_vregs.len() >= 2,
-        "builtin div/rem function {} is missing parameter vregs",
-        callee_id
-    );
-    let callee_arg_vregs = callee_alloc.local_vregs[..2].to_vec();
+    let callee_arg_vregs = divrem_param_vregs(&callee_alloc.local_vregs, callee_id)?.to_vec();
     let callee_entry = Pc::new(callee_id as u16 * PC_STRIDE);
     let cont = b.alloc_block();
     let spill_words = collect_spill_words(live_after, &b.inst_map, &b.local_vregs);
@@ -863,23 +853,26 @@ enum DivBuiltinKind {
     RemS,
 }
 
+fn divrem_param_vregs(local_vregs: &[Word], func_id: u32) -> anyhow::Result<[Word; 2]> {
+    anyhow::ensure!(
+        local_vregs.len() >= 2,
+        "builtin div/rem function {} expects two parameter words",
+        func_id
+    );
+    Ok([local_vregs[0], local_vregs[1]])
+}
+
 fn lower_divrem_builtin_function(
     func_id: u32,
     local_vregs: Vec<Word>,
     vreg_start: u16,
     kind: DivBuiltinKind,
 ) -> anyhow::Result<(Vec<BasicBlock8>, Pc, u32, u16)> {
-    anyhow::ensure!(
-        local_vregs.len() >= 2,
-        "builtin div/rem function {} expects two parameter words",
-        func_id
-    );
+    let [numer, denom] = divrem_param_vregs(&local_vregs, func_id)?;
     let mut b = FuncBuilder::new(func_id, false, vreg_start, local_vregs);
     let entry = b.alloc_block();
     b.switch_to(entry);
 
-    let numer = b.local_vregs[0];
-    let denom = b.local_vregs[1];
     let ret = match kind {
         // TODO(i64): synthetic div/rem helper functions exist only for 32-bit integer ops.
         DivBuiltinKind::DivU => lower_divrem_u32(&mut b, numer, denom, false),

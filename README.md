@@ -72,9 +72,10 @@ Options:
 - `-o, --output <PATH>`: output HTML path. Default: `a.html`
 - `--memory-bytes <N>`: runtime linear-memory cap in bytes. Default: `1024`
 - `--stack-slots <N>`: runtime callstack cap in 16-bit slots. Default: `256`
-- `--js-clock <true|false>`: enable JS-based clock stepping. Default: `true`
-- `--js-coprocessor <true|false>`: enable JS coprocessor for `div`/`rem` and bitwise builtins. Requires `--js-clock true`
-- `--js-clock-debugger <true|false>`: enable the JS debugger popup. Requires `--js-clock true`
+- `--js-clock`: enable JS-based clock stepping. This is the default.
+- `--no-js-clock`: disable JS-based clock stepping.
+- `--js-coprocessor`: enable the JS coprocessor for `div`/`rem` and bitwise builtins. Conflicts with `--no-js-clock`.
+- `--js-clock-debugger`: enable the JS debugger popup. Conflicts with `--no-js-clock`.
 - `--max-phys-regs <N>`: register-allocation cap, including reserved `r0`-`r3`. Default: `256`
 
 ## What is supported

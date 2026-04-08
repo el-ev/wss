@@ -52,21 +52,32 @@ struct Cli {
     /// Runtime callstack cap in 16-bit slots.
     #[arg(long = "stack-slots", default_value_t = DEFAULT_CALLSTACK_SLOTS_CAP)]
     stack_slots: usize,
-    /// Enable JS-based clock stepping (`true` or `false`).
-    #[arg(long = "js-clock", default_value_t = true, action = ArgAction::Set)]
+    /// Enable JS-based clock stepping.
+    #[arg(
+        long = "js-clock",
+        action = ArgAction::SetTrue,
+        conflicts_with = "no_js_clock"
+    )]
     js_clock: bool,
-    /// Enable JS coprocessor for div/rem and bitwise builtins (`true` or `false`).
+    /// Disable JS-based clock stepping.
+    #[arg(
+        long = "no-js-clock",
+        action = ArgAction::SetTrue,
+        conflicts_with = "js_clock"
+    )]
+    no_js_clock: bool,
+    /// Enable JS coprocessor for div/rem and bitwise builtins.
     #[arg(
         long = "js-coprocessor",
-        default_value_t = false,
-        action = ArgAction::Set
+        action = ArgAction::SetTrue,
+        conflicts_with = "no_js_clock"
     )]
     js_coprocessor: bool,
-    /// Enable JS clock debugger popup with speed controls and step execution (`true` or `false`).
+    /// Enable JS clock debugger popup with speed controls and step execution.
     #[arg(
         long = "js-clock-debugger",
-        default_value_t = false,
-        action = ArgAction::Set
+        action = ArgAction::SetTrue,
+        conflicts_with = "no_js_clock"
     )]
     js_clock_debugger: bool,
     /// Max total physical regs (including reserved r0-r3) after register allocation.
@@ -93,6 +104,10 @@ struct Cli {
 }
 
 impl Cli {
+    fn js_clock_enabled(&self) -> bool {
+        !self.no_js_clock
+    }
+
     fn dump_config(&self) -> DumpConfig {
         DumpConfig {
             ast: self.dump_all || self.dump_ast,
@@ -106,23 +121,16 @@ impl Cli {
 
 fn main() -> Result<()> {
     let args = Cli::parse();
+    let js_clock = args.js_clock_enabled();
     let output_file = args.output.clone();
     let dump = args.dump_config();
     let emit_config = EmitConfig {
         memory_bytes_cap: args.memory_bytes,
         callstack_slots_cap: args.stack_slots,
-        js_clock: args.js_clock,
+        js_clock,
         js_coprocessor: args.js_coprocessor,
         js_clock_debugger: args.js_clock_debugger,
     };
-    anyhow::ensure!(
-        !args.js_coprocessor || args.js_clock,
-        "--js-coprocessor requires --js-clock true"
-    );
-    anyhow::ensure!(
-        !args.js_clock_debugger || args.js_clock,
-        "--js-clock-debugger requires --js-clock true"
-    );
 
     let wasm_bytes = std::fs::read(&args.wasm_file).with_context(|| {
         format!(
@@ -190,6 +198,7 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::error::ErrorKind;
 
     #[test]
     fn dump_all_enables_all_dump_stages() {
@@ -214,5 +223,44 @@ mod tests {
         assert!(!dump.ir8);
         assert!(!dump.ir8_opt);
         assert!(dump.program);
+    }
+
+    #[test]
+    fn js_clock_defaults_to_enabled() {
+        let args = Cli::try_parse_from(["wss", "input.wasm"]).unwrap();
+
+        assert!(args.js_clock_enabled());
+    }
+
+    #[test]
+    fn no_js_clock_disables_js_clock() {
+        let args = Cli::try_parse_from(["wss", "input.wasm", "--no-js-clock"]).unwrap();
+
+        assert!(!args.js_clock_enabled());
+    }
+
+    #[test]
+    fn js_coprocessor_conflicts_with_no_js_clock() {
+        let err = Cli::try_parse_from(["wss", "input.wasm", "--no-js-clock", "--js-coprocessor"])
+            .expect_err("parse should fail");
+
+        assert_eq!(err.kind(), ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn js_clock_debugger_conflicts_with_no_js_clock() {
+        let err =
+            Cli::try_parse_from(["wss", "input.wasm", "--no-js-clock", "--js-clock-debugger"])
+                .expect_err("parse should fail");
+
+        assert_eq!(err.kind(), ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn js_clock_conflicts_with_no_js_clock() {
+        let err = Cli::try_parse_from(["wss", "input.wasm", "--js-clock", "--no-js-clock"])
+            .expect_err("parse should fail");
+
+        assert_eq!(err.kind(), ErrorKind::ArgumentConflict);
     }
 }

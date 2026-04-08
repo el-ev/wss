@@ -10,3 +10,13 @@ pub const DEFAULT_MAX_PHYS_REGS: u16 = 256;
 pub const SCHEDULE_MAX_OPS_PER_CYCLE: usize = 64;
 pub const SCHEDULE_MAX_COMPLEXITY_PER_CYCLE: usize = 64;
 pub const SCHEDULE_MAX_STORE_MEM_PER_CYCLE: usize = 16;
+
+pub fn validate_memory_bytes_cap(memory_bytes_cap: u32) -> anyhow::Result<u32> {
+    anyhow::ensure!(
+        memory_bytes_cap <= MAX_ADDRESSABLE_MEMORY_BYTES,
+        "memory bytes cap {} exceeds 16-bit address space limit {}",
+        memory_bytes_cap,
+        MAX_ADDRESSABLE_MEMORY_BYTES
+    );
+    Ok(memory_bytes_cap)
+}

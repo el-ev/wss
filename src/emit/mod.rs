@@ -18,7 +18,7 @@ use paste::paste;
 
 use crate::constants::{
     DEFAULT_CALLSTACK_SLOTS_CAP, DEFAULT_JS_CLOCK_DEBUGGER_ENABLED, DEFAULT_JS_CLOCK_ENABLED,
-    DEFAULT_JS_COPROCESSOR_ENABLED, DEFAULT_MEMORY_BYTES_CAP, MAX_ADDRESSABLE_MEMORY_BYTES,
+    DEFAULT_JS_COPROCESSOR_ENABLED, DEFAULT_MEMORY_BYTES_CAP, validate_memory_bytes_cap,
 };
 use crate::ir8::{BuiltinId, CallTarget, Inst8Kind, Ir8Program, Terminator8, TrapCode, Val8, Word};
 
@@ -60,12 +60,7 @@ impl Default for EmitConfig {
 
 impl EmitConfig {
     fn validate(self) -> anyhow::Result<Self> {
-        anyhow::ensure!(
-            self.memory_bytes_cap <= MAX_ADDRESSABLE_MEMORY_BYTES,
-            "memory bytes cap {} exceeds 16-bit address space limit {}",
-            self.memory_bytes_cap,
-            MAX_ADDRESSABLE_MEMORY_BYTES
-        );
+        validate_memory_bytes_cap(self.memory_bytes_cap)?;
         anyhow::ensure!(
             self.callstack_slots_cap > 0,
             "callstack slots cap must be greater than zero"
