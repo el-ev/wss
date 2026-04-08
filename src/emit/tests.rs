@@ -242,11 +242,11 @@ fn emit_html_includes_js_coprocessor_runtime_when_enabled() {
         },
     )
     .expect("emit should succeed");
-    assert!(html.contains("const jsCoprocessorEnabled = true;"));
     assert!(html.contains("@property --cop_op"));
     assert!(html.contains("@property --cop_a0"));
     assert!(html.contains("@property --cop_b3"));
     assert!(html.contains("@property --cop_o3"));
+    assert!(!html.contains("const jsCoprocessorEnabled"));
     assert!(html.contains(" --cop_op: "));
 }
 
@@ -279,8 +279,8 @@ fn emit_html_includes_js_clock_debugger_when_enabled() {
         },
     )
     .expect("emit should succeed");
-    assert!(html.contains("const jsClockDebuggerEnabled = true;"));
-    assert!(html.contains("let paused = jsClockDebuggerEnabled;"));
+    assert!(html.contains("let paused = false;"));
+    assert!(html.contains("paused = true;"));
     assert!(html.contains("popup.hidden = false;"));
     assert!(html.contains("className = \"wss-debug-trigger\";"));
     assert!(html.contains("data-wss-debug-step=\"1\""));
@@ -303,7 +303,9 @@ fn emit_html_omits_js_clock_debugger_css_when_disabled() {
     .expect("emit should succeed");
     assert!(!html.contains(".wss-debug-trigger {"));
     assert!(!html.contains(".wss-debug-popup {"));
-    assert!(html.contains("const jsClockDebuggerEnabled = false;"));
+    assert!(!html.contains("className = \"wss-debug-trigger\";"));
+    assert!(!html.contains("data-wss-debug-step=\"1\""));
+    assert!(!html.contains("popup.hidden = false;"));
 }
 
 #[test]
