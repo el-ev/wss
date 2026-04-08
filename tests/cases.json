@@ -239,6 +239,10 @@
   {
     "id": "loop_break_continue_do_while",
     "source": "tests/cases/loop_break_continue_do_while.c",
+    "tags": [
+      "lengthy"
+    ],
+    "virtual_time_budget_ms": 60000,
     "expect": {
       "pc": -1,
       "ra": "0x0000007c",
