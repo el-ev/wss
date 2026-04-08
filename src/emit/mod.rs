@@ -26,9 +26,6 @@ const BASE_HTML: &str = include_str!("base.html");
 const PROPS_PLACEHOLDER: &str = "/*__WSS_PROPS__*/";
 const LOGIC_PLACEHOLDER: &str = "/*__WSS_LOGIC__*/";
 const SUPPORT_PLACEHOLDER: &str = "/*__WSS_SUPPORT__*/";
-const JS_CLOCK_ENABLED_PLACEHOLDER: &str = "__WSS_JS_CLOCK_ENABLED__";
-const JS_COPROCESSOR_ENABLED_PLACEHOLDER: &str = "__WSS_JS_COPROCESSOR_ENABLED__";
-const JS_CLOCK_DEBUGGER_ENABLED_PLACEHOLDER: &str = "__WSS_JS_CLOCK_DEBUGGER_ENABLED__";
 const READ_LOOKUP_CHUNK: usize = 128;
 const VIS_SHADOW_CHUNK: usize = 8;
 const VIS_COLS: usize = 128;
@@ -125,6 +122,7 @@ keep_pairs! {
         (KB_CLK_DEFAULT, "KB_CLK_DEFAULT"),
         (KB_INPUT_CSS, "KB_INPUT_CSS"),
         (JS_CLOCK_DEBUGGER_CSS, "JS_CLOCK_DEBUGGER_CSS"),
+        (JS_CLOCK_DEBUGGER_RUNTIME, "JS_CLOCK_DEBUGGER_RUNTIME"),
         (JS_COPROCESSOR_RUNTIME, "JS_COPROCESSOR_RUNTIME")
     ],
     html: [
@@ -252,27 +250,7 @@ pub fn emit_program(program: &Ir8Program, config: EmitConfig) -> anyhow::Result<
     let html = BASE_HTML
         .replace(PROPS_PLACEHOLDER, &props_css)
         .replace(LOGIC_PLACEHOLDER, &logic_css)
-        .replace(SUPPORT_PLACEHOLDER, &support_css)
-        .replace(
-            JS_CLOCK_ENABLED_PLACEHOLDER,
-            if config.js_clock { "true" } else { "false" },
-        )
-        .replace(
-            JS_COPROCESSOR_ENABLED_PLACEHOLDER,
-            if config.js_coprocessor {
-                "true"
-            } else {
-                "false"
-            },
-        )
-        .replace(
-            JS_CLOCK_DEBUGGER_ENABLED_PLACEHOLDER,
-            if config.js_clock_debugger {
-                "true"
-            } else {
-                "false"
-            },
-        );
+        .replace(SUPPORT_PLACEHOLDER, &support_css);
     Ok(emitter.apply_template_features(html))
 }
 
@@ -668,6 +646,12 @@ impl<'a> Emitter<'a> {
             &mut html,
             KEEP_JS_CLOCK_DEBUGGER_CSS_START,
             KEEP_JS_CLOCK_DEBUGGER_CSS_END,
+            self.js_clock_debugger,
+        );
+        Self::apply_marked_section(
+            &mut html,
+            KEEP_JS_CLOCK_DEBUGGER_RUNTIME_START,
+            KEEP_JS_CLOCK_DEBUGGER_RUNTIME_END,
             self.js_clock_debugger,
         );
 
