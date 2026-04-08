@@ -234,7 +234,13 @@ function getCaseArtifacts(testCase) {
     htmlPath: path.join(OUT_DIR, `${id}.html`),
     probePath: path.join(OUT_DIR, `${id}.probe.html`),
     domPath: path.join(OUT_DIR, `${id}.dom.html`),
+    memoryDumpPath: path.join(OUT_DIR, `${id}.memory.bin`),
+    memoryMetaPath: path.join(OUT_DIR, `${id}.memory.json`),
   };
+}
+
+function formatHex32(value) {
+  return `0x${(value >>> 0).toString(16).padStart(8, "0")}`;
 }
 
 function buildClangArgs(sourcePath, wasmPath, settings) {
@@ -252,7 +258,7 @@ function buildClangArgs(sourcePath, wasmPath, settings) {
 }
 
 function buildWssArgs(wasmPath, htmlPath, settings) {
-  return [
+  const args = [
     pathArgFromRoot(wasmPath),
     "-o",
     pathArgFromRoot(htmlPath),
@@ -260,11 +266,12 @@ function buildWssArgs(wasmPath, htmlPath, settings) {
     String(settings.memoryBytes),
     "--stack-slots",
     String(settings.stackSlots),
-    "--js-clock",
-    settings.jsClock ? "true" : "false",
-    "--js-coprocessor",
-    settings.jsCoprocessor ? "true" : "false",
   ];
+  args.push(settings.jsClock ? "--js-clock" : "--no-js-clock");
+  if (settings.jsCoprocessor) {
+    args.push("--js-coprocessor");
+  }
+  return args;
 }
 
 function makeProbeScript(memoryKeys, maxFrames, inputBytes, getcharPcs) {
@@ -589,6 +596,20 @@ function inferGetcharPcs(html) {
   return [...pcs];
 }
 
+function inferMaterializedMemoryKeys(html) {
+  const keys = [];
+  const seen = new Set();
+  const re = /@property\s+(--m[0-9a-f]+)\s*\{/gi;
+  let match;
+  while ((match = re.exec(html)) !== null) {
+    const key = match[1].toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    keys.push(key);
+  }
+  return keys;
+}
+
 function validateCase(testCase, result) {
   const failures = [];
   const expect = testCase.expect || {};
@@ -631,15 +652,73 @@ function validateCase(testCase, result) {
       }
     }
   }
-  if (expect.memory_words && typeof expect.memory_words === "object") {
-    for (const [key, expected] of Object.entries(expect.memory_words)) {
-      const actual = result.memory ? result.memory[key] : undefined;
-      if (actual !== expected) {
-        failures.push(`memory mismatch for ${key}: expected ${expected}, got ${actual}`);
-      }
+
+  return failures;
+}
+
+function compareDumpWithMaterializedRuntime(testCase, artifacts, materializedMemoryKeys, result) {
+  if (!result || result.timeout || result.ok === false) return [];
+  if (!Array.isArray(materializedMemoryKeys) || materializedMemoryKeys.length === 0) return [];
+  if (!fs.existsSync(artifacts.memoryDumpPath)) return [];
+
+  const dump = fs.readFileSync(artifacts.memoryDumpPath);
+  const mismatches = [];
+  const missingCells = [];
+
+  for (const key of materializedMemoryKeys) {
+    const match = /^--m([0-9a-f]+)$/i.exec(key);
+    if (!match) continue;
+
+    const addr = Number.parseInt(match[1], 16);
+    const runtimeCell = result.memory ? result.memory[key] : undefined;
+    if (!Number.isInteger(runtimeCell)) {
+      missingCells.push(key);
+      continue;
+    }
+
+    const runtimeLo = runtimeCell & 0xff;
+    const runtimeHi = (runtimeCell >>> 8) & 0xff;
+    const expectedLo = dump[addr];
+    const expectedHi = dump[addr + 1];
+
+    if (expectedLo === undefined) {
+      mismatches.push(
+        `materialized cell ${key} starts beyond dump length (${dump.length} bytes)`
+      );
+      continue;
+    }
+    if (runtimeLo !== expectedLo) {
+      mismatches.push(
+        `memory byte mismatch at 0x${addr.toString(16).padStart(4, "0")} (${key} lo): dump=0x${expectedLo
+          .toString(16)
+          .padStart(2, "0")} runtime=0x${runtimeLo.toString(16).padStart(2, "0")}`
+      );
+    }
+    if (expectedHi !== undefined && runtimeHi !== expectedHi) {
+      mismatches.push(
+        `memory byte mismatch at 0x${(addr + 1)
+          .toString(16)
+          .padStart(4, "0")} (${key} hi): dump=0x${expectedHi
+          .toString(16)
+          .padStart(2, "0")} runtime=0x${runtimeHi.toString(16).padStart(2, "0")}`
+      );
     }
   }
 
+  const failures = [];
+  if (missingCells.length > 0) {
+    failures.push(
+      `runtime memory missing ${missingCells.length} materialized cell(s): ${missingCells
+        .slice(0, 8)
+        .join(", ")}${missingCells.length > 8 ? ", ..." : ""}`
+    );
+  }
+  if (mismatches.length > 0) {
+    failures.push(...mismatches.slice(0, 32));
+    if (mismatches.length > 32) {
+      failures.push(`... ${mismatches.length - 32} additional byte mismatch(es) omitted`);
+    }
+  }
   return failures;
 }
 
@@ -724,6 +803,8 @@ function parseCliArgs(argv) {
   let jobs = CASE_JOBS_BY_DEFAULT;
   let caseNodeHeapMb = CASE_NODE_HEAP_MB_BY_DEFAULT;
   let jsonSummary = false;
+  let dumpMemoryFirst = true;
+  let dumpMemoryOnly = false;
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -791,6 +872,20 @@ function parseCliArgs(argv) {
       jsonSummary = true;
       continue;
     }
+    if (arg === "--dump-memory-first") {
+      dumpMemoryFirst = true;
+      continue;
+    }
+    if (arg === "--no-dump-memory") {
+      dumpMemoryFirst = false;
+      dumpMemoryOnly = false;
+      continue;
+    }
+    if (arg === "--dump-memory-only") {
+      dumpMemoryFirst = true;
+      dumpMemoryOnly = true;
+      continue;
+    }
     if (arg.startsWith("--")) {
       throw new Error(`unknown flag: ${arg}`);
     }
@@ -807,6 +902,8 @@ function parseCliArgs(argv) {
     jobs,
     caseNodeHeapMb,
     jsonSummary,
+    dumpMemoryFirst,
+    dumpMemoryOnly,
   };
 }
 
@@ -843,7 +940,6 @@ function buildCaseConfig(testCase) {
   const jsClock = requestedJsClock || jsCoprocessor;
 
   return {
-    memoryKeys: Object.keys((testCase.expect && testCase.expect.memory_words) || {}),
     maxFrames: parsePositiveInt(testCase.max_frames, MAX_FRAMES),
     inputBytes: parseCaseInputBytes(
       testCase.console_input,
@@ -860,6 +956,140 @@ function buildCaseConfig(testCase) {
       VIRTUAL_TIME_BUDGET_MS
     ),
   };
+}
+
+function ensureCaseSourceExists(artifacts) {
+  if (!fs.existsSync(artifacts.sourcePath)) {
+    throw new Error(`missing case source: ${artifacts.sourcePath}`);
+  }
+}
+
+function compileCaseToWasm(testCase, artifacts, caseConfig) {
+  runChecked(
+    "clang",
+    buildClangArgs(artifacts.sourcePath, artifacts.wasmPath, caseConfig),
+    ROOT,
+    `[${testCase.id}] clang compile`,
+    CLANG_TIMEOUT_MS
+  );
+}
+
+function transpileCaseToHtml(testCase, artifacts, caseConfig) {
+  runChecked(
+    WSS_BIN,
+    buildWssArgs(artifacts.wasmPath, artifacts.htmlPath, caseConfig),
+    ROOT,
+    `[${testCase.id}] wss run`,
+    WSS_TIMEOUT_MS
+  );
+}
+
+function makeWasmImportFunction(moduleName, fieldName, inputQueue, outputBytes) {
+  if (fieldName === "getchar") {
+    return () => (inputQueue.length > 0 ? inputQueue.shift() : -1);
+  }
+  if (fieldName === "putchar") {
+    return (value) => {
+      outputBytes.push(Number(value) & 0xff);
+      return Number(value) | 0;
+    };
+  }
+  if (fieldName === "clock_ms") {
+    return () => 0;
+  }
+  return (...args) => (args.length > 0 ? Number(args[0]) | 0 : 0);
+}
+
+function buildWasmImportObject(module, testCase, caseConfig) {
+  const imports = WebAssembly.Module.imports(module);
+  const inputQueue = caseConfig.inputBytes.slice();
+  const outputBytes = [];
+  const namespaces = new Map();
+
+  for (const entry of imports) {
+    let namespace = namespaces.get(entry.module);
+    if (!namespace) {
+      namespace = {};
+      namespaces.set(entry.module, namespace);
+    }
+
+    if (entry.kind === "function") {
+      namespace[entry.name] = makeWasmImportFunction(
+        entry.module,
+        entry.name,
+        inputQueue,
+        outputBytes
+      );
+      continue;
+    }
+
+    throw new Error(
+      `[${testCase.id}] unsupported wasm import kind "${entry.kind}" for ${entry.module}.${entry.name}`
+    );
+  }
+
+  return {
+    imports: Object.fromEntries(namespaces),
+    outputBytes,
+  };
+}
+
+function dumpCaseMemory(testCase, artifacts, caseConfig) {
+  const wasmBytes = fs.readFileSync(artifacts.wasmPath);
+  const module = new WebAssembly.Module(wasmBytes);
+  const { imports, outputBytes } = buildWasmImportObject(module, testCase, caseConfig);
+  const instance = new WebAssembly.Instance(module, imports);
+  const exportedMemory = instance.exports.memory;
+  if (!(exportedMemory instanceof WebAssembly.Memory)) {
+    throw new Error(`[${testCase.id}] expected exported memory`);
+  }
+
+  const meta = {
+    id: testCase.id,
+    source: testCase.source,
+    memoryDumpPath: path.basename(artifacts.memoryDumpPath),
+    memoryMetaPath: path.basename(artifacts.memoryMetaPath),
+    byteLength: 0,
+    pages: 0,
+    ra: null,
+    trap: null,
+    console_input_bytes: caseConfig.inputBytes,
+    console_output_bytes: outputBytes,
+    imports: WebAssembly.Module.imports(module),
+    exports: WebAssembly.Module.exports(module),
+  };
+
+  try {
+    if (typeof instance.exports._start !== "function") {
+      throw new Error("missing exported _start");
+    }
+    meta.ra = formatHex32(instance.exports._start());
+  } catch (err) {
+    meta.trap = err instanceof Error ? err.message : String(err);
+  }
+
+  const finalMemory = Buffer.from(new Uint8Array(exportedMemory.buffer));
+  meta.byteLength = finalMemory.length;
+  meta.pages = finalMemory.length / 65536;
+
+  fs.writeFileSync(artifacts.memoryDumpPath, finalMemory);
+  fs.writeFileSync(artifacts.memoryMetaPath, `${JSON.stringify(meta, null, 2)}\n`);
+}
+
+function dumpMemoryForCases(cases) {
+  if (cases.length === 0) return new Set();
+
+  const dumpedIds = new Set();
+  for (const testCase of cases) {
+    const artifacts = getCaseArtifacts(testCase);
+    ensureCaseSourceExists(artifacts);
+    const caseConfig = buildCaseConfig(testCase);
+    compileCaseToWasm(testCase, artifacts, caseConfig);
+    dumpCaseMemory(testCase, artifacts, caseConfig);
+    dumpedIds.add(testCase.id);
+  }
+
+  return dumpedIds;
 }
 
 function buildProbeBudget(testCase, virtualTimeBudgetMs) {
@@ -926,32 +1156,21 @@ function runChromeProbe(testCase, probePath, domPath, probeBudget) {
   }
 }
 
-function runCase(testCase) {
+function runCase(testCase, options = {}) {
   const artifacts = getCaseArtifacts(testCase);
-  if (!fs.existsSync(artifacts.sourcePath)) {
-    throw new Error(`missing case source: ${artifacts.sourcePath}`);
-  }
-
+  ensureCaseSourceExists(artifacts);
   const caseConfig = buildCaseConfig(testCase);
-  runChecked(
-    "clang",
-    buildClangArgs(artifacts.sourcePath, artifacts.wasmPath, caseConfig),
-    ROOT,
-    `[${testCase.id}] clang compile`,
-    CLANG_TIMEOUT_MS
-  );
-  runChecked(
-    WSS_BIN,
-    buildWssArgs(artifacts.wasmPath, artifacts.htmlPath, caseConfig),
-    ROOT,
-    `[${testCase.id}] wss run`,
-    WSS_TIMEOUT_MS
-  );
+  if (!options.skipCompile) {
+    compileCaseToWasm(testCase, artifacts, caseConfig);
+  }
+  transpileCaseToHtml(testCase, artifacts, caseConfig);
+  const html = fs.readFileSync(artifacts.htmlPath, "utf8");
+  const materializedMemoryKeys = inferMaterializedMemoryKeys(html);
 
   injectProbeHtml(
     artifacts.htmlPath,
     artifacts.probePath,
-    caseConfig.memoryKeys,
+    materializedMemoryKeys,
     caseConfig.maxFrames,
     caseConfig.inputBytes
   );
@@ -964,12 +1183,22 @@ function runCase(testCase) {
   );
 
   const failures = validateCase(testCase, probeResult);
+  if (options.compareDumpBytes) {
+    failures.push(
+      ...compareDumpWithMaterializedRuntime(
+        testCase,
+        artifacts,
+        materializedMemoryKeys,
+        probeResult
+      )
+    );
+  }
   const kind = classifyCaseFailure(probeResult, failures);
 
   return { probeResult, failures, domPath: artifacts.domPath, kind };
 }
 
-function evaluateCaseWithRetries(testCase, retries) {
+function evaluateCaseWithRetries(testCase, retries, options = {}) {
   const startedAt = Date.now();
   let passed = false;
   let attemptsUsed = 0;
@@ -983,7 +1212,10 @@ function evaluateCaseWithRetries(testCase, retries) {
   for (let attempt = 1; attempt <= retries; attempt += 1) {
     attemptsUsed = attempt;
     try {
-      const outcome = runCase(testCase);
+      const outcome = runCase(testCase, {
+        compareDumpBytes: options.compareDumpBytes,
+        skipCompile: options.skipCompile,
+      });
       if (outcome.kind === "pass") {
         passed = true;
         break;
@@ -1250,11 +1482,24 @@ async function main() {
     throw new Error("no cases selected");
   }
 
+  const runInParallel = cli.jobs > 1 && cases.length > 1;
+  const preDumpedCaseIds =
+    cli.dumpMemoryFirst && (!runInParallel || cli.dumpMemoryOnly)
+      ? dumpMemoryForCases(cases)
+      : new Set();
+
+  if (cli.dumpMemoryOnly) {
+    return;
+  }
+
   if (cli.jsonSummary) {
     if (cases.length !== 1) {
       throw new Error("--json-summary requires exactly one selected case");
     }
-    const outcome = evaluateCaseWithRetries(cases[0], cli.retries);
+    const outcome = evaluateCaseWithRetries(cases[0], cli.retries, {
+      compareDumpBytes: preDumpedCaseIds.has(cases[0].id),
+      skipCompile: preDumpedCaseIds.has(cases[0].id),
+    });
     console.log(JSON.stringify(outcome));
     if (outcome.kind !== "pass") {
       process.exitCode = 1;
@@ -1289,12 +1534,15 @@ async function main() {
 
   /** @type {any[]} */
   let outcomes = [];
-  if (cli.jobs > 1 && cases.length > 1) {
+  if (runInParallel) {
     outcomes = await runCasesInParallel(cases, cli.retries, cli.jobs, cli.caseNodeHeapMb);
   } else {
     for (const [index, testCase] of cases.entries()) {
       writeCasePrefix(testCase.id, index + 1, cases.length);
-      const outcome = evaluateCaseWithRetries(testCase, cli.retries);
+      const outcome = evaluateCaseWithRetries(testCase, cli.retries, {
+        compareDumpBytes: preDumpedCaseIds.has(testCase.id),
+        skipCompile: preDumpedCaseIds.has(testCase.id),
+      });
       console.log(renderOutcomeLabel(outcome));
       outcomes.push(outcome);
     }
