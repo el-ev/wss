@@ -2,7 +2,7 @@ use anyhow::{Context, bail};
 use wasmparser::{BlockType, FunctionBody, Operator, Parser, Payload::*};
 
 use crate::ast::{AstRef, BinOp, Node, RelOp, UnOp};
-use crate::module::{AstFuncBody, Module};
+use crate::module::{AstFuncBody, AstModule, ModuleInfo};
 
 mod frame;
 
@@ -11,8 +11,10 @@ use frame::{
     target_block_index,
 };
 
-pub fn parse_module(wasm_bytes: &[u8]) -> anyhow::Result<Module> {
-    let mut module = Module::from_wasm_module(wasm_bytes)?;
+pub fn parse_module(info: ModuleInfo, wasm_bytes: &[u8]) -> anyhow::Result<AstModule> {
+    let mut module = AstModule::new(info, vec![]);
+    let body_len = module.info().functions().len();
+    *module.bodies_mut() = vec![None; body_len];
     let parser = Parser::new(0);
     let mut func_index = 0usize;
 
@@ -21,10 +23,10 @@ pub fn parse_module(wasm_bytes: &[u8]) -> anyhow::Result<Module> {
         if let CodeSectionEntry(body) = payload {
             let idx = module.num_imported_funcs() + func_index;
             let parsed = parse_function(&module, idx, body)?;
-            module
-                .func_ast_mut_at(idx as u32)
-                .with_context(|| format!("code section function index {} out of bounds", idx))?
-                .set_body(parsed);
+            *module
+                .body_mut_at(idx as u32)
+                .with_context(|| format!("code section function index {} out of bounds", idx))? =
+                Some(parsed);
             func_index += 1;
         }
     }
@@ -44,24 +46,21 @@ fn extend_locals_from_body(
 }
 
 fn call_shape_from_func(
-    module: &Module,
+    module: &AstModule,
     function_index: u32,
     op_name: &str,
 ) -> anyhow::Result<(usize, bool)> {
-    let sig = module
-        .func_ast_at(function_index)
-        .with_context(|| {
-            format!(
-                "{}: function index {} out of bounds",
-                op_name, function_index
-            )
-        })?
-        .signature();
+    let sig = module.function_type_at(function_index).with_context(|| {
+        format!(
+            "{}: function index {} out of bounds",
+            op_name, function_index
+        )
+    })?;
     Ok((sig.params().len(), !sig.results().is_empty()))
 }
 
 fn call_shape_from_type(
-    module: &Module,
+    module: &AstModule,
     type_index: u32,
     op_name: &str,
 ) -> anyhow::Result<(usize, bool)> {
@@ -86,15 +85,14 @@ fn emit_return_call(frame: &mut BlockFrame, call: Node, has_result: bool) {
 }
 
 fn parse_function(
-    module: &Module,
+    module: &AstModule,
     func_index: usize,
     body: FunctionBody,
 ) -> anyhow::Result<AstFuncBody> {
     let mut locals = Vec::new();
     let signature = module
-        .func_ast_at(func_index as u32)
-        .with_context(|| format!("function index {} out of bounds", func_index))?
-        .signature();
+        .function_type_at(func_index as u32)
+        .with_context(|| format!("function index {} out of bounds", func_index))?;
     locals.extend(signature.params().iter().copied());
     extend_locals_from_body(&mut locals, &body)?;
     let mut ref_stack: Vec<AstRef> = Vec::new();

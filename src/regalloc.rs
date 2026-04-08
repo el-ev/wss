@@ -99,9 +99,9 @@ fn build_owner_info(ir8: &Ir8Program) -> anyhow::Result<OwnerInfo> {
     let mut owner_by_vreg: HashMap<Val8, FuncId> = HashMap::new();
 
     let mut local_cursor = VREG_START;
-    for (func_id, fi) in ir8.frame_infos.iter().enumerate() {
+    for (func_id, &num_locals) in ir8.func_num_locals.iter().enumerate() {
         // TODO(i64): local vreg ownership currently allocates 4 registers per value word.
-        let local_bytes = fi.num_locals as u16 * 4;
+        let local_bytes = num_locals as u16 * 4;
         for i in 0..local_bytes {
             owner_by_vreg.insert(Val8::vreg(local_cursor + i), func_id);
         }
@@ -452,8 +452,6 @@ fn linear_scan(group_intervals: HashMap<GroupId, Interval>) -> AllocationResult 
     }
 
     let mut intervals: Vec<(GroupId, Interval)> = group_intervals.into_iter().collect();
-    // Deterministic tie-break on group id keeps allocations reproducible
-    // when multiple intervals share the same [start, end] range.
     intervals.sort_by_key(|(group, it)| (it.start, it.end, *group));
 
     #[derive(Clone, Copy)]
@@ -953,8 +951,7 @@ mod tests {
     use super::regalloc;
     use crate::constants::DEFAULT_MAX_PHYS_REGS;
     use crate::ir8::{
-        Addr, BasicBlock8, FrameInfo, Inst8, Inst8Kind, Ir8Program, MemoryLayout, Pc, Terminator8,
-        Val8, Word,
+        Addr, BasicBlock8, CallTarget, Inst8, Inst8Kind, Ir8Program, Pc, Terminator8, Val8, Word,
     };
 
     fn regs_in_func(blocks: &[BasicBlock8]) -> HashSet<Val8> {
@@ -1018,7 +1015,7 @@ mod tests {
                     Inst8::with_dst(f1_addr_hi, Inst8Kind::Copy(Val8::imm(0))),
                 ],
                 terminator: Terminator8::CallSetup {
-                    callee_entry: Pc::new(0),
+                    callee_entry: CallTarget::Pc(Pc::new(0)),
                     cont: Pc::new(1001),
                     args: vec![],
                     callee_arg_vregs: vec![],
@@ -1040,21 +1037,11 @@ mod tests {
             entry_func: 1,
             num_vregs: 12,
             func_blocks: vec![func0, func1],
+            func_entries: vec![Pc::new(0), Pc::new(1000)],
+            func_num_locals: vec![0, 0],
             cycles: vec![],
-            frame_infos: vec![
-                FrameInfo {
-                    entry: Pc::new(0),
-                    num_locals: 0,
-                },
-                FrameInfo {
-                    entry: Pc::new(1000),
-                    num_locals: 0,
-                },
-            ],
-            memory_layout: MemoryLayout {
-                memory_end: 64,
-                init_bytes: vec![0; 64],
-            },
+            memory_end: 64,
+            init_bytes: vec![0; 64],
             global_init: vec![],
         };
 
@@ -1100,15 +1087,11 @@ mod tests {
                     },
                 },
             ]],
+            func_entries: vec![Pc::new(0)],
+            func_num_locals: vec![0],
             cycles: vec![],
-            frame_infos: vec![FrameInfo {
-                entry: Pc::new(0),
-                num_locals: 0,
-            }],
-            memory_layout: MemoryLayout {
-                memory_end: 0,
-                init_bytes: vec![],
-            },
+            memory_end: 0,
+            init_bytes: vec![],
             global_init: vec![],
         };
 
@@ -1152,7 +1135,7 @@ mod tests {
                     id: Pc::new(0),
                     insts,
                     terminator: Terminator8::CallSetup {
-                        callee_entry: Pc::new(0),
+                        callee_entry: CallTarget::Pc(Pc::new(0)),
                         cont: Pc::new(1),
                         args,
                         callee_arg_vregs: vec![],
@@ -1164,15 +1147,11 @@ mod tests {
                     terminator: Terminator8::Exit { val: None },
                 },
             ]],
+            func_entries: vec![Pc::new(0)],
+            func_num_locals: vec![0],
             cycles: vec![],
-            frame_infos: vec![FrameInfo {
-                entry: Pc::new(0),
-                num_locals: 0,
-            }],
-            memory_layout: MemoryLayout {
-                memory_end: 0,
-                init_bytes: vec![],
-            },
+            memory_end: 0,
+            init_bytes: vec![],
             global_init: vec![],
         };
 
@@ -1216,15 +1195,11 @@ mod tests {
                     )),
                 },
             }]],
+            func_entries: vec![Pc::new(0)],
+            func_num_locals: vec![1],
             cycles: vec![],
-            frame_infos: vec![FrameInfo {
-                entry: Pc::new(0),
-                num_locals: 1,
-            }],
-            memory_layout: MemoryLayout {
-                memory_end: 0,
-                init_bytes: vec![],
-            },
+            memory_end: 0,
+            init_bytes: vec![],
             global_init: vec![],
         };
 

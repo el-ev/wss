@@ -1,6 +1,9 @@
 pub const DEFAULT_MEMORY_BYTES_CAP: u32 = 1024;
 // 1 slot = 2 bytes
 pub const DEFAULT_CALLSTACK_SLOTS_CAP: usize = 256;
+pub const DEFAULT_JS_CLOCK_ENABLED: bool = true;
+pub const DEFAULT_JS_COPROCESSOR_ENABLED: bool = false;
+pub const DEFAULT_JS_CLOCK_DEBUGGER_ENABLED: bool = false;
 pub const MAX_ADDRESSABLE_MEMORY_BYTES: u32 = (u16::MAX as u32) + 1;
 pub const DEFAULT_MAX_PHYS_REGS: u16 = 256;
 

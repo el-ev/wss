@@ -51,7 +51,7 @@ fn copy_elim(prog: &mut Ir8Program) -> bool {
     let mut changed = false;
 
     for func_id in 0..prog.func_blocks.len() {
-        let mut inst_simplify = InstSimplify::new();
+        let mut inst_simplify = InstSimplify::default();
         for _ in 0..MAX_COPY_ELIM_FUNC_ITERS {
             let mut func_changed = false;
             func_changed |= eliminate_global_copies(&mut prog.func_blocks[func_id]);
@@ -236,9 +236,9 @@ fn remove_unreachable_blocks(prog: &mut Ir8Program) -> bool {
 
     for func_id in 0..prog.func_blocks.len() {
         let entry_pc = prog
-            .frame_infos
+            .func_entries
             .get(func_id)
-            .map(|fi| fi.entry)
+            .copied()
             .or_else(|| prog.func_blocks[func_id].first().map(|b| b.id));
 
         let blocks = &mut prog.func_blocks[func_id];
@@ -290,9 +290,9 @@ fn coalesce_linear_blocks(prog: &mut Ir8Program) -> bool {
 
     for func_id in 0..prog.func_blocks.len() {
         let entry_pc = prog
-            .frame_infos
+            .func_entries
             .get(func_id)
-            .map(|fi| fi.entry)
+            .copied()
             .or_else(|| prog.func_blocks[func_id].first().map(|b| b.id));
 
         let blocks = &mut prog.func_blocks[func_id];
@@ -526,7 +526,7 @@ fn thread_empty_gotos(prog: &mut Ir8Program) -> bool {
         if blocks.is_empty() {
             continue;
         }
-        let entry_pc = prog.frame_infos.get(func_id).map(|fi| fi.entry);
+        let entry_pc = prog.func_entries.get(func_id).copied();
         changed |= thread_empty_gotos_func(blocks, entry_pc);
     }
 
@@ -587,7 +587,14 @@ fn thread_empty_gotos_func(blocks: &mut [BasicBlock8], entry_pc: Option<Pc>) -> 
             Terminator8::CallSetup {
                 callee_entry, cont, ..
             } => {
-                let callee = resolve_goto_target(*callee_entry, &goto_map);
+                let callee = match *callee_entry {
+                    crate::ir8::CallTarget::Pc(pc) => {
+                        crate::ir8::CallTarget::Pc(resolve_goto_target(pc, &goto_map))
+                    }
+                    crate::ir8::CallTarget::Builtin(builtin) => {
+                        crate::ir8::CallTarget::Builtin(builtin)
+                    }
+                };
                 let cont_pc = resolve_goto_target(*cont, &goto_map);
                 if *callee_entry != callee || *cont != cont_pc {
                     *callee_entry = callee;

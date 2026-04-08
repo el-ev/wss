@@ -1,7 +1,7 @@
 use super::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum BoolOp {
+pub(super) enum BoolOp {
     And,
     Or,
 }
@@ -11,7 +11,7 @@ struct DefLoc {
     kind: Inst8Kind,
 }
 
-fn bool_op_and_operands(kind: Inst8Kind) -> Option<(BoolOp, Vec<Val8>)> {
+pub(super) fn bool_op_and_operands(kind: Inst8Kind) -> Option<(BoolOp, Vec<Val8>)> {
     match kind {
         Inst8Kind::BoolAnd(op) => Some((BoolOp::And, op.as_slice().to_vec())),
         Inst8Kind::BoolOr(op) => Some((BoolOp::Or, op.as_slice().to_vec())),
@@ -19,7 +19,7 @@ fn bool_op_and_operands(kind: Inst8Kind) -> Option<(BoolOp, Vec<Val8>)> {
     }
 }
 
-fn make_bool_kind(op: BoolOp, regs: &[Val8]) -> Option<Inst8Kind> {
+pub(super) fn make_bool_kind(op: BoolOp, regs: &[Val8]) -> Option<Inst8Kind> {
     match regs {
         [] => None,
         [reg] => Some(Inst8Kind::Copy(*reg)),

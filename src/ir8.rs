@@ -123,20 +123,52 @@ pub const RET: Word = Word {
 
 pub const VREG_START: u16 = 4;
 pub const PC_STRIDE: u16 = 1_000;
-pub const BUILTIN_PC_BASE: u16 = 0xFF00;
 
-pub const BUILTIN_DIV_U32: Pc = Pc::new(BUILTIN_PC_BASE);
-pub const BUILTIN_REM_U32: Pc = Pc::new(BUILTIN_PC_BASE + 1);
-pub const BUILTIN_DIV_S32: Pc = Pc::new(BUILTIN_PC_BASE + 2);
-pub const BUILTIN_REM_S32: Pc = Pc::new(BUILTIN_PC_BASE + 3);
-pub const BUILTIN_SHL_32: Pc = Pc::new(BUILTIN_PC_BASE + 4);
-pub const BUILTIN_SHR_U32: Pc = Pc::new(BUILTIN_PC_BASE + 5);
-pub const BUILTIN_SHR_S32: Pc = Pc::new(BUILTIN_PC_BASE + 6);
-pub const BUILTIN_ROTL_32: Pc = Pc::new(BUILTIN_PC_BASE + 7);
-pub const BUILTIN_ROTR_32: Pc = Pc::new(BUILTIN_PC_BASE + 8);
-pub const BUILTIN_CLZ_32: Pc = Pc::new(BUILTIN_PC_BASE + 9);
-pub const BUILTIN_CTZ_32: Pc = Pc::new(BUILTIN_PC_BASE + 10);
-pub const BUILTIN_POPCNT_32: Pc = Pc::new(BUILTIN_PC_BASE + 11);
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BuiltinId {
+    DivU32 = 1,
+    RemU32 = 2,
+    DivS32 = 3,
+    RemS32 = 4,
+    Shl32 = 5,
+    ShrU32 = 6,
+    ShrS32 = 7,
+    Rotl32 = 8,
+    Rotr32 = 9,
+    Clz32 = 10,
+    Ctz32 = 11,
+    Popcnt32 = 12,
+}
+
+impl BuiltinId {
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::DivU32 => "builtin.div_u32",
+            Self::RemU32 => "builtin.rem_u32",
+            Self::DivS32 => "builtin.div_s32",
+            Self::RemS32 => "builtin.rem_s32",
+            Self::Shl32 => "builtin.shl_32",
+            Self::ShrU32 => "builtin.shr_u32",
+            Self::ShrS32 => "builtin.shr_s32",
+            Self::Rotl32 => "builtin.rotl_32",
+            Self::Rotr32 => "builtin.rotr_32",
+            Self::Clz32 => "builtin.clz_32",
+            Self::Ctz32 => "builtin.ctz_32",
+            Self::Popcnt32 => "builtin.popcnt_32",
+        }
+    }
+
+    pub const fn coprocessor_opcode(self) -> u8 {
+        self as u8
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CallTarget {
+    Pc(Pc),
+    Builtin(BuiltinId),
+}
 
 pub const BOOL_NARY_MAX_INPUTS: usize = 16;
 
@@ -418,13 +450,13 @@ pub enum Terminator8 {
     ///
     /// Emitter expands CallSetup to:
     ///   1. Copy `args` → `callee_arg_vregs` (parallel, equal-length).
-    ///   2. Jump to `callee_entry`.
+    ///   2. Jump to `callee_entry`, or evaluate a builtin operation.
     ///
     /// The RA (`cont`) is saved by the caller as part of its call
     /// stack frame (via CsStore before CsAlloc), and loaded by the callee's
     /// Return terminator (via CsLoad after CsFree).
     CallSetup {
-        callee_entry: Pc,
+        callee_entry: CallTarget,
         cont: Pc,
         args: Vec<Word>,
         callee_arg_vregs: Vec<Word>,
@@ -528,10 +560,6 @@ pub enum TrapCode {
     DivisionByZero = -4,
 }
 
-// ─── Basic blocks ────────────────────────────────────────────────────────────
-
-/// A basic block. `id` is its global Pc (`func_id * PC_STRIDE + local_index`),
-/// assigned by lower8 — no separate scheduling pass needed.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct BasicBlock8 {
     pub id: Pc,
@@ -539,29 +567,20 @@ pub struct BasicBlock8 {
     pub terminator: Terminator8,
 }
 
-/// Post-regalloc flat list of blocks in Pc order, ready for emission.
 pub struct Cycle {
     pub pc: Pc,
     pub ops: Vec<Inst8>,
     pub terminator: Terminator8,
 }
 
-pub struct FrameInfo {
-    pub entry: Pc,       // set by lower8
-    pub num_locals: u32, // includes parameters
-}
-
-pub struct MemoryLayout {
-    pub memory_end: u32,
-    pub init_bytes: Vec<u8>,
-}
-
 pub struct Ir8Program {
     pub entry_func: u32,
     pub num_vregs: u16,
     pub func_blocks: Vec<Vec<BasicBlock8>>,
+    pub func_entries: Vec<Pc>,     // set by lower8
+    pub func_num_locals: Vec<u32>, // includes parameters
     pub cycles: Vec<Cycle>,
-    pub frame_infos: Vec<FrameInfo>,
-    pub memory_layout: MemoryLayout,
+    pub memory_end: u32,
+    pub init_bytes: Vec<u8>,
     pub global_init: Vec<u32>,
 }

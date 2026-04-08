@@ -4,25 +4,24 @@ use anyhow::Context;
 
 use crate::ast::Node;
 use crate::ir::{BasicBlock, BlockId, Inst, IrNode, Terminator};
-use crate::module::{AstFuncInfo, IrFuncBody, IrFuncInfo, Module};
+use crate::module::{AstModule, IrFuncBody, IrModule};
 
-pub fn lower_module(module: &mut Module) -> anyhow::Result<()> {
+pub fn lower_module(module: AstModule) -> anyhow::Result<IrModule> {
     let functions_ir = module
-        .functions_ast()
+        .bodies()
         .iter()
         .enumerate()
-        .map(|(func_index, func)| lower_function(module, func_index as u32, func))
+        .map(|(func_index, body)| lower_function(&module, func_index as u32, body.as_ref()))
         .collect::<anyhow::Result<Vec<_>>>()?;
-    module.set_functions_ir(functions_ir);
-    Ok(())
+    Ok(IrModule::new(module.into_info(), functions_ir))
 }
 
 fn lower_function(
-    module: &Module,
+    module: &AstModule,
     func_index: u32,
-    func: &AstFuncInfo,
-) -> anyhow::Result<IrFuncInfo> {
-    let ir_body = if let Some(body) = func.body() {
+    body: Option<&crate::module::AstFuncBody>,
+) -> anyhow::Result<Option<IrFuncBody>> {
+    let ir_body = if let Some(body) = body {
         let is_entry = module.entry_export() == Some(func_index);
         let mut ctx = LowerCtx::new(module, is_entry);
         lower_block_nodes(body.insts(), &mut ctx)?;
@@ -41,7 +40,7 @@ fn lower_function(
     } else {
         None
     };
-    Ok(IrFuncInfo::new(func.signature().clone(), ir_body))
+    Ok(ir_body)
 }
 
 fn remap_block_target(target: &mut BlockId, remap: &HashMap<BlockId, BlockId>) {
@@ -245,13 +244,13 @@ fn remap_terminator_refs(
 }
 
 struct LowerCtx<'a> {
-    module: &'a Module,
+    module: &'a AstModule,
     is_entry: bool,
     builder: IrBuilder,
 }
 
 impl<'a> LowerCtx<'a> {
-    fn new(module: &'a Module, is_entry: bool) -> Self {
+    fn new(module: &'a AstModule, is_entry: bool) -> Self {
         Self {
             module,
             is_entry,
@@ -567,14 +566,14 @@ fn lower_node(
     Ok(())
 }
 
-fn call_returns_void(module: &Module, func: u32) -> anyhow::Result<bool> {
+fn call_returns_void(module: &AstModule, func: u32) -> anyhow::Result<bool> {
     let sig = module
-        .func_ast_at(func)
+        .function_type_at(func)
         .with_context(|| format!("tail-call fusion: function index {} out of bounds", func))?;
-    Ok(sig.signature().results().is_empty())
+    Ok(sig.results().is_empty())
 }
 
-fn call_indirect_returns_void(module: &Module, type_index: u32) -> anyhow::Result<bool> {
+fn call_indirect_returns_void(module: &AstModule, type_index: u32) -> anyhow::Result<bool> {
     let sig = module
         .type_at(type_index)
         .with_context(|| format!("tail-call fusion: type index {} out of bounds", type_index))?;
@@ -637,7 +636,7 @@ fn maybe_fuse_tail_call(
 mod tests {
     use super::*;
     use crate::ast::{AstRef, BinOp, Node, RelOp};
-    use crate::module::{AstFuncBody, AstFuncInfo, FuncType};
+    use crate::module::{AstFuncBody, AstModule, FuncType, ModuleInfo};
     use wasmparser::ValType;
 
     fn mk_sig(params: &[ValType], results: &[ValType]) -> FuncType {
@@ -650,13 +649,21 @@ mod tests {
     fn mk_module(
         entry_export: Option<u32>,
         types: Vec<FuncType>,
-        functions_ast: Vec<AstFuncInfo>,
-    ) -> Module {
-        let mut module = Module::new();
-        module.set_entry_export(entry_export);
-        *module.types_mut() = types;
-        *module.functions_ast_mut() = functions_ast;
-        module
+        functions_ast: Vec<(FuncType, Option<AstFuncBody>)>,
+    ) -> AstModule {
+        let function_types = functions_ast
+            .iter()
+            .map(|(sig, _)| sig.clone())
+            .collect::<Vec<_>>();
+        let bodies = functions_ast
+            .into_iter()
+            .map(|(_, body)| body)
+            .collect::<Vec<_>>();
+        let mut info = ModuleInfo::default();
+        info.set_entry_export(entry_export);
+        *info.types_mut() = types;
+        *info.functions_mut() = function_types;
+        AstModule::new(info, bodies)
     }
 
     #[test]
@@ -705,8 +712,8 @@ mod tests {
             Some(0),
             vec![],
             vec![
-                AstFuncInfo::new(mk_sig(&[ValType::I32], &[ValType::I32]), None),
-                AstFuncInfo::new(
+                (mk_sig(&[ValType::I32], &[ValType::I32]), None),
+                (
                     mk_sig(&[], &[ValType::I32]),
                     Some(AstFuncBody::new(
                         vec![],
@@ -720,8 +727,8 @@ mod tests {
             ],
         );
 
-        let ir = lower_function(&module, 1, &module.functions_ast()[1]).expect("lower_function");
-        let body = ir.body().expect("expected function body");
+        let ir = lower_function(&module, 1, module.body_at(1)).expect("lower_function");
+        let body = ir.expect("expected function body");
         assert_eq!(body.blocks().len(), 1);
         let block = &body.blocks()[0];
         assert_eq!(
@@ -742,8 +749,8 @@ mod tests {
             Some(0),
             vec![mk_sig(&[ValType::I32], &[ValType::I32])],
             vec![
-                AstFuncInfo::new(mk_sig(&[ValType::I32], &[ValType::I32]), None),
-                AstFuncInfo::new(
+                (mk_sig(&[ValType::I32], &[ValType::I32]), None),
+                (
                     mk_sig(&[], &[ValType::I32]),
                     Some(AstFuncBody::new(
                         vec![],
@@ -763,8 +770,8 @@ mod tests {
             ],
         );
 
-        let ir = lower_function(&module, 1, &module.functions_ast()[1]).expect("lower_function");
-        let body = ir.body().expect("expected function body");
+        let ir = lower_function(&module, 1, module.body_at(1)).expect("lower_function");
+        let body = ir.expect("expected function body");
         assert_eq!(body.blocks().len(), 1);
         let block = &body.blocks()[0];
         assert_eq!(
@@ -789,8 +796,8 @@ mod tests {
             Some(0),
             vec![],
             vec![
-                AstFuncInfo::new(mk_sig(&[], &[]), None),
-                AstFuncInfo::new(
+                (mk_sig(&[], &[]), None),
+                (
                     mk_sig(&[], &[]),
                     Some(AstFuncBody::new(
                         vec![],
@@ -800,8 +807,8 @@ mod tests {
             ],
         );
 
-        let ir = lower_function(&module, 1, &module.functions_ast()[1]).expect("lower_function");
-        let body = ir.body().expect("expected function body");
+        let ir = lower_function(&module, 1, module.body_at(1)).expect("lower_function");
+        let body = ir.expect("expected function body");
         assert_eq!(body.blocks().len(), 1);
         let block = &body.blocks()[0];
         assert!(
@@ -820,8 +827,8 @@ mod tests {
             Some(1),
             vec![],
             vec![
-                AstFuncInfo::new(mk_sig(&[ValType::I32], &[ValType::I32]), None),
-                AstFuncInfo::new(
+                (mk_sig(&[ValType::I32], &[ValType::I32]), None),
+                (
                     mk_sig(&[], &[ValType::I32]),
                     Some(AstFuncBody::new(
                         vec![],
@@ -835,8 +842,8 @@ mod tests {
             ],
         );
 
-        let ir = lower_function(&module, 1, &module.functions_ast()[1]).expect("lower_function");
-        let body = ir.body().expect("expected function body");
+        let ir = lower_function(&module, 1, module.body_at(1)).expect("lower_function");
+        let body = ir.expect("expected function body");
         assert_eq!(body.blocks().len(), 1);
         let block = &body.blocks()[0];
         assert_eq!(
@@ -856,7 +863,7 @@ mod tests {
         let module = mk_module(
             Some(0),
             vec![],
-            vec![AstFuncInfo::new(
+            vec![(
                 mk_sig(&[ValType::I32], &[ValType::I32]),
                 Some(AstFuncBody::new(
                     vec![],
@@ -871,8 +878,8 @@ mod tests {
             )],
         );
 
-        let ir = lower_function(&module, 0, &module.functions_ast()[0]).expect("lower_function");
-        let body = ir.body().expect("expected function body");
+        let ir = lower_function(&module, 0, module.body_at(0)).expect("lower_function");
+        let body = ir.expect("expected function body");
         let block = &body.blocks()[0];
 
         assert!(matches!(

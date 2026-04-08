@@ -6,7 +6,7 @@ use crate::constants::{
     SCHEDULE_MAX_COMPLEXITY_PER_CYCLE, SCHEDULE_MAX_OPS_PER_CYCLE, SCHEDULE_MAX_STORE_MEM_PER_CYCLE,
 };
 use crate::ir8::{
-    Addr, BUILTIN_PC_BASE, Cycle, Inst8, Inst8Kind, Ir8Program, PC_STRIDE, Pc, Terminator8,
+    Addr, CallTarget, Cycle, Inst8, Inst8Kind, Ir8Program, PC_STRIDE, Pc, Terminator8,
 };
 
 #[derive(Clone)]
@@ -436,7 +436,7 @@ fn rewrite_term_pcs(
             args,
             callee_arg_vregs,
         } => Terminator8::CallSetup {
-            callee_entry: map_target_pc(callee_entry, first_pc_map)?,
+            callee_entry: map_call_target(callee_entry, first_pc_map)?,
             cont: map_target_pc(cont, first_pc_map)?,
             args,
             callee_arg_vregs,
@@ -445,6 +445,16 @@ fn rewrite_term_pcs(
         Terminator8::Return { val } => Terminator8::Return { val },
         Terminator8::Exit { val } => Terminator8::Exit { val },
         Terminator8::Trap(code) => Terminator8::Trap(code),
+    })
+}
+
+fn map_call_target(
+    target: CallTarget,
+    first_pc_map: &HashMap<Pc, Pc>,
+) -> anyhow::Result<CallTarget> {
+    Ok(match target {
+        CallTarget::Pc(pc) => CallTarget::Pc(map_target_pc(pc, first_pc_map)?),
+        CallTarget::Builtin(builtin) => CallTarget::Builtin(builtin),
     })
 }
 
@@ -459,10 +469,6 @@ fn rewrite_inst_pcs(inst: Inst8, first_pc_map: &HashMap<Pc, Pc>) -> anyhow::Resu
 }
 
 fn map_target_pc(pc: Pc, first_pc_map: &HashMap<Pc, Pc>) -> anyhow::Result<Pc> {
-    if pc.index() >= BUILTIN_PC_BASE {
-        return Ok(pc);
-    }
-
     first_pc_map
         .get(&pc)
         .copied()
@@ -473,8 +479,7 @@ fn map_target_pc(pc: Pc, first_pc_map: &HashMap<Pc, Pc>) -> anyhow::Result<Pc> {
 mod tests {
     use super::{schedule, schedule_block_ops};
     use crate::ir8::{
-        Addr, BasicBlock8, FrameInfo, Inst8, Inst8Kind, Ir8Program, MemoryLayout, Pc, Terminator8,
-        Val8, Word,
+        Addr, BasicBlock8, Inst8, Inst8Kind, Ir8Program, Pc, Terminator8, Val8, Word,
     };
 
     fn r(i: u16) -> Val8 {
@@ -849,14 +854,10 @@ mod tests {
                 },
             ]],
             cycles: Vec::new(),
-            frame_infos: vec![FrameInfo {
-                entry: Pc::new(0),
-                num_locals: 0,
-            }],
-            memory_layout: MemoryLayout {
-                memory_end: 0,
-                init_bytes: Vec::new(),
-            },
+            func_entries: vec![Pc::new(0)],
+            func_num_locals: vec![0],
+            memory_end: 0,
+            init_bytes: Vec::new(),
             global_init: Vec::new(),
         };
 

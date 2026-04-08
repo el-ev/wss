@@ -439,8 +439,10 @@ impl<'a> Emitter<'a> {
 
             let cop_setup = match &cycle.terminator {
                 Terminator8::CallSetup {
-                    callee_entry, args, ..
-                } => self.coprocessor_setup_for_builtin_call(*callee_entry, args, &reg_now),
+                    callee_entry: CallTarget::Builtin(builtin),
+                    args,
+                    ..
+                } => self.coprocessor_setup_for_builtin_call(*builtin, args, &reg_now),
                 _ => None,
             };
 
@@ -866,9 +868,9 @@ impl<'a> Emitter<'a> {
                 cont,
                 args,
                 callee_arg_vregs,
-            } => {
-                if callee_entry.index() >= BUILTIN_PC_BASE {
-                    let (ret, trap) = self.eval_builtin(*callee_entry, args, reg_now);
+            } => match callee_entry {
+                CallTarget::Builtin(builtin) => {
+                    let (ret, trap) = self.eval_builtin(*builtin, args, reg_now);
                     for (i, expr) in ret.into_iter().enumerate() {
                         let gated = Self::sel_expr(&trap, &format!("var(--_1r{})", i), &expr);
                         reg_now.insert(i as u16, gated);
@@ -878,7 +880,8 @@ impl<'a> Emitter<'a> {
                         trap_expr: trap,
                         exit_code_expr: None,
                     }
-                } else {
+                }
+                CallTarget::Pc(callee_pc) => {
                     for (src, dst) in args.iter().zip(callee_arg_vregs.iter()) {
                         reg_now
                             .insert(dst.b0.reg_index().unwrap(), Self::reg_expr(reg_now, src.b0));
@@ -890,12 +893,12 @@ impl<'a> Emitter<'a> {
                             .insert(dst.b3.reg_index().unwrap(), Self::reg_expr(reg_now, src.b3));
                     }
                     TermResult {
-                        pc_expr: format!("{}", callee_entry.index()),
+                        pc_expr: format!("{}", callee_pc.index()),
                         trap_expr: "0".to_string(),
                         exit_code_expr: None,
                     }
                 }
-            }
+            },
             Terminator8::Return { val } => {
                 let exit_code_expr = val.map(|w| Self::word_hex_expr(reg_now, w));
                 if let Some(w) = val {
@@ -1324,34 +1327,16 @@ impl<'a> Emitter<'a> {
         format!("\"0x\" {} {} {} {}", b3, b2, b1, b0)
     }
 
-    pub(super) fn coprocessor_op_code_for_builtin(callee_entry: crate::ir8::Pc) -> Option<u8> {
-        match callee_entry.index() {
-            x if x == BUILTIN_DIV_U32.index() => Some(COP_OP_DIV_U32),
-            x if x == BUILTIN_REM_U32.index() => Some(COP_OP_REM_U32),
-            x if x == BUILTIN_DIV_S32.index() => Some(COP_OP_DIV_S32),
-            x if x == BUILTIN_REM_S32.index() => Some(COP_OP_REM_S32),
-            x if x == BUILTIN_SHL_32.index() => Some(COP_OP_SHL_32),
-            x if x == BUILTIN_SHR_U32.index() => Some(COP_OP_SHR_U32),
-            x if x == BUILTIN_SHR_S32.index() => Some(COP_OP_SHR_S32),
-            x if x == BUILTIN_ROTL_32.index() => Some(COP_OP_ROTL_32),
-            x if x == BUILTIN_ROTR_32.index() => Some(COP_OP_ROTR_32),
-            x if x == BUILTIN_CLZ_32.index() => Some(COP_OP_CLZ_32),
-            x if x == BUILTIN_CTZ_32.index() => Some(COP_OP_CTZ_32),
-            x if x == BUILTIN_POPCNT_32.index() => Some(COP_OP_POPCNT_32),
-            _ => None,
-        }
-    }
-
     pub(super) fn coprocessor_setup_for_builtin_call(
         &self,
-        callee_entry: crate::ir8::Pc,
+        builtin: crate::ir8::BuiltinId,
         args: &[Word],
         now: &HashMap<u16, String>,
     ) -> Option<JsCoprocessorSetup> {
         if !self.js_coprocessor {
             return None;
         }
-        let op_code = Self::coprocessor_op_code_for_builtin(callee_entry)?;
+        let op_code = builtin.coprocessor_opcode();
         let lhs = args
             .first()
             .map(|w| Self::word_bytes_expr(now, *w))
@@ -1372,27 +1357,26 @@ impl<'a> Emitter<'a> {
         ]
     }
 
-    pub(super) fn coprocessor_trap_expr(op_code: u8) -> String {
-        match op_code {
-            COP_OP_DIV_U32 | COP_OP_REM_U32 | COP_OP_DIV_S32 | COP_OP_REM_S32 => {
-                "--lt(var(--cop_o0), 0)".to_string()
-            }
+    pub(super) fn coprocessor_trap_expr(builtin: crate::ir8::BuiltinId) -> String {
+        match builtin {
+            crate::ir8::BuiltinId::DivU32
+            | crate::ir8::BuiltinId::RemU32
+            | crate::ir8::BuiltinId::DivS32
+            | crate::ir8::BuiltinId::RemS32 => "--lt(var(--cop_o0), 0)".to_string(),
             _ => "0".to_string(),
         }
     }
 
     pub(super) fn eval_builtin(
         &self,
-        callee_entry: crate::ir8::Pc,
+        builtin: crate::ir8::BuiltinId,
         args: &[Word],
         now: &HashMap<u16, String>,
     ) -> ([String; 4], String) {
-        if self.js_coprocessor
-            && let Some(op_code) = Self::coprocessor_op_code_for_builtin(callee_entry)
-        {
+        if self.js_coprocessor {
             return (
                 Self::coprocessor_output_word_expr(),
-                Self::coprocessor_trap_expr(op_code),
+                Self::coprocessor_trap_expr(builtin),
             );
         }
 
@@ -1409,17 +1393,16 @@ impl<'a> Emitter<'a> {
             .map(|k| Self::byte_bit_expr(&rhs[0], k))
             .collect::<Vec<_>>();
 
-        let (ret, trap) = match callee_entry.index() {
-            x if x == BUILTIN_DIV_U32.index()
-                || x == BUILTIN_REM_U32.index()
-                || x == BUILTIN_DIV_S32.index()
-                || x == BUILTIN_REM_S32.index() =>
-            {
+        let (ret, trap) = match builtin {
+            crate::ir8::BuiltinId::DivU32
+            | crate::ir8::BuiltinId::RemU32
+            | crate::ir8::BuiltinId::DivS32
+            | crate::ir8::BuiltinId::RemS32 => {
                 // Div/rem builtins are lowered to explicit IR8 microcode now.
                 // If one reaches emit-time builtin dispatch, trap explicitly.
                 (Self::zero_word_expr(), "1".to_string())
             }
-            x if x == BUILTIN_SHL_32.index() => {
+            crate::ir8::BuiltinId::Shl32 => {
                 let mut out = lhs.clone();
                 for (idx, amount) in [1u8, 2, 4, 8, 16].into_iter().enumerate() {
                     let sh = Self::shl_stage_expr(&out, amount);
@@ -1427,7 +1410,7 @@ impl<'a> Emitter<'a> {
                 }
                 (out, "0".to_string())
             }
-            x if x == BUILTIN_SHR_U32.index() => {
+            crate::ir8::BuiltinId::ShrU32 => {
                 let mut out = lhs.clone();
                 for (idx, amount) in [1u8, 2, 4, 8, 16].into_iter().enumerate() {
                     let sh = Self::shr_u_stage_expr(&out, amount);
@@ -1435,7 +1418,7 @@ impl<'a> Emitter<'a> {
                 }
                 (out, "0".to_string())
             }
-            x if x == BUILTIN_SHR_S32.index() => {
+            crate::ir8::BuiltinId::ShrS32 => {
                 let mut out = lhs.clone();
                 for (idx, amount) in [1u8, 2, 4, 8, 16].into_iter().enumerate() {
                     let sh = Self::shr_s_stage_expr(&out, amount);
@@ -1443,7 +1426,7 @@ impl<'a> Emitter<'a> {
                 }
                 (out, "0".to_string())
             }
-            x if x == BUILTIN_ROTL_32.index() => {
+            crate::ir8::BuiltinId::Rotl32 => {
                 let mut out = lhs.clone();
                 for (idx, amount) in [1u8, 2, 4, 8, 16].into_iter().enumerate() {
                     let sh = Self::rotl_stage_expr(&out, amount);
@@ -1451,7 +1434,7 @@ impl<'a> Emitter<'a> {
                 }
                 (out, "0".to_string())
             }
-            x if x == BUILTIN_ROTR_32.index() => {
+            crate::ir8::BuiltinId::Rotr32 => {
                 let mut out = lhs.clone();
                 for (idx, amount) in [1u8, 2, 4, 8, 16].into_iter().enumerate() {
                     let sh = Self::rotr_stage_expr(&out, amount);
@@ -1459,7 +1442,7 @@ impl<'a> Emitter<'a> {
                 }
                 (out, "0".to_string())
             }
-            x if x == BUILTIN_CLZ_32.index() => {
+            crate::ir8::BuiltinId::Clz32 => {
                 let c3 = Self::byte_clz_expr(&lhs[3]);
                 let c2 = format!("calc(8 + ({}))", Self::byte_clz_expr(&lhs[2]));
                 let c1 = format!("calc(16 + ({}))", Self::byte_clz_expr(&lhs[1]));
@@ -1479,7 +1462,7 @@ impl<'a> Emitter<'a> {
                     "0".to_string(),
                 )
             }
-            x if x == BUILTIN_CTZ_32.index() => {
+            crate::ir8::BuiltinId::Ctz32 => {
                 let c0 = Self::byte_ctz_expr(&lhs[0]);
                 let c1 = format!("calc(8 + ({}))", Self::byte_ctz_expr(&lhs[1]));
                 let c2 = format!("calc(16 + ({}))", Self::byte_ctz_expr(&lhs[2]));
@@ -1499,7 +1482,7 @@ impl<'a> Emitter<'a> {
                     "0".to_string(),
                 )
             }
-            x if x == BUILTIN_POPCNT_32.index() => {
+            crate::ir8::BuiltinId::Popcnt32 => {
                 let out0 = format!(
                     "calc(({}) + ({}) + ({}) + ({}))",
                     Self::byte_popcnt_expr(&lhs[0]),
@@ -1512,7 +1495,6 @@ impl<'a> Emitter<'a> {
                     "0".to_string(),
                 )
             }
-            _ => (Self::zero_word_expr(), "0".to_string()),
         };
 
         (ret, trap)

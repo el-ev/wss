@@ -1,12 +1,7 @@
+use super::bool::{BoolOp, make_bool_kind};
 use super::facts::{RegFact, build_reg_facts, const_fact, imm_kind, is_bool_fact};
 use super::*;
 use crate::ir8::BoolNary8;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum BoolOp {
-    And,
-    Or,
-}
 
 #[derive(Default)]
 pub(super) struct InstSimplify {
@@ -14,10 +9,6 @@ pub(super) struct InstSimplify {
 }
 
 impl InstSimplify {
-    pub(super) fn new() -> Self {
-        Self::default()
-    }
-
     pub(super) fn run(&mut self, blocks: &mut [BasicBlock8]) -> bool {
         if blocks.is_empty() {
             self.facts.clear();
@@ -54,17 +45,6 @@ fn simplify_blocks_with_facts(blocks: &mut [BasicBlock8], facts: &HashMap<Val8, 
     }
 
     changed
-}
-
-fn make_bool_kind(op: BoolOp, regs: &[Val8]) -> Inst8Kind {
-    if regs.len() == 1 {
-        return Inst8Kind::Copy(regs[0]);
-    }
-    let nary = BoolNary8::from_regs(regs).expect("bool op inputs should fit IR8 nary limit");
-    match op {
-        BoolOp::And => Inst8Kind::BoolAnd(nary),
-        BoolOp::Or => Inst8Kind::BoolOr(nary),
-    }
 }
 
 fn simplify_bool_nary(op: BoolOp, regs: &BoolNary8, facts: &HashMap<Val8, RegFact>) -> Inst8Kind {
@@ -122,7 +102,7 @@ fn simplify_bool_nary(op: BoolOp, regs: &BoolNary8, facts: &HashMap<Val8, RegFac
         });
     }
 
-    make_bool_kind(op, &kept)
+    make_bool_kind(op, &kept).expect("non-empty bool op inputs should fit IR8 nary limit")
 }
 
 fn const_word_prefix(word: Word, lane: u8, facts: &HashMap<Val8, RegFact>) -> Option<u32> {
