@@ -1,7 +1,7 @@
 /target
 .vscode
 /*.html
-*.c
+/*.c
 *.wasm
 !tests/cases/
 !tests/cases/*.c
@@ -9,4 +9,3 @@ tests/out/
 
 *.log
 .gitignore
-AGENTS.md

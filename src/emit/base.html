@@ -39,7 +39,7 @@ body { margin: 0; background: #f5f5f5; font-family: ui-monospace, SFMono-Regular
 .csvis { background: none; border: none; box-shadow: none; display: flex; align-items: center; position: relative; overflow: hidden; }
 .csvis::after { content: ""; position: absolute; left: -8px; top: -8px; width: 8px; height: 8px; background: transparent; z-index: 1; }
 /*__WSS_KEEP_CS_VISUALIZER_CSS_END__*/
-.unsupported { --support: --support-test(); display: if(style(--support:2):none; else:flex); position: fixed; inset: 0; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.85); color: #fff; padding: 2rem; text-align: center; font-size: 1rem; line-height: 1.5; }
+.unsupported { --support: --support-test(); display: if(style(--support:2):none; else:flex); position: fixed; inset: 0; z-index: 100; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.85); color: #fff; padding: 2rem; text-align: center; font-size: 1rem; line-height: 1.5; }
 .inds { width: 100%; display: flex; gap: 8px; flex-wrap: wrap; margin: 4px 0 8px; }
 .ind { flex: 1 1 170px; min-width: 0; display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 6px 8px; border-radius: 6px; border: 1px solid #ddd; background: #fff; }
 .ind .k { color: #666; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; }

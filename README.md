@@ -1,10 +1,23 @@
 # wss
 
-wss is a transpiler from WebAssembly to CSS, plus an HTML/CSS runtime for the output.
+wss is a transpiler from WebAssembly to CSS, plus an HTML/CSS runtime.
 
 The result runs entirely in pure HTML/CSS; optional JavaScript add-ons are available for quality-of-life features.
 
-I should have a blog post about this: PLACEHOLDER
+## Examples
+
+Several interactive outputs are checked into [`examples/`](examples/) and mirrored online:
+
+- [Hanoi 4 (JS clock)](https://bucket.svc.moe/uploads/wss/hanoi4_js.html)
+- [Hanoi 4 (CSS clock)](https://bucket.svc.moe/uploads/wss/hanoi4_nojs.html)
+- [Horsle (JS debugger)](https://bucket.svc.moe/uploads/wss/horsle_js_step.html)
+- [RPG (JS clock)](https://bucket.svc.moe/uploads/wss/rpg_js.html)
+
+## Prerequisites
+
+- Rust toolchain
+- A compiler that can emit WebAssembly, such as `clang`
+- A recent Chromium-based browser for running the generated HTML
 
 ## Usage
 
@@ -44,31 +57,25 @@ clang \
   -Wl,--compress-relocations \
   -Wl,--strip-all \
   -Wl,--global-base=4 \
+  -Wl,--export=_start \
   -o a.wasm source.c
 ```
 
 2. Run the transpiler:
 
 ```sh
-cargo run --bin wss -- a.wasm
+cargo run --release -- a.wasm -o a.html
 ```
 
-Optional runtime context flags:
+Options:
 
-```sh
-cargo run --bin wss -- a.wasm \
-  --output a.html \
-  --memory-bytes 1024 \
-  --stack-slots 256 \
-  --js-clock true \
-  --js-coprocessor false
-```
-
-* **`--memory-bytes 0`**: Uses global `0` (SP) as the runtime memory cap.
-* **`--js-clock true`**: The JS clock is enabled by default. The pure CSS animation-based clock is functional but not as stable as the JS one. You may experience random resets when the JS clock is disabled, especially under heavy workloads.
-* **`--js-coprocessor true`**: Offloads `div`/`rem` and bitwise built-in ops to a JS coprocessor channel (requires `--js-clock true`). If you have to do i32 division or remainder calculations in CSS, adding a JS coprocessor will drastically improve performance. However, both methods work.
-
-3. Open the output HTML (default: `a.html`) in a recent Chromium-based browser.
+- `-o, --output <PATH>`: output HTML path. Default: `a.html`
+- `--memory-bytes <N>`: runtime linear-memory cap in bytes. Default: `1024`
+- `--stack-slots <N>`: runtime callstack cap in 16-bit slots. Default: `256`
+- `--js-clock <true|false>`: enable JS-based clock stepping. Default: `true`
+- `--js-coprocessor <true|false>`: enable JS coprocessor for `div`/`rem` and bitwise builtins. Requires `--js-clock true`
+- `--js-clock-debugger <true|false>`: enable the JS debugger popup. Requires `--js-clock true`
+- `--max-phys-regs <N>`: register-allocation cap, including reserved `r0`-`r3`. Default: `256`
 
 ## What is supported
 

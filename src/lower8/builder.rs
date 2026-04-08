@@ -53,7 +53,7 @@ pub(super) fn alloc_builtin_div_params(counter: &mut u16) -> FuncAlloc {
 
 pub(super) struct FuncBuilder {
     pub(super) func_id: u32,
-    pub(super) is_main: bool,
+    pub(super) is_entry: bool,
     pub(super) vreg_counter: u16,
     pub(super) local_vregs: Vec<Word>,
     pub(super) inst_map: HashMap<IrNode, Word>,
@@ -67,13 +67,13 @@ pub(super) struct FuncBuilder {
 impl FuncBuilder {
     pub(super) fn new(
         func_id: u32,
-        is_main: bool,
+        is_entry: bool,
         vreg_counter: u16,
         local_vregs: Vec<Word>,
     ) -> Self {
         Self {
             func_id,
-            is_main,
+            is_entry,
             vreg_counter,
             local_vregs,
             inst_map: HashMap::new(),

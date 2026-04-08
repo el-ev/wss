@@ -616,6 +616,7 @@ fn emit_html_includes_keyboard_ui_when_getchar_is_used() {
     assert!(html.contains("class=\"kb\""));
     assert!(html.contains("class=\"input-hint\""));
     assert!(html.contains("data-key=\"32\""));
+    assert!(html.contains(".unsupported { --support: --support-test(); display: if(style(--support:2):none; else:flex); position: fixed; inset: 0; z-index: 100;"));
 }
 
 #[test]

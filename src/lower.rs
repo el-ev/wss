@@ -23,8 +23,8 @@ fn lower_function(
     func: &AstFuncInfo,
 ) -> anyhow::Result<IrFuncInfo> {
     let ir_body = if let Some(body) = func.body() {
-        let is_main = module.main_export() == Some(func_index);
-        let mut ctx = LowerCtx::new(module, is_main);
+        let is_entry = module.entry_export() == Some(func_index);
+        let mut ctx = LowerCtx::new(module, is_entry);
         lower_block_nodes(body.insts(), &mut ctx)?;
         if !ctx.builder.curr_blk_insts.is_empty() || ctx.builder.blocks.is_empty() {
             ctx.builder.finish_block(Terminator::Return(None));
@@ -246,15 +246,15 @@ fn remap_terminator_refs(
 
 struct LowerCtx<'a> {
     module: &'a Module,
-    is_main: bool,
+    is_entry: bool,
     builder: IrBuilder,
 }
 
 impl<'a> LowerCtx<'a> {
-    fn new(module: &'a Module, is_main: bool) -> Self {
+    fn new(module: &'a Module, is_entry: bool) -> Self {
         Self {
             module,
-            is_main,
+            is_entry,
             builder: IrBuilder::new(),
         }
     }
@@ -585,7 +585,7 @@ fn maybe_fuse_tail_call(
     ctx: &mut LowerCtx<'_>,
     return_ref: Option<IrNode>,
 ) -> anyhow::Result<Option<Terminator>> {
-    if ctx.is_main || ctx.builder.curr_blk_insts.is_empty() {
+    if ctx.is_entry || ctx.builder.curr_blk_insts.is_empty() {
         return Ok(None);
     }
     let last_inst_ref = ctx.builder.next_ref.saturating_sub(1);
@@ -648,12 +648,12 @@ mod tests {
     }
 
     fn mk_module(
-        main_export: Option<u32>,
+        entry_export: Option<u32>,
         types: Vec<FuncType>,
         functions_ast: Vec<AstFuncInfo>,
     ) -> Module {
         let mut module = Module::new();
-        module.set_main_export(main_export);
+        module.set_entry_export(entry_export);
         *module.types_mut() = types;
         *module.functions_ast_mut() = functions_ast;
         module
