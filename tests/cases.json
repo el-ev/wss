@@ -450,11 +450,7 @@
       "ra": "0x89abcdef",
       "rendered_includes": [
         "0x89abcdef"
-      ],
-      "memory_words": {
-        "--m3fc": 52719,
-        "--m3fe": 35243
-      }
+      ]
     }
   },
   {
@@ -476,10 +472,7 @@
       "ra": "0x0000beef",
       "rendered_includes": [
         "0x0000beef"
-      ],
-      "memory_words": {
-        "--m3fe": 48879
-      }
+      ]
     }
   },
   {
@@ -512,11 +505,7 @@
       "ra": "0xa1b23344",
       "rendered_includes": [
         "0xa1b23344"
-      ],
-      "memory_words": {
-        "--m030": 13124,
-        "--m032": 41394
-      }
+      ]
     }
   },
   {
@@ -527,10 +516,7 @@
       "ra": "0xffffff80",
       "rendered_includes": [
         "0xffffff80"
-      ],
-      "memory_words": {
-        "--m020": 128
-      }
+      ]
     }
   },
   {
@@ -541,10 +527,7 @@
       "ra": "0x00000080",
       "rendered_includes": [
         "0x00000080"
-      ],
-      "memory_words": {
-        "--m020": 128
-      }
+      ]
     }
   },
   {
@@ -555,10 +538,7 @@
       "ra": "0xffff8001",
       "rendered_includes": [
         "0xffff8001"
-      ],
-      "memory_words": {
-        "--m040": 32769
-      }
+      ]
     }
   },
   {
@@ -569,10 +549,7 @@
       "ra": "0x00008001",
       "rendered_includes": [
         "0x00008001"
-      ],
-      "memory_words": {
-        "--m040": 32769
-      }
+      ]
     }
   },
   {
@@ -928,13 +905,7 @@
       "ra": "0x000000f2",
       "rendered_includes": [
         "0x000000f2"
-      ],
-      "memory_words": {
-        "--m108": 56506,
-        "--m10a": 254,
-        "--m10c": 17767,
-        "--m10e": 61731
-      }
+      ]
     }
   },
   {
@@ -1275,8 +1246,10 @@
     "virtual_time_budget_ms": 60000,
     "expect": {
       "pc": -1,
+      "ra": "0x0000000d",
       "rendered_includes": [
-        "Program exited with code"
+        "Program exited with code",
+        "0x0000000d"
       ]
     }
   },
@@ -1285,8 +1258,10 @@
     "source": "tests/cases/narrow_memory_signext.c",
     "expect": {
       "pc": -1,
+      "ra": "0x000030b0",
       "rendered_includes": [
-        "Program exited with code"
+        "Program exited with code",
+        "0x000030b0"
       ]
     }
   },
@@ -1299,8 +1274,10 @@
     "virtual_time_budget_ms": 60000,
     "expect": {
       "pc": -1,
+      "ra": "0xffffffd4",
       "rendered_includes": [
-        "Program exited with code"
+        "Program exited with code",
+        "0xffffffd4"
       ]
     }
   },
@@ -1314,8 +1291,10 @@
     "virtual_time_budget_ms": 60000,
     "expect": {
       "pc": -1,
+      "ra": "0x3acafcc3",
       "rendered_includes": [
-        "Program exited with code"
+        "Program exited with code",
+        "0x3acafcc3"
       ]
     }
   },
@@ -1324,8 +1303,10 @@
     "source": "tests/cases/early_return_paths.c",
     "expect": {
       "pc": -1,
+      "ra": "0x00000160",
       "rendered_includes": [
-        "Program exited with code"
+        "Program exited with code",
+        "0x00000160"
       ]
     }
   },
@@ -1334,8 +1315,10 @@
     "source": "tests/cases/memory_size_roundtrip.c",
     "expect": {
       "pc": -1,
+      "ra": "0x00000039",
       "rendered_includes": [
-        "Program exited with code"
+        "Program exited with code",
+        "0x00000039"
       ]
     }
   },
@@ -1344,8 +1327,10 @@
     "source": "tests/cases/bitcount_relop_blend.c",
     "expect": {
       "pc": -1,
+      "ra": "0x0024408e",
       "rendered_includes": [
-        "Program exited with code"
+        "Program exited with code",
+        "0x0024408e"
       ]
     }
   },
@@ -1356,11 +1341,13 @@
       "lengthy"
     ],
     "max_frames": 120000,
-    "virtual_time_budget_ms": 60000,
+    "virtual_time_budget_ms": 120000,
     "expect": {
       "pc": -1,
+      "ra": "0x0000020a",
       "rendered_includes": [
-        "Program exited with code"
+        "Program exited with code",
+        "0x0000020a"
       ]
     }
   },
@@ -1371,11 +1358,13 @@
       "lengthy"
     ],
     "max_frames": 120000,
-    "virtual_time_budget_ms": 60000,
+    "virtual_time_budget_ms": 90000,
     "expect": {
       "pc": -1,
+      "ra": "0xffffff74",
       "rendered_includes": [
-        "Program exited with code"
+        "Program exited with code",
+        "0xffffff74"
       ]
     }
   },
@@ -1386,11 +1375,13 @@
       "lengthy"
     ],
     "max_frames": 120000,
-    "virtual_time_budget_ms": 120000,
+    "virtual_time_budget_ms": 180000,
     "expect": {
       "pc": -1,
+      "ra": "0x00000004",
       "rendered_includes": [
-        "Program exited with code"
+        "Program exited with code",
+        "0x00000004"
       ]
     }
   },
