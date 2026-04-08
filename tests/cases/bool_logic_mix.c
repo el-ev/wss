@@ -1,7 +1,11 @@
+static volatile int seed_a = 13;
+static volatile int seed_b = 29;
+static volatile int seed_c = 13;
+
 int _start(void) {
-  int a = 13;
-  int b = 29;
-  int c = 13;
+  int a = seed_a;
+  int b = seed_b;
+  int c = seed_c;
   int mask = 0;
 
   if ((a == c && b > a) || (a > b))
