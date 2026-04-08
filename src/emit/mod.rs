@@ -16,9 +16,10 @@ use std::fmt::Write;
 use bitflags::bitflags;
 use paste::paste;
 
+#[cfg(test)]
 use crate::constants::{
     DEFAULT_CALLSTACK_SLOTS_CAP, DEFAULT_JS_CLOCK_DEBUGGER_ENABLED, DEFAULT_JS_CLOCK_ENABLED,
-    DEFAULT_JS_COPROCESSOR_ENABLED, DEFAULT_MEMORY_BYTES_CAP, validate_memory_bytes_cap,
+    DEFAULT_JS_COPROCESSOR_ENABLED, DEFAULT_MEMORY_BYTES_CAP,
 };
 use crate::ir8::{BuiltinId, CallTarget, Inst8Kind, Ir8Program, Terminator8, TrapCode, Val8, Word};
 
@@ -36,41 +37,118 @@ const COP_OP_NONE: u8 = 0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EmitConfig {
-    pub memory_bytes_cap: u32,
-    pub callstack_slots_cap: usize,
-    pub js_clock: bool,
-    pub js_coprocessor: bool,
-    pub js_clock_debugger: bool,
+    memory_bytes_cap: u32,
+    callstack_slots_cap: usize,
+    js_clock: bool,
+    js_coprocessor: bool,
+    js_clock_debugger: bool,
 }
 
+#[cfg(test)]
 impl Default for EmitConfig {
     fn default() -> Self {
-        Self {
-            memory_bytes_cap: DEFAULT_MEMORY_BYTES_CAP,
-            callstack_slots_cap: DEFAULT_CALLSTACK_SLOTS_CAP,
-            js_clock: DEFAULT_JS_CLOCK_ENABLED,
-            js_coprocessor: DEFAULT_JS_COPROCESSOR_ENABLED,
-            js_clock_debugger: DEFAULT_JS_CLOCK_DEBUGGER_ENABLED,
-        }
+        Self::new(
+            DEFAULT_MEMORY_BYTES_CAP,
+            DEFAULT_CALLSTACK_SLOTS_CAP,
+            DEFAULT_JS_CLOCK_ENABLED,
+            DEFAULT_JS_COPROCESSOR_ENABLED,
+            DEFAULT_JS_CLOCK_DEBUGGER_ENABLED,
+        )
+        .expect("default emit config should be valid")
     }
 }
 
 impl EmitConfig {
-    fn validate(self) -> anyhow::Result<Self> {
-        validate_memory_bytes_cap(self.memory_bytes_cap)?;
+    pub fn new(
+        memory_bytes_cap: u32,
+        callstack_slots_cap: usize,
+        js_clock: bool,
+        js_coprocessor: bool,
+        js_clock_debugger: bool,
+    ) -> anyhow::Result<Self> {
         anyhow::ensure!(
-            self.callstack_slots_cap > 0,
+            callstack_slots_cap > 0,
             "callstack slots cap must be greater than zero"
         );
         anyhow::ensure!(
-            !self.js_coprocessor || self.js_clock,
+            !js_coprocessor || js_clock,
             "js coprocessor requires js clock stepping to be enabled"
         );
         anyhow::ensure!(
-            !self.js_clock_debugger || self.js_clock,
+            !js_clock_debugger || js_clock,
             "js clock debugger requires js clock stepping to be enabled"
         );
-        Ok(self)
+        Ok(Self {
+            memory_bytes_cap,
+            callstack_slots_cap,
+            js_clock,
+            js_coprocessor,
+            js_clock_debugger,
+        })
+    }
+
+    pub fn memory_bytes_cap(&self) -> u32 {
+        self.memory_bytes_cap
+    }
+
+    pub fn callstack_slots_cap(&self) -> usize {
+        self.callstack_slots_cap
+    }
+
+    pub fn js_clock(&self) -> bool {
+        self.js_clock
+    }
+
+    pub fn js_coprocessor(&self) -> bool {
+        self.js_coprocessor
+    }
+
+    pub fn js_clock_debugger(&self) -> bool {
+        self.js_clock_debugger
+    }
+
+    #[cfg(test)]
+    pub fn with_memory_bytes_cap(self, memory_bytes_cap: u32) -> anyhow::Result<Self> {
+        Self::new(
+            memory_bytes_cap,
+            self.callstack_slots_cap(),
+            self.js_clock(),
+            self.js_coprocessor(),
+            self.js_clock_debugger(),
+        )
+    }
+
+    #[cfg(test)]
+    pub fn with_js_clock(self, js_clock: bool) -> anyhow::Result<Self> {
+        Self::new(
+            self.memory_bytes_cap(),
+            self.callstack_slots_cap(),
+            js_clock,
+            self.js_coprocessor(),
+            self.js_clock_debugger(),
+        )
+    }
+
+    #[cfg(test)]
+    pub fn with_js_coprocessor(self, js_coprocessor: bool) -> anyhow::Result<Self> {
+        Self::new(
+            self.memory_bytes_cap(),
+            self.callstack_slots_cap(),
+            self.js_clock(),
+            js_coprocessor,
+            self.js_clock_debugger(),
+        )
+    }
+
+    #[cfg(test)]
+    pub fn with_js_clock_debugger(self, js_clock_debugger: bool) -> anyhow::Result<Self> {
+        Self::new(
+            self.memory_bytes_cap(),
+            self.callstack_slots_cap(),
+            self.js_clock(),
+            self.js_coprocessor(),
+            js_clock_debugger,
+        )
     }
 }
 
@@ -236,7 +314,6 @@ struct Emitter<'a> {
 }
 
 pub fn emit_program(program: &Ir8Program, config: EmitConfig) -> anyhow::Result<String> {
-    let config = config.validate()?;
     let emitter = Emitter::new(program, config)?;
 
     let mut props_css = String::new();
@@ -256,13 +333,12 @@ pub fn emit_program(program: &Ir8Program, config: EmitConfig) -> anyhow::Result<
 
 impl<'a> Emitter<'a> {
     fn new(program: &'a Ir8Program, config: EmitConfig) -> anyhow::Result<Self> {
-        let config = config.validate()?;
         let entry_pc = (program.entry_func as u16) * crate::ir8::PC_STRIDE;
 
-        let memory_end = if config.memory_bytes_cap == 0 {
+        let memory_end = if config.memory_bytes_cap() == 0 {
             program.memory_end
         } else {
-            config.memory_bytes_cap
+            config.memory_bytes_cap()
         };
         let mem_cells = (memory_end as usize).div_ceil(2);
 
@@ -280,7 +356,7 @@ impl<'a> Emitter<'a> {
 
         let uses_callstack = Self::scan_uses_callstack(program);
         let cs_names = if uses_callstack {
-            let cs_slots = config.callstack_slots_cap;
+            let cs_slots = config.callstack_slots_cap();
             let cs_hex_width = Self::cell_offset_hex_width(cs_slots);
             (0..cs_slots)
                 .map(|i| Self::cell_name("cs", i, cs_hex_width))
@@ -329,9 +405,9 @@ impl<'a> Emitter<'a> {
         Ok(Self {
             program,
             entry_pc,
-            js_clock: config.js_clock,
-            js_coprocessor: config.js_coprocessor,
-            js_clock_debugger: config.js_clock_debugger,
+            js_clock: config.js_clock(),
+            js_coprocessor: config.js_coprocessor(),
+            js_clock_debugger: config.js_clock_debugger(),
             features,
             memory_end,
             mem_names,

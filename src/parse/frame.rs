@@ -95,7 +95,7 @@ pub(super) fn target_block_index(
 ) -> anyhow::Result<usize> {
     block_depth
         .checked_sub(1 + relative_depth as usize)
-        .with_context(|| {
+        .context({
             format!(
                 "{}: relative depth {} exceeds block depth",
                 op_name, relative_depth

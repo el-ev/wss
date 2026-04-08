@@ -469,10 +469,10 @@ fn rewrite_inst_pcs(inst: Inst8, first_pc_map: &HashMap<Pc, Pc>) -> anyhow::Resu
 }
 
 fn map_target_pc(pc: Pc, first_pc_map: &HashMap<Pc, Pc>) -> anyhow::Result<Pc> {
-    first_pc_map
-        .get(&pc)
-        .copied()
-        .with_context(|| format!("missing scheduled mapping for target pc {}", pc.index()))
+    first_pc_map.get(&pc).copied().context(format!(
+        "missing scheduled mapping for target pc {}",
+        pc.index()
+    ))
 }
 
 #[cfg(test)]

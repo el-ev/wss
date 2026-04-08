@@ -46,9 +46,10 @@ fn build_callee_setup(
     arg_count: usize,
     op_name: &str,
 ) -> anyhow::Result<(Pc, Vec<Word>)> {
-    let callee_alloc = allocs
-        .get(callee_id as usize)
-        .with_context(|| format!("{} references missing function {}", op_name, callee_id))?;
+    let callee_alloc = allocs.get(callee_id as usize).context(format!(
+        "{} references missing function {}",
+        op_name, callee_id
+    ))?;
     let callee_arg_vregs = callee_alloc.local_vregs[..arg_count].to_vec();
     let callee_entry = Pc::new(callee_id as u16 * PC_STRIDE);
     Ok((callee_entry, callee_arg_vregs))
@@ -60,7 +61,7 @@ fn finish_indirect_case(
 ) -> anyhow::Result<()> {
     match emit_ctx.mode {
         IndirectLoweringMode::Call => {
-            let join_pc = emit_ctx.join_pc.with_context(|| {
+            let join_pc = emit_ctx.join_pc.context({
                 format!(
                     "{} internal error: missing join block for indirect call",
                     emit_ctx.op_name
@@ -89,7 +90,7 @@ fn emit_indirect_target_case(
             )?;
             match emit_ctx.mode {
                 IndirectLoweringMode::Call => {
-                    let join_pc = emit_ctx.join_pc.with_context(|| {
+                    let join_pc = emit_ctx.join_pc.context({
                         format!(
                             "{} internal error: missing join block for indirect call",
                             emit_ctx.op_name
@@ -118,9 +119,10 @@ fn emit_indirect_target_case(
             }
         }
         IndirectTargetKind::Putchar => {
-            let arg = arg_words
-                .first()
-                .with_context(|| format!("{} putchar call missing argument", emit_ctx.op_name))?;
+            let arg = arg_words.first().context(format!(
+                "{} putchar call missing argument",
+                emit_ctx.op_name
+            ))?;
             // TODO(i64): putchar/getchar bridge currently reads/writes only the low byte lane.
             b.emit(Inst8::no_dst(Inst8Kind::Putchar(arg.b0)));
             b.set_ret_from_byte(arg.b0);
@@ -257,7 +259,7 @@ fn build_indirect_dispatch(
     module: &IrModule,
     req: IndirectDispatchRequest<'_>,
 ) -> anyhow::Result<Vec<(Pc, IndirectTargetKind)>> {
-    let table = module.table_at(req.table_index).with_context(|| {
+    let table = module.table_at(req.table_index).context({
         format!(
             "{} references table {} which does not exist",
             req.op_name, req.table_index
@@ -270,7 +272,7 @@ fn build_indirect_dispatch(
         req.table_index,
         table.entries().len()
     );
-    let expected_sig = module.type_at(req.type_index).with_context(|| {
+    let expected_sig = module.type_at(req.type_index).context({
         format!(
             "{} references type {} which does not exist",
             req.op_name, req.type_index

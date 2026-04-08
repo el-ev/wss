@@ -113,7 +113,7 @@ fn parse_i32_const_offset(
     match init {
         // TODO(i64): element/data offsets are parsed from i32 consts only.
         ConstInit::I32(v) => {
-            usize::try_from(v).with_context(|| format!("{nonnegative_label} must be >= 0, got {v}"))
+            usize::try_from(v).context(format!("{nonnegative_label} must be >= 0, got {v}"))
         }
     }
 }
@@ -364,7 +364,7 @@ pub(crate) fn decode_module_info(wasm_bytes: &[u8]) -> anyhow::Result<ModuleInfo
                     };
                     let table_len = module
                         .table_at(table_index)
-                        .with_context(|| {
+                        .context({
                             format!("element segment targets missing table {}", table_index)
                         })?
                         .entries()
@@ -402,7 +402,7 @@ pub(crate) fn decode_module_info(wasm_bytes: &[u8]) -> anyhow::Result<ModuleInfo
                     }
 
                     let func_count = module.functions.len();
-                    let table = module.table_mut_at(table_index).with_context(|| {
+                    let table = module.table_mut_at(table_index).context({
                         format!(
                             "element segment targets missing mutable table {}",
                             table_index
