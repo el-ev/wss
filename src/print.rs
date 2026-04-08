@@ -3,12 +3,10 @@ use std::fmt::Write;
 use crate::ast::{AstRef, BinOp, Node, RelOp, UnOp};
 use crate::ir::{BasicBlock, Inst, IrNode, Terminator};
 use crate::ir8::{
-    BUILTIN_CLZ_32, BUILTIN_CTZ_32, BUILTIN_DIV_S32, BUILTIN_DIV_U32, BUILTIN_PC_BASE,
-    BUILTIN_POPCNT_32, BUILTIN_REM_S32, BUILTIN_REM_U32, BUILTIN_ROTL_32, BUILTIN_ROTR_32,
-    BUILTIN_SHL_32, BUILTIN_SHR_S32, BUILTIN_SHR_U32, BoolNary8, Inst8Kind, Ir8Program, PC_STRIDE,
-    Pc, Terminator8, TrapCode, Val8, Word,
+    BoolNary8, BuiltinId, CallTarget, Inst8Kind, Ir8Program, PC_STRIDE, Pc, Terminator8, TrapCode,
+    Val8, Word,
 };
-use crate::module::{AstFuncBody, IrFuncBody, Module};
+use crate::module::{AstFuncBody, AstModule, ConstInit, IrFuncBody, IrModule};
 
 fn fmt_valtype(vt: &wasmparser::ValType) -> String {
     format!("{:?}", vt).to_lowercase()
@@ -20,43 +18,42 @@ fn fmt_sig(params: &[wasmparser::ValType], results: &[wasmparser::ValType]) -> S
     format!("({}) -> ({})", ps.join(", "), rs.join(", "))
 }
 
-fn fmt_node_init(node: &Node) -> String {
-    match node {
-        Node::I32Const(v) => format!("{}", v),
-        other => format!("{:?}", other),
+fn fmt_const_init(init: ConstInit) -> String {
+    match init {
+        ConstInit::I32(v) => format!("{}", v),
     }
 }
 
-pub fn print_module_ast(module: &Module) -> String {
+pub fn print_module_ast(module: &AstModule) -> String {
     let mut out = String::new();
     for (idx, g) in module.globals().iter().enumerate() {
-        let mutability = if g.is_mutable() { "mut" } else { "const" };
         writeln!(
             out,
-            "global {} {} {} = {}",
+            "global {} {} = {}",
             idx,
-            mutability,
             fmt_valtype(&g.content_type()),
-            fmt_node_init(g.init())
+            fmt_const_init(g.init())
         )
         .unwrap();
     }
     if !module.globals().is_empty() {
         writeln!(out).unwrap();
     }
-    for (idx, func) in module.functions_ast().iter().enumerate() {
-        if let Some(body) = func.body() {
+    for (idx, body) in module.bodies().iter().enumerate() {
+        if let Some(body) = body {
             writeln!(
                 out,
                 "fn {} {}",
                 idx,
-                fmt_sig(func.signature().params(), func.signature().results())
+                fmt_sig(
+                    module.function_type_at(idx as u32).unwrap().params(),
+                    module.function_type_at(idx as u32).unwrap().results()
+                )
             )
             .unwrap();
             print_func_body(&mut out, body, 1);
-            let more_functions_with_bodies = module.functions_ast()[idx + 1..]
-                .iter()
-                .any(|f| f.body().is_some());
+            let more_functions_with_bodies =
+                module.bodies()[idx + 1..].iter().any(|body| body.is_some());
             if more_functions_with_bodies {
                 writeln!(out).unwrap();
             }
@@ -65,21 +62,23 @@ pub fn print_module_ast(module: &Module) -> String {
     out
 }
 
-pub fn print_module_ir(module: &Module) -> String {
+pub fn print_module_ir(module: &IrModule) -> String {
     let mut out = String::new();
-    for (idx, func) in module.functions_ir().iter().enumerate() {
-        if let Some(body) = func.body() {
+    for (idx, body) in module.bodies().iter().enumerate() {
+        if let Some(body) = body {
             writeln!(
                 out,
                 "fn {} {}",
                 idx,
-                fmt_sig(func.signature().params(), func.signature().results())
+                fmt_sig(
+                    module.function_type_at(idx as u32).unwrap().params(),
+                    module.function_type_at(idx as u32).unwrap().results()
+                )
             )
             .unwrap();
             print_ir_func_body(&mut out, body, 1);
-            let more_functions_with_bodies = module.functions_ir()[idx + 1..]
-                .iter()
-                .any(|f| f.body().is_some());
+            let more_functions_with_bodies =
+                module.bodies()[idx + 1..].iter().any(|body| body.is_some());
             if more_functions_with_bodies {
                 writeln!(out).unwrap();
             }
@@ -507,8 +506,8 @@ pub fn print_ir8_program(prog: &Ir8Program) -> String {
         if blocks.is_empty() {
             continue;
         }
-        let fi = &prog.frame_infos[func_id];
-        writeln!(out, "\nfn {} [{} locals]", func_id, fi.num_locals).unwrap();
+        let num_locals = prog.func_num_locals[func_id];
+        writeln!(out, "\nfn {} [{} locals]", func_id, num_locals).unwrap();
         for bb in blocks {
             writeln!(out, "  $B{}:", bb.id.index()).unwrap();
             for inst in &bb.insts {
@@ -561,32 +560,19 @@ fn fmt_word(w: Word) -> String {
     )
 }
 
-fn builtin_name(pc: Pc) -> Option<&'static str> {
-    match pc.index() {
-        x if x == BUILTIN_DIV_U32.index() => Some("builtin.div_u32"),
-        x if x == BUILTIN_REM_U32.index() => Some("builtin.rem_u32"),
-        x if x == BUILTIN_DIV_S32.index() => Some("builtin.div_s32"),
-        x if x == BUILTIN_REM_S32.index() => Some("builtin.rem_s32"),
-        x if x == BUILTIN_SHL_32.index() => Some("builtin.shl_32"),
-        x if x == BUILTIN_SHR_U32.index() => Some("builtin.shr_u32"),
-        x if x == BUILTIN_SHR_S32.index() => Some("builtin.shr_s32"),
-        x if x == BUILTIN_ROTL_32.index() => Some("builtin.rotl_32"),
-        x if x == BUILTIN_ROTR_32.index() => Some("builtin.rotr_32"),
-        x if x == BUILTIN_CLZ_32.index() => Some("builtin.clz_32"),
-        x if x == BUILTIN_CTZ_32.index() => Some("builtin.ctz_32"),
-        x if x == BUILTIN_POPCNT_32.index() => Some("builtin.popcnt_32"),
-        _ => None,
+fn fmt_pc(pc: Pc) -> String {
+    format!("$B{}", pc.index())
+}
+
+fn fmt_call_target(target: CallTarget) -> String {
+    match target {
+        CallTarget::Pc(pc) => fmt_pc(pc),
+        CallTarget::Builtin(builtin) => fmt_builtin(builtin).to_string(),
     }
 }
 
-fn fmt_pc(pc: Pc) -> String {
-    if let Some(name) = builtin_name(pc) {
-        return format!("{}($B{})", name, pc.index());
-    }
-    if pc.index() >= BUILTIN_PC_BASE {
-        return format!("builtin.unknown($B{})", pc.index());
-    }
-    format!("$B{}", pc.index())
+fn fmt_builtin(builtin: BuiltinId) -> &'static str {
+    builtin.name()
 }
 
 fn fmt_bool_nary(op: &BoolNary8) -> String {
@@ -739,7 +725,7 @@ fn print_term8(out: &mut String, term: &Terminator8) {
             write!(
                 out,
                 "call_setup {} cont={}",
-                fmt_pc(*callee_entry),
+                fmt_call_target(*callee_entry),
                 fmt_pc(*cont)
             )
             .unwrap();

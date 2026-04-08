@@ -3,6 +3,7 @@ use crate::constants::{
 };
 use crate::emit::{EmitConfig, emit_program};
 use crate::lower8::{Lower8Config, lower8_module, lower8_module_with_config};
+use crate::module::decode_module_info;
 use crate::print::{print_ir8_program, print_module_ast, print_module_ir, print_program};
 use crate::regalloc::regalloc;
 use crate::schedule::schedule;
@@ -26,6 +27,15 @@ mod print;
 mod regalloc;
 mod schedule;
 mod validate;
+
+#[derive(Debug, Clone, Copy, Default)]
+struct DumpConfig {
+    ast: bool,
+    ir: bool,
+    ir8: bool,
+    ir8_opt: bool,
+    program: bool,
+}
 
 #[derive(Debug, Parser)]
 #[command(name = "wss")]
@@ -62,11 +72,42 @@ struct Cli {
     /// Max total physical regs (including reserved r0-r3) after register allocation.
     #[arg(long = "max-phys-regs", default_value_t = DEFAULT_MAX_PHYS_REGS)]
     max_phys_regs: u16,
+    /// Dump all compiler stages to stdout.
+    #[arg(long, action = ArgAction::SetTrue)]
+    dump_all: bool,
+    /// Dump parsed AST to stdout.
+    #[arg(long, action = ArgAction::SetTrue)]
+    dump_ast: bool,
+    /// Dump lowered IR to stdout.
+    #[arg(long, action = ArgAction::SetTrue)]
+    dump_ir: bool,
+    /// Dump pre-optimization IR8 to stdout.
+    #[arg(long, action = ArgAction::SetTrue)]
+    dump_ir8: bool,
+    /// Dump post-optimization IR8 to stdout.
+    #[arg(long, action = ArgAction::SetTrue)]
+    dump_ir8_opt: bool,
+    /// Dump scheduled program to stdout.
+    #[arg(long, action = ArgAction::SetTrue)]
+    dump_program: bool,
+}
+
+impl Cli {
+    fn dump_config(&self) -> DumpConfig {
+        DumpConfig {
+            ast: self.dump_all || self.dump_ast,
+            ir: self.dump_all || self.dump_ir,
+            ir8: self.dump_all || self.dump_ir8,
+            ir8_opt: self.dump_all || self.dump_ir8_opt,
+            program: self.dump_all || self.dump_program,
+        }
+    }
 }
 
 fn main() -> Result<()> {
     let args = Cli::parse();
     let output_file = args.output.clone();
+    let dump = args.dump_config();
     let emit_config = EmitConfig {
         memory_bytes_cap: args.memory_bytes,
         callstack_slots_cap: args.stack_slots,
@@ -82,7 +123,6 @@ fn main() -> Result<()> {
         !args.js_clock_debugger || args.js_clock,
         "--js-clock-debugger requires --js-clock true"
     );
-    let dump = std::env::var_os("WSS_DUMP").is_some();
 
     let wasm_bytes = std::fs::read(&args.wasm_file).with_context(|| {
         format!(
@@ -91,18 +131,19 @@ fn main() -> Result<()> {
         )
     })?;
 
-    validate(&wasm_bytes)?;
+    let module_info = decode_module_info(&wasm_bytes)?;
+    validate(&module_info, &wasm_bytes)?;
 
-    let mut module = parse_module(&wasm_bytes)?;
+    let module = parse_module(module_info, &wasm_bytes)?;
 
-    if dump {
+    if dump.ast {
         println!("\n--- AST ---\n");
         print!("{}", print_module_ast(&module));
     }
 
-    lower_module(&mut module)?;
+    let module = lower_module(module)?;
 
-    if dump {
+    if dump.ir {
         println!("\n--- IR ---\n");
         print!("{}", print_module_ir(&module));
     }
@@ -119,14 +160,14 @@ fn main() -> Result<()> {
         lower8_module(&module, args.memory_bytes)?
     };
 
-    if dump {
+    if dump.ir8 {
         println!("\n--- IR8 ---\n");
         print!("{}", print_ir8_program(&ir8));
     }
 
     opt8::run(&mut ir8);
 
-    if dump {
+    if dump.ir8_opt {
         println!("\n--- IR8 (opt) ---\n");
         print!("{}", print_ir8_program(&ir8));
     }
@@ -134,7 +175,7 @@ fn main() -> Result<()> {
     let mut ir8 = regalloc(ir8, args.max_phys_regs)?;
     schedule(&mut ir8)?;
 
-    if dump {
+    if dump.program {
         println!("\n--- Program ---\n");
         print!("{}", print_program(&ir8));
     }
@@ -144,4 +185,34 @@ fn main() -> Result<()> {
         .with_context(|| format!("failed to write output HTML '{}'", output_file.display()))?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dump_all_enables_all_dump_stages() {
+        let args = Cli::try_parse_from(["wss", "input.wasm", "--dump-all"]).unwrap();
+        let dump = args.dump_config();
+
+        assert!(dump.ast);
+        assert!(dump.ir);
+        assert!(dump.ir8);
+        assert!(dump.ir8_opt);
+        assert!(dump.program);
+    }
+
+    #[test]
+    fn individual_dump_flags_only_enable_requested_stages() {
+        let args =
+            Cli::try_parse_from(["wss", "input.wasm", "--dump-ast", "--dump-program"]).unwrap();
+        let dump = args.dump_config();
+
+        assert!(dump.ast);
+        assert!(!dump.ir);
+        assert!(!dump.ir8);
+        assert!(!dump.ir8_opt);
+        assert!(dump.program);
+    }
 }

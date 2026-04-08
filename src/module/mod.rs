@@ -13,32 +13,34 @@ mod helpers;
 use const_expr::{parse_const_expr, parse_ref_const_expr};
 use helpers::{build_table_info, clone_func_type, is_entry_export_name};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ConstInit {
+    I32(i32),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RefConstInit {
+    Null,
+    Func(u32),
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct GlobalInfo {
     content_type: ValType,
-    mutable: bool,
-    init: Node,
+    init: ConstInit,
 }
 
 impl GlobalInfo {
-    pub(crate) fn new(content_type: ValType, mutable: bool, init: Node) -> Self {
-        Self {
-            content_type,
-            mutable,
-            init,
-        }
+    pub(crate) fn new(content_type: ValType, init: ConstInit) -> Self {
+        Self { content_type, init }
     }
 
     pub(crate) fn content_type(&self) -> ValType {
         self.content_type
     }
 
-    pub(crate) fn is_mutable(&self) -> bool {
-        self.mutable
-    }
-
-    pub(crate) fn init(&self) -> &Node {
-        &self.init
+    pub(crate) fn init(&self) -> ConstInit {
+        self.init
     }
 }
 
@@ -69,9 +71,10 @@ impl TableInfo {
     }
 }
 
-#[derive(Debug, Default)]
-pub(crate) struct Module {
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ModuleInfo {
     types: Vec<FuncType>,
+    functions: Vec<FuncType>,
     globals: Vec<GlobalInfo>,
     tables: Vec<TableInfo>,
     num_pages: u64,
@@ -80,8 +83,6 @@ pub(crate) struct Module {
     putchar_import: Option<u32>,
     getchar_import: Option<u32>,
     entry_export: Option<u32>,
-    functions_ast: Vec<AstFuncInfo>,
-    functions_ir: Vec<IrFuncInfo>,
 }
 
 #[derive(Clone, Debug)]
@@ -105,16 +106,15 @@ impl FuncType {
 }
 
 fn parse_i32_const_offset(
-    node: Node,
+    init: ConstInit,
     nonnegative_label: &str,
-    unsupported_label: &str,
+    _unsupported_label: &str,
 ) -> anyhow::Result<usize> {
-    match node {
+    match init {
         // TODO(i64): element/data offsets are parsed from i32 consts only.
-        Node::I32Const(v) => {
+        ConstInit::I32(v) => {
             usize::try_from(v).with_context(|| format!("{nonnegative_label} must be >= 0, got {v}"))
         }
-        other => bail!("unsupported {unsupported_label}: {:?}", other),
     }
 }
 
@@ -129,36 +129,21 @@ fn ensure_function_exists(func_index: u32, func_count: usize, context: &str) -> 
     Ok(())
 }
 
-impl Module {
-    pub(crate) fn new() -> Self {
-        Self::default()
-    }
-
+impl ModuleInfo {
     pub(crate) fn types(&self) -> &[FuncType] {
         &self.types
     }
 
-    #[cfg(test)]
-    pub(crate) fn types_mut(&mut self) -> &mut Vec<FuncType> {
-        &mut self.types
+    pub(crate) fn functions(&self) -> &[FuncType] {
+        &self.functions
     }
 
     pub(crate) fn globals(&self) -> &[GlobalInfo] {
         &self.globals
     }
 
-    #[cfg(test)]
-    pub(crate) fn globals_mut(&mut self) -> &mut Vec<GlobalInfo> {
-        &mut self.globals
-    }
-
     pub(crate) fn tables(&self) -> &[TableInfo] {
         &self.tables
-    }
-
-    #[cfg(test)]
-    pub(crate) fn tables_mut(&mut self) -> &mut Vec<TableInfo> {
-        &mut self.tables
     }
 
     pub(crate) fn num_pages(&self) -> u64 {
@@ -171,11 +156,6 @@ impl Module {
 
     pub(crate) fn preloaded_data(&self) -> &[(usize, Vec<u8>)] {
         &self.preloaded_data
-    }
-
-    #[cfg(test)]
-    pub(crate) fn preloaded_data_mut(&mut self) -> &mut Vec<(usize, Vec<u8>)> {
-        &mut self.preloaded_data
     }
 
     pub(crate) fn num_imported_funcs(&self) -> usize {
@@ -206,38 +186,12 @@ impl Module {
         self.entry_export = entry_export;
     }
 
-    pub(crate) fn functions_ast(&self) -> &[AstFuncInfo] {
-        &self.functions_ast
-    }
-
-    #[cfg(test)]
-    pub(crate) fn functions_ast_mut(&mut self) -> &mut Vec<AstFuncInfo> {
-        &mut self.functions_ast
-    }
-
-    pub(crate) fn functions_ir(&self) -> &[IrFuncInfo] {
-        &self.functions_ir
-    }
-
-    #[cfg(test)]
-    pub(crate) fn functions_ir_mut(&mut self) -> &mut Vec<IrFuncInfo> {
-        &mut self.functions_ir
-    }
-
-    pub(crate) fn set_functions_ir(&mut self, functions_ir: Vec<IrFuncInfo>) {
-        self.functions_ir = functions_ir;
-    }
-
     pub(crate) fn type_at(&self, type_index: u32) -> Option<&FuncType> {
         self.types.get(type_index as usize)
     }
 
-    pub(crate) fn func_ast_at(&self, func_index: u32) -> Option<&AstFuncInfo> {
-        self.functions_ast.get(func_index as usize)
-    }
-
-    pub(crate) fn func_ast_mut_at(&mut self, func_index: u32) -> Option<&mut AstFuncInfo> {
-        self.functions_ast.get_mut(func_index as usize)
+    pub(crate) fn function_type_at(&self, func_index: u32) -> Option<&FuncType> {
+        self.functions.get(func_index as usize)
     }
 
     pub(crate) fn table_at(&self, table_index: u32) -> Option<&TableInfo> {
@@ -247,236 +201,301 @@ impl Module {
     pub(crate) fn table_mut_at(&mut self, table_index: u32) -> Option<&mut TableInfo> {
         self.tables.get_mut(table_index as usize)
     }
+}
 
-    pub(crate) fn from_wasm_module(wasm_bytes: &[u8]) -> anyhow::Result<Module> {
-        let parser = Parser::new(0);
-        let mut module = Module::new();
-        let mut num_imports = 0usize;
-
-        for payload in parser.parse_all(wasm_bytes) {
-            let payload = payload.context("WASM parse")?;
-            match payload {
-                TypeSection(s) => {
-                    for group in s {
-                        let group = group.context("type group")?;
-                        for sub_ty in group.into_types() {
-                            if let CompositeInnerType::Func(ft) = sub_ty.composite_type.inner {
-                                module.types.push(FuncType::new(
-                                    ft.params().to_vec().into_boxed_slice(),
-                                    ft.results().to_vec().into_boxed_slice(),
-                                ));
-                            }
-                        }
-                    }
-                }
-                ImportSection(s) => {
-                    for import in s.into_imports() {
-                        let import = import.context("import")?;
-                        match import.ty {
-                            TypeRef::Func(type_index) => {
-                                let ty = clone_func_type(&module, type_index)?;
-                                module.functions_ast.push(AstFuncInfo::new(ty, None));
-                                if import.name == "putchar" {
-                                    module.set_putchar_import(Some(num_imports as u32));
-                                }
-                                if import.name == "getchar" {
-                                    module.getchar_import = Some(num_imports as u32);
-                                }
-                                num_imports += 1;
-                            }
-                            TypeRef::Table(table_ty) => {
-                                let _ = table_ty;
-                                bail!("imported tables are not supported");
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                FunctionSection(s) => {
-                    for func in s {
-                        let type_index = func.context("function")?;
-                        let ty = clone_func_type(&module, type_index)?;
-                        module.functions_ast.push(AstFuncInfo::new(ty, None));
-                    }
-                }
-                TableSection(s) => {
-                    for table in s {
-                        let table = table.context("table")?;
-                        let init = match table.init {
-                            TableInit::RefNull => None,
-                            TableInit::Expr(expr) => parse_ref_const_expr(expr)
-                                .context("table init expression must be ref.null or ref.func")?,
-                        };
-                        if let Some(func_index) = init {
-                            ensure_function_exists(
-                                func_index,
-                                module.functions_ast.len(),
-                                "table init",
-                            )?;
-                        }
-                        module
-                            .tables
-                            .push(build_table_info(table.ty, init).context("table section")?);
-                    }
-                }
-                ExportSection(s) => {
-                    for export in s {
-                        let export = export.context("export")?;
-                        if is_entry_export_name(export.name) && export.kind == ExternalKind::Func {
-                            module.set_entry_export(Some(export.index));
-                        }
-                    }
-                }
-                GlobalSection(s) => {
-                    for global in s {
-                        let global = global.context("global")?;
-                        module.globals.push(GlobalInfo::new(
-                            global.ty.content_type,
-                            global.ty.mutable,
-                            parse_const_expr(global.init_expr)?,
-                        ));
-                    }
-                }
-                MemorySection(s) => {
-                    for memory in s {
-                        let memory = memory.context("memory")?;
-                        module.set_num_pages(memory.initial);
-                    }
-                }
-                DataSection(s) => {
-                    for data in s {
-                        let data = data.context("data")?;
-                        let bytes = data.data.to_vec();
-                        match data.kind {
-                            DataKind::Active {
-                                memory_index,
-                                offset_expr,
-                            } => {
-                                if memory_index != 0 {
-                                    bail!(
-                                        "only memory index 0 is supported for active data segments"
-                                    );
-                                }
-                                let offset_node = parse_const_expr(offset_expr)
-                                    .context("active data segment offset expr")?;
-                                let offset = parse_i32_const_offset(
-                                    offset_node,
-                                    "active data segment offset",
-                                    "active data segment offset expr",
-                                )?;
-                                module.preloaded_data.push((offset, bytes));
-                            }
-                            DataKind::Passive => {
-                                bail!("passive data segments are not supported");
-                            }
-                        }
-                    }
-                }
-                ElementSection(s) => {
-                    for element in s {
-                        let element = element.context("element")?;
-                        let (table_index, offset_expr) = match element.kind {
-                            ElementKind::Active {
-                                table_index,
-                                offset_expr,
-                            } => (table_index.unwrap_or(0), offset_expr),
-                            ElementKind::Passive => {
-                                bail!("passive element segments are not supported");
-                            }
-                            ElementKind::Declared => {
-                                bail!("declared element segments are not supported");
-                            }
-                        };
-                        let table_len = module
-                            .table_at(table_index)
-                            .with_context(|| {
-                                format!("element segment targets missing table {}", table_index)
-                            })?
-                            .entries()
-                            .len();
-                        let offset =
-                            parse_const_expr(offset_expr).context("element segment offset expr")?;
-                        let offset = parse_i32_const_offset(
-                            offset,
-                            "element segment offset",
-                            "element segment offset expr",
-                        )?;
-
-                        let mut updates = Vec::new();
-                        match element.items {
-                            ElementItems::Functions(functions) => {
-                                for (i, func) in functions.into_iter().enumerate() {
-                                    updates.push((
-                                        offset + i,
-                                        Some(func.context("element function")?),
-                                    ));
-                                }
-                            }
-                            ElementItems::Expressions(ref_ty, exprs) => {
-                                if ref_ty != RefType::FUNCREF {
-                                    bail!("unsupported element expression ref type {:?}", ref_ty);
-                                }
-                                for (i, expr) in exprs.into_iter().enumerate() {
-                                    let value = parse_ref_const_expr(expr.context("element expr")?)
-                                        .context("unsupported element expression")?;
-                                    updates.push((offset + i, value));
-                                }
-                            }
-                        }
-
-                        let func_count = module.functions_ast.len();
-                        let table = module.table_mut_at(table_index).with_context(|| {
-                            format!(
-                                "element segment targets missing mutable table {}",
-                                table_index
-                            )
-                        })?;
-                        for (entry_index, value) in updates {
-                            if entry_index >= table_len {
-                                bail!(
-                                    "element segment writes table[{}] index {} but table length is {}",
-                                    table_index,
-                                    entry_index,
-                                    table_len
-                                );
-                            }
-                            if let Some(func_index) = value {
-                                ensure_function_exists(func_index, func_count, "element segment")?;
-                            }
-                            table.set_entry(entry_index, value);
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        module.set_num_imported_funcs(num_imports);
-        Ok(module)
+#[allow(dead_code)]
+impl ModuleInfo {
+    pub(crate) fn types_mut(&mut self) -> &mut Vec<FuncType> {
+        &mut self.types
     }
+
+    pub(crate) fn functions_mut(&mut self) -> &mut Vec<FuncType> {
+        &mut self.functions
+    }
+
+    pub(crate) fn globals_mut(&mut self) -> &mut Vec<GlobalInfo> {
+        &mut self.globals
+    }
+
+    pub(crate) fn tables_mut(&mut self) -> &mut Vec<TableInfo> {
+        &mut self.tables
+    }
+
+    pub(crate) fn preloaded_data_mut(&mut self) -> &mut Vec<(usize, Vec<u8>)> {
+        &mut self.preloaded_data
+    }
+}
+
+pub(crate) fn decode_module_info(wasm_bytes: &[u8]) -> anyhow::Result<ModuleInfo> {
+    let parser = Parser::new(0);
+    let mut module = ModuleInfo::default();
+    let mut num_imports = 0usize;
+
+    for payload in parser.parse_all(wasm_bytes) {
+        let payload = payload.context("WASM parse")?;
+        match payload {
+            TypeSection(s) => {
+                for group in s {
+                    let group = group.context("type group")?;
+                    for sub_ty in group.into_types() {
+                        if let CompositeInnerType::Func(ft) = sub_ty.composite_type.inner {
+                            module.types.push(FuncType::new(
+                                ft.params().to_vec().into_boxed_slice(),
+                                ft.results().to_vec().into_boxed_slice(),
+                            ));
+                        }
+                    }
+                }
+            }
+            ImportSection(s) => {
+                for import in s.into_imports() {
+                    let import = import.context("import")?;
+                    match import.ty {
+                        TypeRef::Func(type_index) => {
+                            let ty = clone_func_type(&module, type_index)?;
+                            module.functions.push(ty);
+                            if import.name == "putchar" {
+                                module.set_putchar_import(Some(num_imports as u32));
+                            }
+                            if import.name == "getchar" {
+                                module.getchar_import = Some(num_imports as u32);
+                            }
+                            num_imports += 1;
+                        }
+                        TypeRef::Table(table_ty) => {
+                            let _ = table_ty;
+                            bail!("imported tables are not supported");
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            FunctionSection(s) => {
+                for func in s {
+                    let type_index = func.context("function")?;
+                    let ty = clone_func_type(&module, type_index)?;
+                    module.functions.push(ty);
+                }
+            }
+            TableSection(s) => {
+                for table in s {
+                    let table = table.context("table")?;
+                    let init = match table.init {
+                        TableInit::RefNull => None,
+                        TableInit::Expr(expr) => match parse_ref_const_expr(expr)
+                            .context("table init expression must be ref.null or ref.func")?
+                        {
+                            RefConstInit::Null => None,
+                            RefConstInit::Func(function_index) => Some(function_index),
+                        },
+                    };
+                    if let Some(func_index) = init {
+                        ensure_function_exists(func_index, module.functions.len(), "table init")?;
+                    }
+                    module
+                        .tables
+                        .push(build_table_info(table.ty, init).context("table section")?);
+                }
+            }
+            ExportSection(s) => {
+                for export in s {
+                    let export = export.context("export")?;
+                    if is_entry_export_name(export.name) && export.kind == ExternalKind::Func {
+                        module.set_entry_export(Some(export.index));
+                    }
+                }
+            }
+            GlobalSection(s) => {
+                for global in s {
+                    let global = global.context("global")?;
+                    module.globals.push(GlobalInfo::new(
+                        global.ty.content_type,
+                        parse_const_expr(global.init_expr)?,
+                    ));
+                }
+            }
+            MemorySection(s) => {
+                for memory in s {
+                    let memory = memory.context("memory")?;
+                    module.set_num_pages(memory.initial);
+                }
+            }
+            DataSection(s) => {
+                for data in s {
+                    let data = data.context("data")?;
+                    let bytes = data.data.to_vec();
+                    match data.kind {
+                        DataKind::Active {
+                            memory_index,
+                            offset_expr,
+                        } => {
+                            if memory_index != 0 {
+                                bail!("only memory index 0 is supported for active data segments");
+                            }
+                            let offset = parse_const_expr(offset_expr)
+                                .context("active data segment offset expr")?;
+                            let offset = parse_i32_const_offset(
+                                offset,
+                                "active data segment offset",
+                                "active data segment offset expr",
+                            )?;
+                            module.preloaded_data.push((offset, bytes));
+                        }
+                        DataKind::Passive => {
+                            bail!("passive data segments are not supported");
+                        }
+                    }
+                }
+            }
+            ElementSection(s) => {
+                for element in s {
+                    let element = element.context("element")?;
+                    let (table_index, offset_expr) = match element.kind {
+                        ElementKind::Active {
+                            table_index,
+                            offset_expr,
+                        } => (table_index.unwrap_or(0), offset_expr),
+                        ElementKind::Passive => {
+                            bail!("passive element segments are not supported");
+                        }
+                        ElementKind::Declared => {
+                            bail!("declared element segments are not supported");
+                        }
+                    };
+                    let table_len = module
+                        .table_at(table_index)
+                        .with_context(|| {
+                            format!("element segment targets missing table {}", table_index)
+                        })?
+                        .entries()
+                        .len();
+                    let offset =
+                        parse_const_expr(offset_expr).context("element segment offset expr")?;
+                    let offset = parse_i32_const_offset(
+                        offset,
+                        "element segment offset",
+                        "element segment offset expr",
+                    )?;
+
+                    let mut updates = Vec::new();
+                    match element.items {
+                        ElementItems::Functions(functions) => {
+                            for (i, func) in functions.into_iter().enumerate() {
+                                updates.push((offset + i, Some(func.context("element function")?)));
+                            }
+                        }
+                        ElementItems::Expressions(ref_ty, exprs) => {
+                            if ref_ty != RefType::FUNCREF {
+                                bail!("unsupported element expression ref type {:?}", ref_ty);
+                            }
+                            for (i, expr) in exprs.into_iter().enumerate() {
+                                let value =
+                                    match parse_ref_const_expr(expr.context("element expr")?)
+                                        .context("unsupported element expression")?
+                                    {
+                                        RefConstInit::Null => None,
+                                        RefConstInit::Func(function_index) => Some(function_index),
+                                    };
+                                updates.push((offset + i, value));
+                            }
+                        }
+                    }
+
+                    let func_count = module.functions.len();
+                    let table = module.table_mut_at(table_index).with_context(|| {
+                        format!(
+                            "element segment targets missing mutable table {}",
+                            table_index
+                        )
+                    })?;
+                    for (entry_index, value) in updates {
+                        if entry_index >= table_len {
+                            bail!(
+                                "element segment writes table[{}] index {} but table length is {}",
+                                table_index,
+                                entry_index,
+                                table_len
+                            );
+                        }
+                        if let Some(func_index) = value {
+                            ensure_function_exists(func_index, func_count, "element segment")?;
+                        }
+                        table.set_entry(entry_index, value);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    module.set_num_imported_funcs(num_imports);
+    Ok(module)
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct AstFuncInfo {
-    signature: FuncType,
-    body: Option<AstFuncBody>,
+pub(crate) struct AstModule {
+    info: ModuleInfo,
+    bodies: Vec<Option<AstFuncBody>>,
 }
 
-impl AstFuncInfo {
-    pub(crate) fn new(signature: FuncType, body: Option<AstFuncBody>) -> Self {
-        Self { signature, body }
+impl AstModule {
+    pub(crate) fn new(info: ModuleInfo, bodies: Vec<Option<AstFuncBody>>) -> Self {
+        Self { info, bodies }
     }
 
-    pub(crate) fn signature(&self) -> &FuncType {
-        &self.signature
+    pub(crate) fn info(&self) -> &ModuleInfo {
+        &self.info
     }
 
-    pub(crate) fn body(&self) -> Option<&AstFuncBody> {
-        self.body.as_ref()
+    pub(crate) fn into_info(self) -> ModuleInfo {
+        self.info
     }
 
-    pub(crate) fn set_body(&mut self, body: AstFuncBody) {
-        self.body = Some(body);
+    #[cfg(test)]
+    pub(crate) fn body_at(&self, func_index: u32) -> Option<&AstFuncBody> {
+        self.bodies.get(func_index as usize)?.as_ref()
+    }
+
+    pub(crate) fn body_mut_at(&mut self, func_index: u32) -> Option<&mut Option<AstFuncBody>> {
+        self.bodies.get_mut(func_index as usize)
+    }
+
+    pub(crate) fn bodies(&self) -> &[Option<AstFuncBody>] {
+        &self.bodies
+    }
+
+    pub(crate) fn type_at(&self, type_index: u32) -> Option<&FuncType> {
+        self.info.type_at(type_index)
+    }
+
+    pub(crate) fn function_type_at(&self, func_index: u32) -> Option<&FuncType> {
+        self.info.function_type_at(func_index)
+    }
+
+    pub(crate) fn globals(&self) -> &[GlobalInfo] {
+        self.info.globals()
+    }
+
+    pub(crate) fn num_imported_funcs(&self) -> usize {
+        self.info.num_imported_funcs()
+    }
+
+    pub(crate) fn putchar_import(&self) -> Option<u32> {
+        self.info.putchar_import()
+    }
+
+    pub(crate) fn getchar_import(&self) -> Option<u32> {
+        self.info.getchar_import()
+    }
+
+    pub(crate) fn entry_export(&self) -> Option<u32> {
+        self.info.entry_export()
+    }
+}
+
+impl AstModule {
+    pub(crate) fn bodies_mut(&mut self) -> &mut Vec<Option<AstFuncBody>> {
+        &mut self.bodies
     }
 }
 
@@ -501,22 +520,101 @@ impl AstFuncBody {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct IrFuncInfo {
-    signature: FuncType,
-    body: Option<IrFuncBody>,
+pub(crate) struct IrModule {
+    info: ModuleInfo,
+    bodies: Vec<Option<IrFuncBody>>,
 }
 
-impl IrFuncInfo {
-    pub(crate) fn new(signature: FuncType, body: Option<IrFuncBody>) -> Self {
-        Self { signature, body }
+impl IrModule {
+    pub(crate) fn new(info: ModuleInfo, bodies: Vec<Option<IrFuncBody>>) -> Self {
+        Self { info, bodies }
     }
 
-    pub(crate) fn signature(&self) -> &FuncType {
-        &self.signature
+    pub(crate) fn body_at(&self, func_index: u32) -> Option<&IrFuncBody> {
+        self.bodies.get(func_index as usize)?.as_ref()
     }
 
-    pub(crate) fn body(&self) -> Option<&IrFuncBody> {
-        self.body.as_ref()
+    pub(crate) fn bodies(&self) -> &[Option<IrFuncBody>] {
+        &self.bodies
+    }
+
+    pub(crate) fn type_at(&self, type_index: u32) -> Option<&FuncType> {
+        self.info.type_at(type_index)
+    }
+
+    pub(crate) fn function_type_at(&self, func_index: u32) -> Option<&FuncType> {
+        self.info.function_type_at(func_index)
+    }
+
+    pub(crate) fn globals(&self) -> &[GlobalInfo] {
+        self.info.globals()
+    }
+
+    pub(crate) fn table_at(&self, table_index: u32) -> Option<&TableInfo> {
+        self.info.table_at(table_index)
+    }
+
+    pub(crate) fn num_pages(&self) -> u64 {
+        self.info.num_pages()
+    }
+
+    pub(crate) fn preloaded_data(&self) -> &[(usize, Vec<u8>)] {
+        self.info.preloaded_data()
+    }
+
+    pub(crate) fn putchar_import(&self) -> Option<u32> {
+        self.info.putchar_import()
+    }
+
+    pub(crate) fn getchar_import(&self) -> Option<u32> {
+        self.info.getchar_import()
+    }
+
+    pub(crate) fn entry_export(&self) -> Option<u32> {
+        self.info.entry_export()
+    }
+}
+
+#[cfg(test)]
+impl IrModule {
+    pub(crate) fn set_num_pages(&mut self, num_pages: u64) {
+        self.info.set_num_pages(num_pages);
+    }
+
+    pub(crate) fn set_entry_export(&mut self, entry_export: Option<u32>) {
+        self.info.set_entry_export(entry_export);
+    }
+
+    pub(crate) fn set_num_imported_funcs(&mut self, num_imported_funcs: usize) {
+        self.info.set_num_imported_funcs(num_imported_funcs);
+    }
+
+    pub(crate) fn set_putchar_import(&mut self, putchar_import: Option<u32>) {
+        self.info.set_putchar_import(putchar_import);
+    }
+
+    pub(crate) fn types_mut(&mut self) -> &mut Vec<FuncType> {
+        self.info.types_mut()
+    }
+
+    pub(crate) fn functions_mut(&mut self) -> &mut Vec<FuncType> {
+        self.info.functions_mut()
+    }
+
+    pub(crate) fn globals_mut(&mut self) -> &mut Vec<GlobalInfo> {
+        self.info.globals_mut()
+    }
+
+    pub(crate) fn tables_mut(&mut self) -> &mut Vec<TableInfo> {
+        self.info.tables_mut()
+    }
+
+    pub(crate) fn preloaded_data_mut(&mut self) -> &mut Vec<(usize, Vec<u8>)> {
+        self.info.preloaded_data_mut()
+    }
+
+    pub(crate) fn bodies_mut(&mut self) -> &mut Vec<Option<IrFuncBody>> {
+        &mut self.bodies
     }
 }
 

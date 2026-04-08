@@ -1,11 +1,10 @@
+use super::test_consts::{CALLSTACK_SLOTS_CAP, MEMORY_BYTES_CAP};
 use super::*;
+
 const TEST_MEMORY_BYTES: u32 = 0;
 
-fn empty_memory_layout() -> crate::ir8::MemoryLayout {
-    crate::ir8::MemoryLayout {
-        memory_end: TEST_MEMORY_BYTES,
-        init_bytes: Vec::new(),
-    }
+fn empty_init_bytes() -> Vec<u8> {
+    Vec::new()
 }
 
 fn minimal_program_with_cycle(cycle: crate::ir8::Cycle) -> Ir8Program {
@@ -14,8 +13,10 @@ fn minimal_program_with_cycle(cycle: crate::ir8::Cycle) -> Ir8Program {
         num_vregs: 0,
         func_blocks: Vec::new(),
         cycles: vec![cycle],
-        frame_infos: Vec::new(),
-        memory_layout: empty_memory_layout(),
+        func_entries: Vec::new(),
+        func_num_locals: Vec::new(),
+        memory_end: TEST_MEMORY_BYTES,
+        init_bytes: empty_init_bytes(),
         global_init: Vec::new(),
     }
 }
@@ -42,21 +43,10 @@ fn register_exprs(count: u16) -> HashMap<u16, String> {
         .collect()
 }
 
-fn mem_cell_name(cell_index: usize) -> String {
-    let mem_cells = (MEMORY_BYTES_CAP as usize).div_ceil(2);
-    let width = Emitter::cell_offset_hex_width(mem_cells);
-    Emitter::cell_name("m", cell_index, width)
-}
-
-fn cs_cell_name(cell_index: usize) -> String {
-    let width = Emitter::cell_offset_hex_width(CALLSTACK_SLOTS_CAP);
-    Emitter::cell_name("cs", cell_index, width)
-}
-
 #[test]
 fn emitter_new_uses_program_memory_end_when_memory_cap_is_zero() {
     let mut program = minimal_exit_program();
-    program.memory_layout.memory_end = 17;
+    program.memory_end = 17;
 
     let emitter = Emitter::new(
         &program,
@@ -181,13 +171,13 @@ fn eval_builtin_division_entries_trap_when_js_coprocessor_is_disabled() {
     let now = register_exprs(8);
 
     for builtin in [
-        BUILTIN_DIV_U32,
-        BUILTIN_REM_U32,
-        BUILTIN_DIV_S32,
-        BUILTIN_REM_S32,
+        BuiltinId::DivU32,
+        BuiltinId::RemU32,
+        BuiltinId::DivS32,
+        BuiltinId::RemS32,
     ] {
         let (ret, trap) = emitter.eval_builtin(builtin, &[lhs, rhs], &now);
-        assert_eq!(trap, "1", "builtin {} should hard-trap", builtin.index());
+        assert_eq!(trap, "1", "builtin {:?} should hard-trap", builtin);
         assert_eq!(ret, ["0", "0", "0", "0"]);
     }
 }
@@ -208,7 +198,7 @@ fn eval_builtin_division_uses_js_coprocessor_channel_when_enabled() {
     let rhs = Word::new(Val8::vreg(4), Val8::vreg(5), Val8::vreg(6), Val8::vreg(7));
     let now = register_exprs(8);
 
-    let (ret, trap) = emitter.eval_builtin(BUILTIN_DIV_U32, &[lhs, rhs], &now);
+    let (ret, trap) = emitter.eval_builtin(BuiltinId::DivU32, &[lhs, rhs], &now);
     assert_eq!(
         ret,
         [
@@ -220,7 +210,7 @@ fn eval_builtin_division_uses_js_coprocessor_channel_when_enabled() {
     );
     assert_eq!(trap, "--lt(var(--cop_o0), 0)");
 
-    let (_, shift_trap) = emitter.eval_builtin(BUILTIN_SHL_32, &[lhs, rhs], &now);
+    let (_, shift_trap) = emitter.eval_builtin(BuiltinId::Shl32, &[lhs, rhs], &now);
     assert_eq!(shift_trap, "0");
 }
 
@@ -232,11 +222,11 @@ fn eval_builtin_clz_ctz_css_path_avoids_nested_sel_calls() {
     let lhs = Word::new(Val8::vreg(0), Val8::vreg(1), Val8::vreg(2), Val8::vreg(3));
     let now = register_exprs(4);
 
-    let (clz_ret, clz_trap) = emitter.eval_builtin(BUILTIN_CLZ_32, &[lhs], &now);
+    let (clz_ret, clz_trap) = emitter.eval_builtin(BuiltinId::Clz32, &[lhs], &now);
     assert_eq!(clz_trap, "0");
     assert!(!clz_ret[0].contains("--sel("));
 
-    let (ctz_ret, ctz_trap) = emitter.eval_builtin(BUILTIN_CTZ_32, &[lhs], &now);
+    let (ctz_ret, ctz_trap) = emitter.eval_builtin(BuiltinId::Ctz32, &[lhs], &now);
     assert_eq!(ctz_trap, "0");
     assert!(!ctz_ret[0].contains("--sel("));
 }
@@ -411,7 +401,10 @@ fn emit_html_omits_callstack_state_when_unused() {
     assert!(!html.contains("[Trap: callstack overflow]"));
     assert!(!html.contains(".csvis { width:"));
     assert!(html.contains(".memvis { width:"));
-    assert!(!html.contains(&format!("{}:", cs_cell_name(0))));
+    assert!(!html.contains(&format!(
+        "{}:",
+        Emitter::cell_name("cs", 0, Emitter::cell_offset_hex_width(CALLSTACK_SLOTS_CAP),)
+    )));
 }
 
 #[test]
@@ -441,8 +434,10 @@ fn emit_html_memory_visualizer_tracks_read_and_write_slots() {
             ],
             terminator: Terminator8::Exit { val: None },
         }],
-        frame_infos: Vec::new(),
-        memory_layout: empty_memory_layout(),
+        func_entries: Vec::new(),
+        func_num_locals: Vec::new(),
+        memory_end: TEST_MEMORY_BYTES,
+        init_bytes: empty_init_bytes(),
         global_init: Vec::new(),
     };
 
@@ -472,13 +467,15 @@ fn emit_html_callstack_visualizer_tracks_read_and_write_slots() {
             ],
             terminator: Terminator8::Exit { val: None },
         }],
-        frame_infos: Vec::new(),
-        memory_layout: empty_memory_layout(),
+        func_entries: Vec::new(),
+        func_num_locals: Vec::new(),
+        memory_end: TEST_MEMORY_BYTES,
+        init_bytes: empty_init_bytes(),
         global_init: Vec::new(),
     };
 
     let html = emit_program(&program).expect("emit should succeed");
-    let cs0_name = cs_cell_name(0);
+    let cs0_name = Emitter::cell_name("cs", 0, Emitter::cell_offset_hex_width(CALLSTACK_SLOTS_CAP));
     let cs0_shadow = Emitter::shadow_name(1, &cs0_name);
     assert!(html.contains(".csvis { width:"));
     assert!(html.contains("--cri0:"));
@@ -532,8 +529,10 @@ fn emit_html_partitions_active_flags_when_many_writer_pcs() {
         num_vregs: 4,
         func_blocks: Vec::new(),
         cycles,
-        frame_infos: Vec::new(),
-        memory_layout: empty_memory_layout(),
+        func_entries: Vec::new(),
+        func_num_locals: Vec::new(),
+        memory_end: TEST_MEMORY_BYTES,
+        init_bytes: empty_init_bytes(),
         global_init: Vec::new(),
     };
 
@@ -565,8 +564,10 @@ fn emit_html_mload_helper_avoids_local_aliasing() {
             )],
             terminator: Terminator8::Exit { val: None },
         }],
-        frame_infos: Vec::new(),
-        memory_layout: empty_memory_layout(),
+        func_entries: Vec::new(),
+        func_num_locals: Vec::new(),
+        memory_end: TEST_MEMORY_BYTES,
+        init_bytes: empty_init_bytes(),
         global_init: Vec::new(),
     };
     let html = emit_program(&program).expect("emit should succeed");
@@ -603,8 +604,10 @@ fn emit_html_includes_keyboard_ui_when_getchar_is_used() {
             )],
             terminator: Terminator8::Exit { val: None },
         }],
-        frame_infos: Vec::new(),
-        memory_layout: empty_memory_layout(),
+        func_entries: Vec::new(),
+        func_num_locals: Vec::new(),
+        memory_end: TEST_MEMORY_BYTES,
+        init_bytes: empty_init_bytes(),
         global_init: Vec::new(),
     };
     let html = emit_program(&program).expect("emit should succeed");
@@ -631,7 +634,7 @@ fn emit_html_includes_ne_helper_when_clz_builtin_is_used() {
                 pc: crate::ir8::Pc::new(0),
                 ops: Vec::new(),
                 terminator: Terminator8::CallSetup {
-                    callee_entry: BUILTIN_CLZ_32,
+                    callee_entry: CallTarget::Builtin(BuiltinId::Clz32),
                     cont: crate::ir8::Pc::new(1),
                     args: vec![arg],
                     callee_arg_vregs: vec![arg],
@@ -643,8 +646,10 @@ fn emit_html_includes_ne_helper_when_clz_builtin_is_used() {
                 terminator: Terminator8::Exit { val: None },
             },
         ],
-        frame_infos: Vec::new(),
-        memory_layout: empty_memory_layout(),
+        func_entries: Vec::new(),
+        func_num_locals: Vec::new(),
+        memory_end: TEST_MEMORY_BYTES,
+        init_bytes: empty_init_bytes(),
         global_init: Vec::new(),
     };
 
@@ -663,8 +668,10 @@ fn emit_html_untouched_registers_use_direct_fallback_without_empty_if() {
             ops: Vec::new(),
             terminator: Terminator8::Exit { val: None },
         }],
-        frame_infos: Vec::new(),
-        memory_layout: empty_memory_layout(),
+        func_entries: Vec::new(),
+        func_num_locals: Vec::new(),
+        memory_end: TEST_MEMORY_BYTES,
+        init_bytes: empty_init_bytes(),
         global_init: Vec::new(),
     };
     let html = emit_program(&program).expect("emit should succeed");
@@ -690,8 +697,10 @@ fn emit_html_pc_fallback_increments_for_trivial_fallthrough() {
                 terminator: Terminator8::Exit { val: None },
             },
         ],
-        frame_infos: Vec::new(),
-        memory_layout: empty_memory_layout(),
+        func_entries: Vec::new(),
+        func_num_locals: Vec::new(),
+        memory_end: TEST_MEMORY_BYTES,
+        init_bytes: empty_init_bytes(),
         global_init: Vec::new(),
     };
 
@@ -724,8 +733,10 @@ fn emit_html_pc_keeps_explicit_arm_when_cycle_has_trap_guard() {
                 terminator: Terminator8::Exit { val: None },
             },
         ],
-        frame_infos: Vec::new(),
-        memory_layout: empty_memory_layout(),
+        func_entries: Vec::new(),
+        func_num_locals: Vec::new(),
+        memory_end: TEST_MEMORY_BYTES,
+        init_bytes: empty_init_bytes(),
         global_init: Vec::new(),
     };
 
@@ -744,8 +755,10 @@ fn emit_html_globals_emit_all_lanes_on_single_line_per_global() {
             ops: Vec::new(),
             terminator: Terminator8::Exit { val: None },
         }],
-        frame_infos: Vec::new(),
-        memory_layout: empty_memory_layout(),
+        func_entries: Vec::new(),
+        func_num_locals: Vec::new(),
+        memory_end: TEST_MEMORY_BYTES,
+        init_bytes: empty_init_bytes(),
         global_init: vec![0x1122_3344],
     };
     let html = emit_program(&program).expect("emit should succeed");
@@ -854,14 +867,24 @@ fn emit_html_memory_store_merge_expr_stays_compact() {
             ],
             terminator: Terminator8::Exit { val: None },
         }],
-        frame_infos: Vec::new(),
-        memory_layout: empty_memory_layout(),
+        func_entries: Vec::new(),
+        func_num_locals: Vec::new(),
+        memory_end: TEST_MEMORY_BYTES,
+        init_bytes: empty_init_bytes(),
         global_init: Vec::new(),
     };
 
     let html = emit_program(&program).expect("emit should succeed");
-    let m0_name = mem_cell_name(0);
-    let m1_name = mem_cell_name(1);
+    let m0_name = Emitter::cell_name(
+        "m",
+        0,
+        Emitter::cell_offset_hex_width((MEMORY_BYTES_CAP as usize).div_ceil(2)),
+    );
+    let m1_name = Emitter::cell_name(
+        "m",
+        1,
+        Emitter::cell_offset_hex_width((MEMORY_BYTES_CAP as usize).div_ceil(2)),
+    );
     let m0_start = html
         .find(&format!(" {}: ", m0_name))
         .expect("must emit first memory cell");
@@ -905,13 +928,19 @@ fn emit_html_memory_store_merge_expr_flattens_slot_conditions() {
             ],
             terminator: Terminator8::Exit { val: None },
         }],
-        frame_infos: Vec::new(),
-        memory_layout: empty_memory_layout(),
+        func_entries: Vec::new(),
+        func_num_locals: Vec::new(),
+        memory_end: TEST_MEMORY_BYTES,
+        init_bytes: empty_init_bytes(),
         global_init: Vec::new(),
     };
 
     let html = emit_program(&program).expect("emit should succeed");
-    let m0_name = mem_cell_name(0);
+    let m0_name = Emitter::cell_name(
+        "m",
+        0,
+        Emitter::cell_offset_hex_width((MEMORY_BYTES_CAP as usize).div_ceil(2)),
+    );
     let m0_shadow = Emitter::shadow_name(1, &m0_name);
     assert!(!html.contains("@function --mmerge_byte("));
     assert!(
@@ -938,7 +967,11 @@ fn emit_html_memory_store_merge_expr_flattens_slot_conditions() {
 fn emit_html_memory_store_merge_expr_uses_byte_helpers_when_no_writes() {
     let program = minimal_exit_program();
     let html = emit_program(&program).expect("emit should succeed");
-    let m0_name = mem_cell_name(0);
+    let m0_name = Emitter::cell_name(
+        "m",
+        0,
+        Emitter::cell_offset_hex_width((MEMORY_BYTES_CAP as usize).div_ceil(2)),
+    );
     let m0_shadow = Emitter::shadow_name(1, &m0_name);
     assert!(html.contains("@function --mlo(--w <number>) returns <integer>"));
     assert!(html.contains("@function --mhi(--w <number>) returns <integer>"));
@@ -972,8 +1005,10 @@ fn emit_html_return_falls_back_to_callstack_top_when_cs_load_pc_is_in_prior_cycl
                 terminator: Terminator8::Return { val: None },
             },
         ],
-        frame_infos: Vec::new(),
-        memory_layout: empty_memory_layout(),
+        func_entries: Vec::new(),
+        func_num_locals: Vec::new(),
+        memory_end: TEST_MEMORY_BYTES,
+        init_bytes: empty_init_bytes(),
         global_init: Vec::new(),
     };
 

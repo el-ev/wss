@@ -9,10 +9,6 @@ pub(super) struct InstCombine {
 }
 
 impl InstCombine {
-    pub(super) fn new() -> Self {
-        Self::default()
-    }
-
     pub(super) fn run(&mut self, blocks: &mut [BasicBlock8]) -> bool {
         if blocks.is_empty() {
             self.facts.clear();
@@ -29,7 +25,7 @@ impl InstCombine {
 pub(super) fn instcombine(prog: &mut Ir8Program) -> bool {
     let mut changed = false;
     for blocks in &mut prog.func_blocks {
-        let mut pass = InstCombine::new();
+        let mut pass = InstCombine::default();
         changed |= pass.run(blocks);
     }
     changed

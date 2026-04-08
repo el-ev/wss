@@ -146,13 +146,13 @@ fn lower_numeric_inst(
                 BinOp::DivU | BinOp::RemU | BinOp::DivS | BinOp::RemS => {
                     if ctx.js_coprocessor {
                         let builtin = if *op == BinOp::DivU {
-                            BUILTIN_DIV_U32
+                            BuiltinId::DivU32
                         } else if *op == BinOp::RemU {
-                            BUILTIN_REM_U32
+                            BuiltinId::RemU32
                         } else if *op == BinOp::DivS {
-                            BUILTIN_DIV_S32
+                            BuiltinId::DivS32
                         } else {
-                            BUILTIN_REM_S32
+                            BuiltinId::RemS32
                         };
                         lower_builtin_binop(b, builtin, lhs_word, rhs_word)
                     } else if let Some(denom_const) = word_const_u32(rhs_word) {
@@ -369,7 +369,7 @@ fn lower_call_io_inst(
             b.emit_cs_save(cont, &spill_words);
 
             b.finish(Terminator8::CallSetup {
-                callee_entry,
+                callee_entry: CallTarget::Pc(callee_entry),
                 cont,
                 args: arg_words,
                 callee_arg_vregs,

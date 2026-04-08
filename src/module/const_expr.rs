@@ -1,14 +1,14 @@
 use anyhow::Context;
 use wasmparser::Operator;
 
-use crate::ast::Node;
+use super::{ConstInit, RefConstInit};
 
-pub(super) fn parse_const_expr(expr: wasmparser::ConstExpr<'_>) -> anyhow::Result<Node> {
+pub(super) fn parse_const_expr(expr: wasmparser::ConstExpr<'_>) -> anyhow::Result<ConstInit> {
     let mut reader = expr.get_operators_reader();
     let op = reader.read().context("const expr")?;
     let val = match op {
         // TODO(i64): const-init parsing only accepts i32 const expressions today.
-        Operator::I32Const { value } => Node::I32Const(value),
+        Operator::I32Const { value } => ConstInit::I32(value),
         other => anyhow::bail!("unsupported const init operator: {:?}", other),
     };
     let end = reader.read().context("const expr end")?;
@@ -18,12 +18,14 @@ pub(super) fn parse_const_expr(expr: wasmparser::ConstExpr<'_>) -> anyhow::Resul
     Ok(val)
 }
 
-pub(super) fn parse_ref_const_expr(expr: wasmparser::ConstExpr<'_>) -> anyhow::Result<Option<u32>> {
+pub(super) fn parse_ref_const_expr(
+    expr: wasmparser::ConstExpr<'_>,
+) -> anyhow::Result<RefConstInit> {
     let mut reader = expr.get_operators_reader();
     let op = reader.read().context("const expr")?;
     let val = match op {
-        Operator::RefNull { .. } => None,
-        Operator::RefFunc { function_index } => Some(function_index),
+        Operator::RefNull { .. } => RefConstInit::Null,
+        Operator::RefFunc { function_index } => RefConstInit::Func(function_index),
         other => anyhow::bail!("unsupported const ref operator: {:?}", other),
     };
     let end = reader.read().context("const expr end")?;

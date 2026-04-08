@@ -4,21 +4,23 @@ mod support;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod test_consts {
+    pub(super) const MEMORY_BYTES_CAP: u32 = crate::constants::DEFAULT_MEMORY_BYTES_CAP;
+    pub(super) const CALLSTACK_SLOTS_CAP: usize = crate::constants::DEFAULT_CALLSTACK_SLOTS_CAP;
+}
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write;
 
 use bitflags::bitflags;
+use paste::paste;
 
 use crate::constants::{
-    DEFAULT_CALLSTACK_SLOTS_CAP, DEFAULT_MEMORY_BYTES_CAP, MAX_ADDRESSABLE_MEMORY_BYTES,
+    DEFAULT_CALLSTACK_SLOTS_CAP, DEFAULT_JS_CLOCK_DEBUGGER_ENABLED, DEFAULT_JS_CLOCK_ENABLED,
+    DEFAULT_JS_COPROCESSOR_ENABLED, DEFAULT_MEMORY_BYTES_CAP, MAX_ADDRESSABLE_MEMORY_BYTES,
 };
-use crate::ir8::{
-    BUILTIN_CLZ_32, BUILTIN_CTZ_32, BUILTIN_DIV_S32, BUILTIN_DIV_U32, BUILTIN_PC_BASE,
-    BUILTIN_POPCNT_32, BUILTIN_REM_S32, BUILTIN_REM_U32, BUILTIN_ROTL_32, BUILTIN_ROTR_32,
-    BUILTIN_SHL_32, BUILTIN_SHR_S32, BUILTIN_SHR_U32, Inst8Kind, Ir8Program, Terminator8, TrapCode,
-    Val8, Word,
-};
+use crate::ir8::{BuiltinId, CallTarget, Inst8Kind, Ir8Program, Terminator8, TrapCode, Val8, Word};
 
 const BASE_HTML: &str = include_str!("base.html");
 const PROPS_PLACEHOLDER: &str = "/*__WSS_PROPS__*/";
@@ -27,10 +29,6 @@ const SUPPORT_PLACEHOLDER: &str = "/*__WSS_SUPPORT__*/";
 const JS_CLOCK_ENABLED_PLACEHOLDER: &str = "__WSS_JS_CLOCK_ENABLED__";
 const JS_COPROCESSOR_ENABLED_PLACEHOLDER: &str = "__WSS_JS_COPROCESSOR_ENABLED__";
 const JS_CLOCK_DEBUGGER_ENABLED_PLACEHOLDER: &str = "__WSS_JS_CLOCK_DEBUGGER_ENABLED__";
-#[cfg(test)]
-const MEMORY_BYTES_CAP: u32 = crate::constants::DEFAULT_MEMORY_BYTES_CAP;
-#[cfg(test)]
-const CALLSTACK_SLOTS_CAP: usize = crate::constants::DEFAULT_CALLSTACK_SLOTS_CAP;
 const READ_LOOKUP_CHUNK: usize = 128;
 const VIS_SHADOW_CHUNK: usize = 8;
 const VIS_COLS: usize = 128;
@@ -38,18 +36,6 @@ const MEM_DIRTY_PAGE_CELLS: usize = 16;
 const CALLSTACK_DIRTY_PAGE_CELLS: usize = 16;
 const ACTIVE_FLAG_ARMS_CHUNK: usize = 64;
 const COP_OP_NONE: u8 = 0;
-const COP_OP_DIV_U32: u8 = 1;
-const COP_OP_REM_U32: u8 = 2;
-const COP_OP_DIV_S32: u8 = 3;
-const COP_OP_REM_S32: u8 = 4;
-const COP_OP_SHL_32: u8 = 5;
-const COP_OP_SHR_U32: u8 = 6;
-const COP_OP_SHR_S32: u8 = 7;
-const COP_OP_ROTL_32: u8 = 8;
-const COP_OP_ROTR_32: u8 = 9;
-const COP_OP_CLZ_32: u8 = 10;
-const COP_OP_CTZ_32: u8 = 11;
-const COP_OP_POPCNT_32: u8 = 12;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EmitConfig {
@@ -65,9 +51,9 @@ impl Default for EmitConfig {
         Self {
             memory_bytes_cap: DEFAULT_MEMORY_BYTES_CAP,
             callstack_slots_cap: DEFAULT_CALLSTACK_SLOTS_CAP,
-            js_clock: true,
-            js_coprocessor: false,
-            js_clock_debugger: false,
+            js_clock: DEFAULT_JS_CLOCK_ENABLED,
+            js_coprocessor: DEFAULT_JS_COPROCESSOR_ENABLED,
+            js_clock_debugger: DEFAULT_JS_CLOCK_DEBUGGER_ENABLED,
         }
     }
 }
@@ -96,66 +82,64 @@ impl EmitConfig {
     }
 }
 
-const KEEP_PROP_FB_START: &str = "/*__WSS_KEEP_PROP_FB_START__*/";
-const KEEP_PROP_FB_END: &str = "/*__WSS_KEEP_PROP_FB_END__*/";
-const KEEP_PROP_RA_START: &str = "/*__WSS_KEEP_PROP_RA_START__*/";
-const KEEP_PROP_RA_END: &str = "/*__WSS_KEEP_PROP_RA_END__*/";
-const KEEP_PROP_KB_START: &str = "/*__WSS_KEEP_PROP_KB_START__*/";
-const KEEP_PROP_KB_END: &str = "/*__WSS_KEEP_PROP_KB_END__*/";
-const KEEP_FN_SEL_START: &str = "/*__WSS_KEEP_FN_SEL_START__*/";
-const KEEP_FN_SEL_END: &str = "/*__WSS_KEEP_FN_SEL_END__*/";
-const KEEP_FN_EQZ_START: &str = "/*__WSS_KEEP_FN_EQZ_START__*/";
-const KEEP_FN_EQZ_END: &str = "/*__WSS_KEEP_FN_EQZ_END__*/";
-const KEEP_FN_NEZ_START: &str = "/*__WSS_KEEP_FN_NEZ_START__*/";
-const KEEP_FN_NEZ_END: &str = "/*__WSS_KEEP_FN_NEZ_END__*/";
-const KEEP_FN_EQ_START: &str = "/*__WSS_KEEP_FN_EQ_START__*/";
-const KEEP_FN_EQ_END: &str = "/*__WSS_KEEP_FN_EQ_END__*/";
-const KEEP_FN_NE_START: &str = "/*__WSS_KEEP_FN_NE_START__*/";
-const KEEP_FN_NE_END: &str = "/*__WSS_KEEP_FN_NE_END__*/";
-const KEEP_FN_LT_START: &str = "/*__WSS_KEEP_FN_LT_START__*/";
-const KEEP_FN_LT_END: &str = "/*__WSS_KEEP_FN_LT_END__*/";
-const KEEP_FN_ADDR16_START: &str = "/*__WSS_KEEP_FN_ADDR16_START__*/";
-const KEEP_FN_ADDR16_END: &str = "/*__WSS_KEEP_FN_ADDR16_END__*/";
-const KEEP_FN_MHALF_START: &str = "/*__WSS_KEEP_FN_MHALF_START__*/";
-const KEEP_FN_MHALF_END: &str = "/*__WSS_KEEP_FN_MHALF_END__*/";
-const KEEP_FN_MPAR_START: &str = "/*__WSS_KEEP_FN_MPAR_START__*/";
-const KEEP_FN_MPAR_END: &str = "/*__WSS_KEEP_FN_MPAR_END__*/";
-const KEEP_FN_MLO_START: &str = "/*__WSS_KEEP_FN_MLO_START__*/";
-const KEEP_FN_MLO_END: &str = "/*__WSS_KEEP_FN_MLO_END__*/";
-const KEEP_FN_MHI_START: &str = "/*__WSS_KEEP_FN_MHI_START__*/";
-const KEEP_FN_MHI_END: &str = "/*__WSS_KEEP_FN_MHI_END__*/";
-const KEEP_FN_M16_START: &str = "/*__WSS_KEEP_FN_M16_START__*/";
-const KEEP_FN_M16_END: &str = "/*__WSS_KEEP_FN_M16_END__*/";
-const KEEP_FN_MLOAD_START: &str = "/*__WSS_KEEP_FN_MLOAD_START__*/";
-const KEEP_FN_MLOAD_END: &str = "/*__WSS_KEEP_FN_MLOAD_END__*/";
-const KEEP_SP_IND_CSS_START: &str = "/*__WSS_KEEP_SP_INDICATOR_CSS_START__*/";
-const KEEP_SP_IND_CSS_END: &str = "/*__WSS_KEEP_SP_INDICATOR_CSS_END__*/";
-const KEEP_SP_IND_HTML_START: &str = "<!--__WSS_KEEP_SP_INDICATOR_HTML_START__-->";
-const KEEP_SP_IND_HTML_END: &str = "<!--__WSS_KEEP_SP_INDICATOR_HTML_END__-->";
-const KEEP_MEM_VIS_CSS_START: &str = "/*__WSS_KEEP_MEM_VISUALIZER_CSS_START__*/";
-const KEEP_MEM_VIS_CSS_END: &str = "/*__WSS_KEEP_MEM_VISUALIZER_CSS_END__*/";
-const KEEP_MEM_VIS_HTML_START: &str = "<!--__WSS_KEEP_MEM_VISUALIZER_HTML_START__-->";
-const KEEP_MEM_VIS_HTML_END: &str = "<!--__WSS_KEEP_MEM_VISUALIZER_HTML_END__-->";
-const KEEP_CS_VIS_CSS_START: &str = "/*__WSS_KEEP_CS_VISUALIZER_CSS_START__*/";
-const KEEP_CS_VIS_CSS_END: &str = "/*__WSS_KEEP_CS_VISUALIZER_CSS_END__*/";
-const KEEP_CS_VIS_HTML_START: &str = "<!--__WSS_KEEP_CS_VISUALIZER_HTML_START__-->";
-const KEEP_CS_VIS_HTML_END: &str = "<!--__WSS_KEEP_CS_VISUALIZER_HTML_END__-->";
-const KEEP_KB_CSS_START: &str = "/*__WSS_KEEP_KB_CSS_START__*/";
-const KEEP_KB_CSS_END: &str = "/*__WSS_KEEP_KB_CSS_END__*/";
-const KEEP_KB_HINT_CSS_START: &str = "/*__WSS_KEEP_KB_HINT_CSS_START__*/";
-const KEEP_KB_HINT_CSS_END: &str = "/*__WSS_KEEP_KB_HINT_CSS_END__*/";
-const KEEP_KB_CLK_DEFAULT_START: &str = "/*__WSS_KEEP_KB_CLK_DEFAULT_START__*/";
-const KEEP_KB_CLK_DEFAULT_END: &str = "/*__WSS_KEEP_KB_CLK_DEFAULT_END__*/";
-const KEEP_KB_INPUT_CSS_START: &str = "/*__WSS_KEEP_KB_INPUT_CSS_START__*/";
-const KEEP_KB_INPUT_CSS_END: &str = "/*__WSS_KEEP_KB_INPUT_CSS_END__*/";
-const KEEP_KB_HTML_START: &str = "<!--__WSS_KEEP_KB_HTML_START__-->";
-const KEEP_KB_HTML_END: &str = "<!--__WSS_KEEP_KB_HTML_END__-->";
-const KEEP_JS_CLOCK_RUNTIME_START: &str = "<!--__WSS_KEEP_JS_CLOCK_RUNTIME_START__-->";
-const KEEP_JS_CLOCK_RUNTIME_END: &str = "<!--__WSS_KEEP_JS_CLOCK_RUNTIME_END__-->";
-const KEEP_JS_CLOCK_DEBUGGER_CSS_START: &str = "/*__WSS_KEEP_JS_CLOCK_DEBUGGER_CSS_START__*/";
-const KEEP_JS_CLOCK_DEBUGGER_CSS_END: &str = "/*__WSS_KEEP_JS_CLOCK_DEBUGGER_CSS_END__*/";
-const KEEP_JS_COPROCESSOR_RUNTIME_START: &str = "/*__WSS_KEEP_JS_COPROCESSOR_RUNTIME_START__*/";
-const KEEP_JS_COPROCESSOR_RUNTIME_END: &str = "/*__WSS_KEEP_JS_COPROCESSOR_RUNTIME_END__*/";
+macro_rules! keep_pairs {
+    (
+        css: [$(($css_stem:ident, $css_name:literal)),* $(,)?],
+        html: [$(($html_stem:ident, $html_name:literal)),* $(,)?]
+    ) => {
+        paste! {
+            $(
+                const [<KEEP_ $css_stem _START>]: &str =
+                    concat!("/*__WSS_KEEP_", $css_name, "_START__*/");
+                const [<KEEP_ $css_stem _END>]: &str =
+                    concat!("/*__WSS_KEEP_", $css_name, "_END__*/");
+            )*
+            $(
+                const [<KEEP_ $html_stem _START>]: &str =
+                    concat!("<!--__WSS_KEEP_", $html_name, "_START__-->");
+                const [<KEEP_ $html_stem _END>]: &str =
+                    concat!("<!--__WSS_KEEP_", $html_name, "_END__-->");
+            )*
+        }
+    };
+}
+
+keep_pairs! {
+    css: [
+        (PROP_FB, "PROP_FB"),
+        (PROP_RA, "PROP_RA"),
+        (PROP_KB, "PROP_KB"),
+        (FN_SEL, "FN_SEL"),
+        (FN_EQZ, "FN_EQZ"),
+        (FN_NEZ, "FN_NEZ"),
+        (FN_EQ, "FN_EQ"),
+        (FN_NE, "FN_NE"),
+        (FN_LT, "FN_LT"),
+        (FN_ADDR16, "FN_ADDR16"),
+        (FN_MHALF, "FN_MHALF"),
+        (FN_MPAR, "FN_MPAR"),
+        (FN_MLO, "FN_MLO"),
+        (FN_MHI, "FN_MHI"),
+        (FN_M16, "FN_M16"),
+        (FN_MLOAD, "FN_MLOAD"),
+        (SP_IND_CSS, "SP_INDICATOR_CSS"),
+        (MEM_VIS_CSS, "MEM_VISUALIZER_CSS"),
+        (CS_VIS_CSS, "CS_VISUALIZER_CSS"),
+        (KB_CSS, "KB_CSS"),
+        (KB_HINT_CSS, "KB_HINT_CSS"),
+        (KB_CLK_DEFAULT, "KB_CLK_DEFAULT"),
+        (KB_INPUT_CSS, "KB_INPUT_CSS"),
+        (JS_CLOCK_DEBUGGER_CSS, "JS_CLOCK_DEBUGGER_CSS"),
+        (JS_COPROCESSOR_RUNTIME, "JS_COPROCESSOR_RUNTIME")
+    ],
+    html: [
+        (SP_IND_HTML, "SP_INDICATOR_HTML"),
+        (MEM_VIS_HTML, "MEM_VISUALIZER_HTML"),
+        (CS_VIS_HTML, "CS_VISUALIZER_HTML"),
+        (KB_HTML, "KB_HTML"),
+        (JS_CLOCK_RUNTIME, "JS_CLOCK_RUNTIME")
+    ]
+}
 
 bitflags! {
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -303,7 +287,7 @@ impl<'a> Emitter<'a> {
         let entry_pc = (program.entry_func as u16) * crate::ir8::PC_STRIDE;
 
         let memory_end = if config.memory_bytes_cap == 0 {
-            program.memory_layout.memory_end
+            program.memory_end
         } else {
             config.memory_bytes_cap
         };
@@ -311,18 +295,8 @@ impl<'a> Emitter<'a> {
 
         let mut mem_init = vec![0u16; mem_cells];
         for (i, cell) in mem_init.iter_mut().enumerate() {
-            let lo = program
-                .memory_layout
-                .init_bytes
-                .get(i * 2)
-                .copied()
-                .unwrap_or(0) as u16;
-            let hi = program
-                .memory_layout
-                .init_bytes
-                .get(i * 2 + 1)
-                .copied()
-                .unwrap_or(0) as u16;
+            let lo = program.init_bytes.get(i * 2).copied().unwrap_or(0) as u16;
+            let hi = program.init_bytes.get(i * 2 + 1).copied().unwrap_or(0) as u16;
             *cell = lo | (hi << 8);
         }
 
@@ -369,7 +343,6 @@ impl<'a> Emitter<'a> {
             max_cs_store_slots = max_cs_store_slots.max(cs_stores);
             max_cs_read_slots = max_cs_read_slots.max(cs_reads);
         }
-        let visualizers_enabled = !Self::env_flag("WSS_PERF_MODE");
         let usage = Self::scan_usage(program);
         let features = Self::compute_template_features(
             &usage,
@@ -378,7 +351,6 @@ impl<'a> Emitter<'a> {
             max_mem_read_slots,
             max_cs_store_slots,
             max_cs_read_slots,
-            visualizers_enabled,
         );
 
         Ok(Self {
@@ -487,8 +459,10 @@ impl<'a> Emitter<'a> {
                     _ => {}
                 }
             }
-            if let Terminator8::CallSetup { callee_entry, .. } = cycle.terminator
-                && (callee_entry == BUILTIN_CLZ_32 || callee_entry == BUILTIN_CTZ_32)
+            if let Terminator8::CallSetup {
+                callee_entry: CallTarget::Builtin(BuiltinId::Clz32 | BuiltinId::Ctz32),
+                ..
+            } = cycle.terminator
             {
                 usage.uses_ne = true;
             }
@@ -499,14 +473,6 @@ impl<'a> Emitter<'a> {
         usage
     }
 
-    fn env_flag(name: &str) -> bool {
-        let Ok(v) = std::env::var(name) else {
-            return false;
-        };
-        let norm = v.trim().to_ascii_lowercase();
-        !matches!(norm.as_str(), "" | "0" | "false" | "off" | "no")
-    }
-
     fn compute_template_features(
         usage: &UsageScan,
         uses_callstack: bool,
@@ -514,7 +480,6 @@ impl<'a> Emitter<'a> {
         max_mem_read_slots: usize,
         max_cs_store_slots: usize,
         max_cs_read_slots: usize,
-        visualizers_enabled: bool,
     ) -> TemplateFeatures {
         let mut features = TemplateFeatures::PROP_FB
             | TemplateFeatures::PROP_RA
@@ -524,9 +489,7 @@ impl<'a> Emitter<'a> {
             | TemplateFeatures::FN_MHI
             | TemplateFeatures::FN_M16;
 
-        if visualizers_enabled {
-            features |= TemplateFeatures::MEM_VISUALIZER;
-        }
+        features |= TemplateFeatures::MEM_VISUALIZER;
 
         if usage.uses_getchar {
             features |= TemplateFeatures::PROP_KB;
@@ -555,9 +518,7 @@ impl<'a> Emitter<'a> {
         }
         if uses_callstack {
             features |= TemplateFeatures::SP_INDICATOR;
-            if visualizers_enabled {
-                features |= TemplateFeatures::CS_VISUALIZER;
-            }
+            features |= TemplateFeatures::CS_VISUALIZER;
         }
 
         features

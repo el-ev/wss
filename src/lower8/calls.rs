@@ -98,7 +98,7 @@ fn emit_indirect_target_case(
                     let cont = b.alloc_block();
                     b.emit_cs_save(cont, emit_ctx.spill_words);
                     b.finish(Terminator8::CallSetup {
-                        callee_entry,
+                        callee_entry: CallTarget::Pc(callee_entry),
                         cont,
                         args: arg_words.to_vec(),
                         callee_arg_vregs,
@@ -109,7 +109,7 @@ fn emit_indirect_target_case(
                 }
                 IndirectLoweringMode::TailCall => {
                     b.finish(Terminator8::CallSetup {
-                        callee_entry,
+                        callee_entry: CallTarget::Pc(callee_entry),
                         cont: callee_entry,
                         args: arg_words.to_vec(),
                         callee_arg_vregs,
@@ -156,7 +156,7 @@ pub(super) fn lower_tail_call(
     let (callee_entry, callee_arg_vregs) =
         build_callee_setup(allocs, func, arg_words.len(), "tail_call")?;
     Ok(Terminator8::CallSetup {
-        callee_entry,
+        callee_entry: CallTarget::Pc(callee_entry),
         cont: callee_entry,
         args: arg_words,
         callee_arg_vregs,
@@ -211,7 +211,7 @@ pub(super) fn lower_call_indirect_inst(
 
 pub(super) fn lower_tail_call_indirect(
     b: &mut FuncBuilder,
-    module: &Module,
+    module: &IrModule,
     type_index: u32,
     table_index: u32,
     index: IrNode,
@@ -254,7 +254,7 @@ pub(super) fn lower_tail_call_indirect(
 
 fn build_indirect_dispatch(
     b: &mut FuncBuilder,
-    module: &Module,
+    module: &IrModule,
     req: IndirectDispatchRequest<'_>,
 ) -> anyhow::Result<Vec<(Pc, IndirectTargetKind)>> {
     let table = module.table_at(req.table_index).with_context(|| {
@@ -340,13 +340,12 @@ fn build_indirect_dispatch(
 }
 
 fn resolve_indirect_target(
-    module: &Module,
+    module: &IrModule,
     func_index: u32,
     type_index: u32,
 ) -> Option<IndirectTargetKind> {
     let expected = module.type_at(type_index)?;
-    let callee = module.functions_ir().get(func_index as usize)?;
-    let actual = callee.signature();
+    let actual = module.function_type_at(func_index)?;
     if actual.params() != expected.params() || actual.results() != expected.results() {
         return None;
     }
@@ -357,7 +356,7 @@ fn resolve_indirect_target(
     if Some(func_index) == module.getchar_import() {
         return Some(IndirectTargetKind::Getchar);
     }
-    if callee.body().is_some() {
+    if module.body_at(func_index).is_some() {
         return Some(IndirectTargetKind::Direct(func_index));
     }
     None

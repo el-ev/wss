@@ -2,7 +2,7 @@ use super::*;
 
 pub(super) fn validate_operator(
     op: &Operator,
-    module: &Module,
+    module: &ModuleInfo,
     location: &str,
 ) -> anyhow::Result<()> {
     use Operator::*;
@@ -299,7 +299,7 @@ pub(super) fn validate_operator(
 fn validate_indirect_call(
     type_index: u32,
     table_index: u32,
-    module: &Module,
+    module: &ModuleInfo,
     location: &str,
 ) -> anyhow::Result<()> {
     let ty = module.type_at(type_index).with_context(|| {

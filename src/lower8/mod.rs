@@ -2,16 +2,13 @@ use std::collections::HashMap;
 
 use anyhow::Context;
 
-use crate::ast::{BinOp, Node, RelOp, UnOp};
+use crate::ast::{BinOp, RelOp, UnOp};
 use crate::ir::{BasicBlock, BlockId, Inst, IrNode, Terminator};
 use crate::ir8::{
-    BUILTIN_CLZ_32, BUILTIN_CTZ_32, BUILTIN_DIV_S32, BUILTIN_DIV_U32, BUILTIN_PC_BASE,
-    BUILTIN_POPCNT_32, BUILTIN_REM_S32, BUILTIN_REM_U32, BUILTIN_ROTL_32, BUILTIN_ROTR_32,
-    BUILTIN_SHL_32, BUILTIN_SHR_S32, BUILTIN_SHR_U32, BasicBlock8, BoolNary8, FrameInfo, Inst8,
-    Inst8Kind, Ir8Program, MemoryLayout, PC_STRIDE, Pc, Terminator8, TrapCode, VREG_START, Val8,
-    Word,
+    BasicBlock8, BoolNary8, BuiltinId, CallTarget, Inst8, Inst8Kind, Ir8Program, PC_STRIDE, Pc,
+    Terminator8, TrapCode, VREG_START, Val8, Word,
 };
-use crate::module::{IrFuncInfo, Module};
+use crate::module::{ConstInit, IrFuncBody, IrModule};
 
 mod analysis;
 mod builder;
@@ -27,10 +24,10 @@ pub struct Lower8Config {
 }
 
 fn build_memory_layout(
-    module: &Module,
+    module: &IrModule,
     memory_bytes_cap: u32,
     stack_pointer: Option<u32>,
-) -> anyhow::Result<MemoryLayout> {
+) -> anyhow::Result<(u32, Vec<u8>)> {
     let memory_size = (module.num_pages() as usize) * 65536;
     anyhow::ensure!(
         memory_size <= 65536,
@@ -62,13 +59,10 @@ fn build_memory_layout(
             sp, memory_end
         );
     }
-    Ok(MemoryLayout {
-        memory_end,
-        init_bytes,
-    })
+    Ok((memory_end, init_bytes))
 }
 
-fn build_global_init(module: &Module) -> anyhow::Result<Vec<u32>> {
+fn build_global_init(module: &IrModule) -> anyhow::Result<Vec<u32>> {
     let mut out = Vec::with_capacity(module.globals().len());
     for (i, g) in module.globals().iter().enumerate() {
         // TODO(i64): global lowering currently supports only i32 globals.
@@ -80,8 +74,7 @@ fn build_global_init(module: &Module) -> anyhow::Result<Vec<u32>> {
         );
         let v = match g.init() {
             // TODO(i64): global init lowering currently supports only i32 const inits.
-            Node::I32Const(v) => *v as u32,
-            _ => anyhow::bail!("global {} has unsupported init expr", i),
+            ConstInit::I32(v) => v as u32,
         };
         out.push(v);
     }
@@ -89,7 +82,7 @@ fn build_global_init(module: &Module) -> anyhow::Result<Vec<u32>> {
 }
 
 struct Lower8Context<'a> {
-    module: &'a Module,
+    module: &'a IrModule,
     allocs: &'a [FuncAlloc],
     div_builtins: Option<DivBuiltinFuncs>,
     js_coprocessor: bool,
@@ -449,7 +442,7 @@ fn lower_divrem_const_u32(
             return Some(lower_word_bytewise_op(b, numer, mask, Inst8Kind::And8));
         }
         let sh = Word::from_u32_imm(denom_u32.trailing_zeros());
-        return Some(lower_builtin_binop(b, BUILTIN_SHR_U32, numer, sh));
+        return Some(lower_builtin_binop(b, BuiltinId::ShrU32, numer, sh));
     }
 
     // For non-trivial constants we prefer the shared helper to avoid
@@ -513,7 +506,7 @@ fn lower_divrem_call_via_function(
     b.emit_cs_save(cont, &spill_words);
 
     b.finish(Terminator8::CallSetup {
-        callee_entry,
+        callee_entry: CallTarget::Pc(callee_entry),
         cont,
         args: vec![lhs, rhs],
         callee_arg_vregs,
@@ -526,11 +519,11 @@ fn lower_divrem_call_via_function(
     Ok(dst)
 }
 
-fn lower_builtin_unop(b: &mut FuncBuilder, builtin: Pc, operand: Word) -> Word {
+fn lower_builtin_unop(b: &mut FuncBuilder, builtin: BuiltinId, operand: Word) -> Word {
     let arg0_dst = b.alloc_word();
     let cont = b.alloc_block();
     b.finish(Terminator8::CallSetup {
-        callee_entry: builtin,
+        callee_entry: CallTarget::Builtin(builtin),
         cont,
         args: vec![operand],
         callee_arg_vregs: vec![arg0_dst],
@@ -541,12 +534,12 @@ fn lower_builtin_unop(b: &mut FuncBuilder, builtin: Pc, operand: Word) -> Word {
     dst
 }
 
-fn lower_builtin_binop(b: &mut FuncBuilder, builtin: Pc, lhs: Word, rhs: Word) -> Word {
+fn lower_builtin_binop(b: &mut FuncBuilder, builtin: BuiltinId, lhs: Word, rhs: Word) -> Word {
     let arg0_dst = b.alloc_word();
     let arg1_dst = b.alloc_word();
     let cont = b.alloc_block();
     b.finish(Terminator8::CallSetup {
-        callee_entry: builtin,
+        callee_entry: CallTarget::Builtin(builtin),
         cont,
         args: vec![lhs, rhs],
         callee_arg_vregs: vec![arg0_dst, arg1_dst],
@@ -570,11 +563,11 @@ fn lower_binary(b: &mut FuncBuilder, op: BinOp, lhs: Word, rhs: Word) -> anyhow:
         BinOp::RemU => lower_divrem_u32(b, lhs, rhs, true),
         BinOp::DivS => lower_divrem_s32(b, lhs, rhs, false),
         BinOp::RemS => lower_divrem_s32(b, lhs, rhs, true),
-        BinOp::Shl => lower_builtin_binop(b, BUILTIN_SHL_32, lhs, rhs),
-        BinOp::ShrU => lower_builtin_binop(b, BUILTIN_SHR_U32, lhs, rhs),
-        BinOp::ShrS => lower_builtin_binop(b, BUILTIN_SHR_S32, lhs, rhs),
-        BinOp::Rotl => lower_builtin_binop(b, BUILTIN_ROTL_32, lhs, rhs),
-        BinOp::Rotr => lower_builtin_binop(b, BUILTIN_ROTR_32, lhs, rhs),
+        BinOp::Shl => lower_builtin_binop(b, BuiltinId::Shl32, lhs, rhs),
+        BinOp::ShrU => lower_builtin_binop(b, BuiltinId::ShrU32, lhs, rhs),
+        BinOp::ShrS => lower_builtin_binop(b, BuiltinId::ShrS32, lhs, rhs),
+        BinOp::Rotl => lower_builtin_binop(b, BuiltinId::Rotl32, lhs, rhs),
+        BinOp::Rotr => lower_builtin_binop(b, BuiltinId::Rotr32, lhs, rhs),
     })
 }
 
@@ -778,15 +771,15 @@ fn lower_unary(b: &mut FuncBuilder, op: UnOp, operand: Word) -> anyhow::Result<W
             b.emit(Inst8::with_dst(dst.b3, Inst8Kind::Copy(fill)));
             dst
         }
-        UnOp::Clz => lower_builtin_unop(b, BUILTIN_CLZ_32, operand),
-        UnOp::Ctz => lower_builtin_unop(b, BUILTIN_CTZ_32, operand),
-        UnOp::Popcnt => lower_builtin_unop(b, BUILTIN_POPCNT_32, operand),
+        UnOp::Clz => lower_builtin_unop(b, BuiltinId::Clz32, operand),
+        UnOp::Ctz => lower_builtin_unop(b, BuiltinId::Ctz32, operand),
+        UnOp::Popcnt => lower_builtin_unop(b, BuiltinId::Popcnt32, operand),
     })
 }
 
 fn lower_terminator(
     b: &mut FuncBuilder,
-    module: &Module,
+    module: &IrModule,
     term: &Terminator,
     allocs: &[FuncAlloc],
 ) -> anyhow::Result<()> {
@@ -875,7 +868,7 @@ fn lower_divrem_builtin_function(
     local_vregs: Vec<Word>,
     vreg_start: u16,
     kind: DivBuiltinKind,
-) -> anyhow::Result<(Vec<BasicBlock8>, FrameInfo, u16)> {
+) -> anyhow::Result<(Vec<BasicBlock8>, Pc, u32, u16)> {
     anyhow::ensure!(
         local_vregs.len() >= 2,
         "builtin div/rem function {} expects two parameter words",
@@ -897,32 +890,33 @@ fn lower_divrem_builtin_function(
 
     calls::emit_non_main_return_sequence(&mut b, Some(ret));
 
-    let fi = FrameInfo {
-        entry: Pc::new(func_id as u16 * PC_STRIDE),
-        num_locals: 2, // two parameter words
-    };
-    Ok((b.blocks, fi, b.vreg_counter))
+    Ok((
+        b.blocks,
+        Pc::new(func_id as u16 * PC_STRIDE),
+        2,
+        b.vreg_counter,
+    ))
 }
 
-pub fn lower8_module(module: &Module, memory_bytes_cap: u32) -> anyhow::Result<Ir8Program> {
+pub fn lower8_module(module: &IrModule, memory_bytes_cap: u32) -> anyhow::Result<Ir8Program> {
     lower8_module_with_config(module, memory_bytes_cap, Lower8Config::default())
 }
 
 pub fn lower8_module_with_config(
-    module: &Module,
+    module: &IrModule,
     memory_bytes_cap: u32,
     config: Lower8Config,
 ) -> anyhow::Result<Ir8Program> {
     let entry_func_id = module.entry_export().context("no '_start' export")? as usize;
     let global_init = build_global_init(module)?;
     let stack_pointer = global_init.first().copied();
-    let memory_layout = build_memory_layout(module, memory_bytes_cap, stack_pointer)?;
+    let (memory_end, init_bytes) = build_memory_layout(module, memory_bytes_cap, stack_pointer)?;
     let (mut allocs, mut vreg_counter) = prealloc_locals(module);
 
     let div_builtins = if config.js_coprocessor {
         None
     } else {
-        let user_func_count = module.functions_ir().len() as u32;
+        let user_func_count = module.bodies().len() as u32;
         let builtins = DivBuiltinFuncs {
             div_u: user_func_count,
             rem_u: user_func_count + 1,
@@ -936,9 +930,9 @@ pub fn lower8_module_with_config(
         Some(builtins)
     };
 
-    let mut func_blocks: Vec<Vec<BasicBlock8>> =
-        Vec::with_capacity(module.functions_ir().len() + 4);
-    let mut frame_infos: Vec<FrameInfo> = Vec::with_capacity(module.functions_ir().len() + 4);
+    let mut func_blocks: Vec<Vec<BasicBlock8>> = Vec::with_capacity(module.bodies().len() + 4);
+    let mut func_entries: Vec<Pc> = Vec::with_capacity(module.bodies().len() + 4);
+    let mut func_num_locals: Vec<u32> = Vec::with_capacity(module.bodies().len() + 4);
     let lower_ctx = Lower8Context {
         module,
         allocs: &allocs,
@@ -946,13 +940,13 @@ pub fn lower8_module_with_config(
         js_coprocessor: config.js_coprocessor,
     };
 
-    for (func_id, func) in module.functions_ir().iter().enumerate() {
+    for (func_id, body) in module.bodies().iter().enumerate() {
         let is_entry = func_id == entry_func_id;
         let local_vregs = allocs[func_id].local_vregs.clone();
 
-        let (blocks, fi, new_counter) = lower_function(
+        let (blocks, entry_pc, num_locals, new_counter) = lower_function(
             &lower_ctx,
-            func,
+            body.as_ref(),
             func_id as u32,
             is_entry,
             local_vregs,
@@ -961,7 +955,8 @@ pub fn lower8_module_with_config(
 
         vreg_counter = new_counter;
         func_blocks.push(blocks);
-        frame_infos.push(fi);
+        func_entries.push(entry_pc);
+        func_num_locals.push(num_locals);
     }
 
     if let Some(div_builtins) = div_builtins {
@@ -977,13 +972,13 @@ pub fn lower8_module_with_config(
         for blocks in &func_blocks {
             for bb in blocks {
                 if let Terminator8::CallSetup { callee_entry, .. } = bb.terminator {
-                    if callee_entry == div_u_entry {
+                    if callee_entry == CallTarget::Pc(div_u_entry) {
                         need_div_u = true;
-                    } else if callee_entry == rem_u_entry {
+                    } else if callee_entry == CallTarget::Pc(rem_u_entry) {
                         need_rem_u = true;
-                    } else if callee_entry == div_s_entry {
+                    } else if callee_entry == CallTarget::Pc(div_s_entry) {
                         need_div_s = true;
-                    } else if callee_entry == rem_s_entry {
+                    } else if callee_entry == CallTarget::Pc(rem_s_entry) {
                         need_rem_s = true;
                     }
                 }
@@ -998,17 +993,16 @@ pub fn lower8_module_with_config(
         ] {
             if needed {
                 let local_vregs = allocs[func_id as usize].local_vregs.clone();
-                let (blocks, fi, new_counter) =
+                let (blocks, entry_pc, num_locals, new_counter) =
                     lower_divrem_builtin_function(func_id, local_vregs, vreg_counter, kind)?;
                 vreg_counter = new_counter;
                 func_blocks.push(blocks);
-                frame_infos.push(fi);
+                func_entries.push(entry_pc);
+                func_num_locals.push(num_locals);
             } else {
                 func_blocks.push(Vec::new());
-                frame_infos.push(FrameInfo {
-                    entry: Pc::new(func_id as u16 * PC_STRIDE),
-                    num_locals: 2,
-                });
+                func_entries.push(Pc::new(func_id as u16 * PC_STRIDE));
+                func_num_locals.push(2);
             }
         }
     }
@@ -1017,29 +1011,27 @@ pub fn lower8_module_with_config(
         entry_func: entry_func_id as u32,
         num_vregs: vreg_counter,
         func_blocks,
+        func_entries,
+        func_num_locals,
         cycles: Vec::new(),
-        frame_infos,
-        memory_layout,
+        memory_end,
+        init_bytes,
         global_init,
     })
 }
 
 fn lower_function(
     ctx: &Lower8Context<'_>,
-    func: &IrFuncInfo,
+    body: Option<&IrFuncBody>,
     func_id: u32,
     is_entry: bool,
     local_vregs: Vec<Word>,
     vreg_start: u16,
-) -> anyhow::Result<(Vec<BasicBlock8>, FrameInfo, u16)> {
-    let body = match func.body() {
+) -> anyhow::Result<(Vec<BasicBlock8>, Pc, u32, u16)> {
+    let body = match body {
         Some(b) => b,
         None => {
-            let fi = FrameInfo {
-                entry: Pc::new(0),
-                num_locals: 0,
-            };
-            return Ok((Vec::new(), fi, vreg_start));
+            return Ok((Vec::new(), Pc::new(0), 0, vreg_start));
         }
     };
 
@@ -1072,11 +1064,12 @@ fn lower_function(
     }
 
     let vreg_end = b.vreg_counter;
-    let fi = FrameInfo {
-        entry: Pc::new(func_id as u16 * PC_STRIDE),
+    Ok((
+        b.blocks,
+        Pc::new(func_id as u16 * PC_STRIDE),
         num_locals,
-    };
-    Ok((b.blocks, fi, vreg_end))
+        vreg_end,
+    ))
 }
 
 #[cfg(test)]
@@ -1099,33 +1092,36 @@ mod tests {
         )
     }
 
-    fn mk_single_main_module(main_block: BasicBlock) -> Module {
-        let mut module = Module::new();
+    fn set_ir_functions(
+        module: &mut IrModule,
+        funcs: Vec<(crate::module::FuncType, Option<crate::module::IrFuncBody>)>,
+    ) {
+        *module.functions_mut() = funcs.iter().map(|(sig, _)| sig.clone()).collect();
+        *module.bodies_mut() = funcs.into_iter().map(|(_, body)| body).collect();
+    }
+
+    fn mk_single_main_module(main_block: BasicBlock) -> IrModule {
+        let mut module = IrModule::new(crate::module::ModuleInfo::default(), vec![]);
         module.set_num_pages(1);
         module.set_entry_export(Some(0));
-        *module.functions_ir_mut() = vec![IrFuncInfo::new(
-            mk_sig(&[], &[ValType::I32]),
-            Some(crate::module::IrFuncBody::new(
-                vec![],
-                bid(0),
-                vec![main_block],
-            )),
-        )];
+        set_ir_functions(
+            &mut module,
+            vec![(
+                mk_sig(&[], &[ValType::I32]),
+                Some(crate::module::IrFuncBody::new(
+                    vec![],
+                    bid(0),
+                    vec![main_block],
+                )),
+            )],
+        );
         module
     }
 
-    fn mk_module_with(f: impl FnOnce(&mut Module)) -> Module {
-        let mut module = Module::new();
+    fn mk_module_with(f: impl FnOnce(&mut IrModule)) -> IrModule {
+        let mut module = IrModule::new(crate::module::ModuleInfo::default(), vec![]);
         f(&mut module);
         module
-    }
-
-    fn mk_ir_body(locals: Vec<ValType>, blocks: Vec<BasicBlock>) -> crate::module::IrFuncBody {
-        crate::module::IrFuncBody::new(locals, bid(0), blocks)
-    }
-
-    fn mk_table(entries: Vec<Option<u32>>) -> crate::module::TableInfo {
-        crate::module::TableInfo::new(RefType::FUNCREF, entries)
     }
 
     fn find_main_return_word(blocks: &[BasicBlock8]) -> Word {
@@ -1154,7 +1150,7 @@ mod tests {
         }
     }
 
-    fn assert_lower8_error_contains(module: &Module, memory_bytes_cap: u32, expected: &str) {
+    fn assert_lower8_error_contains(module: &IrModule, memory_bytes_cap: u32, expected: &str) {
         let err = lower8_module(module, memory_bytes_cap)
             .err()
             .expect("expected lower8_module to fail");
@@ -1170,12 +1166,11 @@ mod tests {
         let mut module = mk_single_main_module(mk_trivial_main_block());
         module.globals_mut().push(crate::module::GlobalInfo::new(
             ValType::I32,
-            true,
-            crate::ast::Node::I32Const(4096),
+            crate::module::ConstInit::I32(4096),
         ));
 
         let program = lower8_module(&module, 2048).expect("lower8_module should succeed");
-        assert_eq!(program.memory_layout.memory_end, 2048);
+        assert_eq!(program.memory_end, 2048);
     }
 
     #[test]
@@ -1183,12 +1178,11 @@ mod tests {
         let mut module = mk_single_main_module(mk_trivial_main_block());
         module.globals_mut().push(crate::module::GlobalInfo::new(
             ValType::I32,
-            true,
-            crate::ast::Node::I32Const(4096),
+            crate::module::ConstInit::I32(4096),
         ));
 
         let program = lower8_module(&module, 0).expect("lower8_module should succeed");
-        assert_eq!(program.memory_layout.memory_end, 4096);
+        assert_eq!(program.memory_end, 4096);
     }
 
     #[test]
@@ -1236,23 +1230,10 @@ mod tests {
         let mut module = mk_single_main_module(mk_trivial_main_block());
         module.globals_mut().push(crate::module::GlobalInfo::new(
             ValType::I64,
-            true,
-            crate::ast::Node::I32Const(0),
+            crate::module::ConstInit::I32(0),
         ));
 
         assert_lower8_error_contains(&module, 65536, "global 0 type I64 is unsupported");
-    }
-
-    #[test]
-    fn lower8_reject_non_constant_global_init_expr() {
-        let mut module = mk_single_main_module(mk_trivial_main_block());
-        module.globals_mut().push(crate::module::GlobalInfo::new(
-            ValType::I32,
-            true,
-            crate::ast::Node::GlobalGet(0),
-        ));
-
-        assert_lower8_error_contains(&module, 65536, "global 0 has unsupported init expr");
     }
 
     #[test]
@@ -1376,10 +1357,10 @@ mod tests {
                 Terminator8::CallSetup {
                     callee_entry,
                     ..
-                } if callee_entry == Pc::new(PC_STRIDE)
-                    || callee_entry == Pc::new(2 * PC_STRIDE)
-                    || callee_entry == Pc::new(3 * PC_STRIDE)
-                    || callee_entry == Pc::new(4 * PC_STRIDE)
+                } if callee_entry == CallTarget::Pc(Pc::new(PC_STRIDE))
+                    || callee_entry == CallTarget::Pc(Pc::new(2 * PC_STRIDE))
+                    || callee_entry == CallTarget::Pc(Pc::new(3 * PC_STRIDE))
+                    || callee_entry == CallTarget::Pc(Pc::new(4 * PC_STRIDE))
             )),
             "expected non-trivial div/rem constants to call shared helper functions"
         );
@@ -1416,7 +1397,8 @@ mod tests {
             main_blocks.iter().any(|bb| {
                 matches!(
                     bb.terminator,
-                    Terminator8::CallSetup { callee_entry, .. } if callee_entry == div_u_entry
+                    Terminator8::CallSetup { callee_entry, .. }
+                        if callee_entry == CallTarget::Pc(div_u_entry)
                 )
             }),
             "expected variable division to call shared builtin function entry {}",
@@ -1466,7 +1448,8 @@ mod tests {
             main_blocks.iter().any(|bb| {
                 matches!(
                     bb.terminator,
-                    Terminator8::CallSetup { callee_entry, .. } if callee_entry == BUILTIN_DIV_U32
+                    Terminator8::CallSetup { callee_entry, .. }
+                        if callee_entry == CallTarget::Builtin(BuiltinId::DivU32)
                 )
             }),
             "expected div_u builtin call when js coprocessor lowering is enabled"
@@ -1475,7 +1458,8 @@ mod tests {
             main_blocks.iter().any(|bb| {
                 matches!(
                     bb.terminator,
-                    Terminator8::CallSetup { callee_entry, .. } if callee_entry == BUILTIN_REM_U32
+                    Terminator8::CallSetup { callee_entry, .. }
+                        if callee_entry == CallTarget::Builtin(BuiltinId::RemU32)
                 )
             }),
             "expected rem_u builtin call when js coprocessor lowering is enabled"
@@ -1511,7 +1495,8 @@ mod tests {
                 matches!(
                     bb.terminator,
                     Terminator8::CallSetup { callee_entry, .. }
-                        if callee_entry == div_u_entry || callee_entry == rem_u_entry
+                        if callee_entry == CallTarget::Pc(div_u_entry)
+                            || callee_entry == CallTarget::Pc(rem_u_entry)
                 )
             }),
             "non-trivial constant div/rem should call shared div/rem helper functions"
@@ -1554,7 +1539,9 @@ mod tests {
                     callee_entry,
                     ref callee_arg_vregs,
                     ..
-                } if callee_entry == div_u_entry => callee_arg_vregs.first().copied(),
+                } if callee_entry == CallTarget::Pc(div_u_entry) => {
+                    callee_arg_vregs.first().copied()
+                }
                 _ => None,
             })
             .expect("main should call div_u helper with argument vregs");
@@ -1605,7 +1592,9 @@ mod tests {
                     callee_entry,
                     ref callee_arg_vregs,
                     ..
-                } if callee_entry == div_u_entry => callee_arg_vregs.get(1).copied(),
+                } if callee_entry == CallTarget::Pc(div_u_entry) => {
+                    callee_arg_vregs.get(1).copied()
+                }
                 _ => None,
             })
             .expect("main should call div_u helper with denominator vregs");
@@ -1840,9 +1829,10 @@ mod tests {
             insts: vec![Inst::TableSize(0)],
             terminator: Terminator::Return(Some(r(0))),
         });
-        module
-            .tables_mut()
-            .push(mk_table(vec![None, None, Some(0)]));
+        module.tables_mut().push(crate::module::TableInfo::new(
+            RefType::FUNCREF,
+            vec![None, None, Some(0)],
+        ));
 
         let program = lower8_module(&module, 65536).expect("lower8_module should succeed");
         let ret = find_main_return_word(&program.func_blocks[0]);
@@ -1919,13 +1909,27 @@ mod tests {
         let module = mk_module_with(|module| {
             module.set_num_pages(1);
             module.set_entry_export(Some(1));
-            *module.functions_ir_mut() = vec![
-                IrFuncInfo::new(
-                    fib_sig.clone(),
-                    Some(mk_ir_body(vec![ValType::I32], vec![fib_block])),
-                ),
-                IrFuncInfo::new(main_sig, Some(mk_ir_body(vec![], vec![main_block]))),
-            ];
+            set_ir_functions(
+                module,
+                vec![
+                    (
+                        fib_sig.clone(),
+                        Some(crate::module::IrFuncBody::new(
+                            vec![ValType::I32],
+                            bid(0),
+                            vec![fib_block],
+                        )),
+                    ),
+                    (
+                        main_sig,
+                        Some(crate::module::IrFuncBody::new(
+                            vec![],
+                            bid(0),
+                            vec![main_block],
+                        )),
+                    ),
+                ],
+            );
         });
 
         let program = lower8_module(&module, 65536).expect("lower8_module should succeed");
@@ -2026,14 +2030,31 @@ mod tests {
             module.set_num_pages(1);
             module.set_entry_export(Some(1));
             *module.types_mut() = vec![callee_sig.clone()];
-            *module.tables_mut() = vec![mk_table(vec![Some(0)])];
-            *module.functions_ir_mut() = vec![
-                IrFuncInfo::new(
-                    callee_sig,
-                    Some(mk_ir_body(vec![ValType::I32], vec![callee_block])),
-                ),
-                IrFuncInfo::new(main_sig, Some(mk_ir_body(vec![], vec![main_block]))),
-            ];
+            *module.tables_mut() = vec![crate::module::TableInfo::new(
+                RefType::FUNCREF,
+                vec![Some(0)],
+            )];
+            set_ir_functions(
+                module,
+                vec![
+                    (
+                        callee_sig,
+                        Some(crate::module::IrFuncBody::new(
+                            vec![ValType::I32],
+                            bid(0),
+                            vec![callee_block],
+                        )),
+                    ),
+                    (
+                        main_sig,
+                        Some(crate::module::IrFuncBody::new(
+                            vec![],
+                            bid(0),
+                            vec![main_block],
+                        )),
+                    ),
+                ],
+            );
         });
 
         let program = lower8_module(&module, 65536).expect("lower8_module should succeed");
@@ -2048,7 +2069,8 @@ mod tests {
         assert!(
             main_blocks.iter().any(|bb| matches!(
                 bb.terminator,
-                Terminator8::CallSetup { callee_entry, .. } if callee_entry == Pc::new(0)
+                Terminator8::CallSetup { callee_entry, .. }
+                    if callee_entry == CallTarget::Pc(Pc::new(0))
             )),
             "expected call_indirect to call function 0"
         );
@@ -2087,10 +2109,17 @@ mod tests {
             module.set_num_pages(1);
             module.set_entry_export(Some(0));
             *module.types_mut() = vec![mk_sig(&[], &[ValType::I32])];
-            *module.functions_ir_mut() = vec![IrFuncInfo::new(
-                mk_sig(&[], &[ValType::I32]),
-                Some(mk_ir_body(vec![], vec![main_block])),
-            )];
+            set_ir_functions(
+                module,
+                vec![(
+                    mk_sig(&[], &[ValType::I32]),
+                    Some(crate::module::IrFuncBody::new(
+                        vec![],
+                        bid(0),
+                        vec![main_block],
+                    )),
+                )],
+            );
         });
 
         let err = match lower8_module(&module, 65536) {
@@ -2124,11 +2153,19 @@ mod tests {
             module.set_num_pages(1);
             module.set_entry_export(Some(0));
             *module.types_mut() = vec![mk_sig(&[ValType::I32], &[ValType::I32])];
-            *module.tables_mut() = vec![mk_table(vec![None])];
-            *module.functions_ir_mut() = vec![IrFuncInfo::new(
-                mk_sig(&[], &[ValType::I32]),
-                Some(mk_ir_body(vec![], vec![main_block])),
-            )];
+            *module.tables_mut() =
+                vec![crate::module::TableInfo::new(RefType::FUNCREF, vec![None])];
+            set_ir_functions(
+                module,
+                vec![(
+                    mk_sig(&[], &[ValType::I32]),
+                    Some(crate::module::IrFuncBody::new(
+                        vec![],
+                        bid(0),
+                        vec![main_block],
+                    )),
+                )],
+            );
         });
 
         let err = match lower8_module(&module, 65536) {
@@ -2162,11 +2199,21 @@ mod tests {
             module.set_num_pages(1);
             module.set_entry_export(Some(0));
             *module.types_mut() = vec![mk_sig(&[], &[ValType::I32])];
-            *module.tables_mut() = vec![mk_table(vec![None; 257])];
-            *module.functions_ir_mut() = vec![IrFuncInfo::new(
-                mk_sig(&[], &[ValType::I32]),
-                Some(mk_ir_body(vec![], vec![main_block])),
+            *module.tables_mut() = vec![crate::module::TableInfo::new(
+                RefType::FUNCREF,
+                vec![None; 257],
             )];
+            set_ir_functions(
+                module,
+                vec![(
+                    mk_sig(&[], &[ValType::I32]),
+                    Some(crate::module::IrFuncBody::new(
+                        vec![],
+                        bid(0),
+                        vec![main_block],
+                    )),
+                )],
+            );
         });
 
         let err = match lower8_module(&module, 65536) {
@@ -2203,13 +2250,27 @@ mod tests {
         let module = mk_module_with(|module| {
             module.set_num_pages(1);
             module.set_entry_export(Some(0));
-            *module.functions_ir_mut() = vec![
-                IrFuncInfo::new(
-                    callee_sig,
-                    Some(mk_ir_body(vec![ValType::I32], vec![callee_block])),
-                ),
-                IrFuncInfo::new(caller_sig, Some(mk_ir_body(vec![], vec![caller_block]))),
-            ];
+            set_ir_functions(
+                module,
+                vec![
+                    (
+                        callee_sig,
+                        Some(crate::module::IrFuncBody::new(
+                            vec![ValType::I32],
+                            bid(0),
+                            vec![callee_block],
+                        )),
+                    ),
+                    (
+                        caller_sig,
+                        Some(crate::module::IrFuncBody::new(
+                            vec![],
+                            bid(0),
+                            vec![caller_block],
+                        )),
+                    ),
+                ],
+            );
         });
 
         let program = lower8_module(&module, 65536).expect("lower8_module should succeed");
@@ -2221,7 +2282,7 @@ mod tests {
                 callee_entry,
                 cont,
                 ..
-            } if callee_entry == Pc::new(0) && cont == Pc::new(0)
+            } if callee_entry == CallTarget::Pc(Pc::new(0)) && cont == Pc::new(0)
         )));
         assert!(
             caller_blocks
@@ -2266,14 +2327,31 @@ mod tests {
             module.set_num_pages(1);
             module.set_entry_export(Some(0));
             *module.types_mut() = vec![callee_sig.clone()];
-            *module.tables_mut() = vec![mk_table(vec![Some(0)])];
-            *module.functions_ir_mut() = vec![
-                IrFuncInfo::new(
-                    callee_sig,
-                    Some(mk_ir_body(vec![ValType::I32], vec![callee_block])),
-                ),
-                IrFuncInfo::new(caller_sig, Some(mk_ir_body(vec![], vec![caller_block]))),
-            ];
+            *module.tables_mut() = vec![crate::module::TableInfo::new(
+                RefType::FUNCREF,
+                vec![Some(0)],
+            )];
+            set_ir_functions(
+                module,
+                vec![
+                    (
+                        callee_sig,
+                        Some(crate::module::IrFuncBody::new(
+                            vec![ValType::I32],
+                            bid(0),
+                            vec![callee_block],
+                        )),
+                    ),
+                    (
+                        caller_sig,
+                        Some(crate::module::IrFuncBody::new(
+                            vec![],
+                            bid(0),
+                            vec![caller_block],
+                        )),
+                    ),
+                ],
+            );
         });
 
         let program = lower8_module(&module, 65536).expect("lower8_module should succeed");
@@ -2291,7 +2369,7 @@ mod tests {
                 callee_entry,
                 cont,
                 ..
-            } if callee_entry == Pc::new(0) && cont == Pc::new(0)
+            } if callee_entry == CallTarget::Pc(Pc::new(0)) && cont == Pc::new(0)
         )));
         assert!(
             caller_blocks
@@ -2333,10 +2411,27 @@ mod tests {
         let module = mk_module_with(|module| {
             module.set_num_pages(1);
             module.set_entry_export(Some(1));
-            *module.functions_ir_mut() = vec![
-                IrFuncInfo::new(helper_sig, Some(mk_ir_body(vec![], vec![helper_block]))),
-                IrFuncInfo::new(main_sig, Some(mk_ir_body(vec![], vec![main_block]))),
-            ];
+            set_ir_functions(
+                module,
+                vec![
+                    (
+                        helper_sig,
+                        Some(crate::module::IrFuncBody::new(
+                            vec![],
+                            bid(0),
+                            vec![helper_block],
+                        )),
+                    ),
+                    (
+                        main_sig,
+                        Some(crate::module::IrFuncBody::new(
+                            vec![],
+                            bid(0),
+                            vec![main_block],
+                        )),
+                    ),
+                ],
+            );
         });
 
         let err = match lower8_module(&module, 65536) {
@@ -2376,11 +2471,29 @@ mod tests {
             module.set_num_pages(1);
             module.set_entry_export(Some(1));
             *module.types_mut() = vec![mk_sig(&[ValType::I32], &[ValType::I32])];
-            *module.tables_mut() = vec![mk_table(vec![None])];
-            *module.functions_ir_mut() = vec![
-                IrFuncInfo::new(helper_sig, Some(mk_ir_body(vec![], vec![helper_block]))),
-                IrFuncInfo::new(main_sig, Some(mk_ir_body(vec![], vec![main_block]))),
-            ];
+            *module.tables_mut() =
+                vec![crate::module::TableInfo::new(RefType::FUNCREF, vec![None])];
+            set_ir_functions(
+                module,
+                vec![
+                    (
+                        helper_sig,
+                        Some(crate::module::IrFuncBody::new(
+                            vec![],
+                            bid(0),
+                            vec![helper_block],
+                        )),
+                    ),
+                    (
+                        main_sig,
+                        Some(crate::module::IrFuncBody::new(
+                            vec![],
+                            bid(0),
+                            vec![main_block],
+                        )),
+                    ),
+                ],
+            );
         });
 
         let err = match lower8_module(&module, 65536) {
@@ -2420,11 +2533,31 @@ mod tests {
             module.set_num_pages(1);
             module.set_entry_export(Some(1));
             *module.types_mut() = vec![mk_sig(&[], &[ValType::I32])];
-            *module.tables_mut() = vec![mk_table(vec![None; 257])];
-            *module.functions_ir_mut() = vec![
-                IrFuncInfo::new(helper_sig, Some(mk_ir_body(vec![], vec![helper_block]))),
-                IrFuncInfo::new(main_sig, Some(mk_ir_body(vec![], vec![main_block]))),
-            ];
+            *module.tables_mut() = vec![crate::module::TableInfo::new(
+                RefType::FUNCREF,
+                vec![None; 257],
+            )];
+            set_ir_functions(
+                module,
+                vec![
+                    (
+                        helper_sig,
+                        Some(crate::module::IrFuncBody::new(
+                            vec![],
+                            bid(0),
+                            vec![helper_block],
+                        )),
+                    ),
+                    (
+                        main_sig,
+                        Some(crate::module::IrFuncBody::new(
+                            vec![],
+                            bid(0),
+                            vec![main_block],
+                        )),
+                    ),
+                ],
+            );
         });
 
         let err = match lower8_module(&module, 65536) {
@@ -2466,15 +2599,32 @@ mod tests {
             module.set_putchar_import(Some(0));
             module.set_entry_export(Some(2));
             *module.types_mut() = vec![putchar_sig.clone()];
-            *module.tables_mut() = vec![mk_table(vec![Some(0)])];
-            *module.functions_ir_mut() = vec![
-                IrFuncInfo::new(putchar_sig.clone(), None),
-                IrFuncInfo::new(
-                    main_sig.clone(),
-                    Some(mk_ir_body(vec![], vec![caller_block])),
-                ),
-                IrFuncInfo::new(main_sig, Some(mk_ir_body(vec![], vec![main_block]))),
-            ];
+            *module.tables_mut() = vec![crate::module::TableInfo::new(
+                RefType::FUNCREF,
+                vec![Some(0)],
+            )];
+            set_ir_functions(
+                module,
+                vec![
+                    (putchar_sig.clone(), None),
+                    (
+                        main_sig.clone(),
+                        Some(crate::module::IrFuncBody::new(
+                            vec![],
+                            bid(0),
+                            vec![caller_block],
+                        )),
+                    ),
+                    (
+                        main_sig,
+                        Some(crate::module::IrFuncBody::new(
+                            vec![],
+                            bid(0),
+                            vec![main_block],
+                        )),
+                    ),
+                ],
+            );
         });
 
         let program = lower8_module(&module, 65536).expect("lower8_module should succeed");
@@ -2513,20 +2663,24 @@ mod tests {
         let module = mk_module_with(|module| {
             module.set_num_pages(1);
             module.set_entry_export(Some(0));
-            *module.functions_ir_mut() = vec![IrFuncInfo::new(
-                mk_sig(&[], &[ValType::I32]),
-                Some(mk_ir_body(
-                    vec![],
-                    vec![BasicBlock {
-                        id: bid(0),
-                        insts: vec![],
-                        terminator: Terminator::TailCall {
-                            func: 0,
-                            args: vec![],
-                        },
-                    }],
-                )),
-            )];
+            set_ir_functions(
+                module,
+                vec![(
+                    mk_sig(&[], &[ValType::I32]),
+                    Some(crate::module::IrFuncBody::new(
+                        vec![],
+                        bid(0),
+                        vec![BasicBlock {
+                            id: bid(0),
+                            insts: vec![],
+                            terminator: Terminator::TailCall {
+                                func: 0,
+                                args: vec![],
+                            },
+                        }],
+                    )),
+                )],
+            );
         });
 
         let err = match lower8_module(&module, 65536) {
@@ -2545,22 +2699,26 @@ mod tests {
         let module = mk_module_with(|module| {
             module.set_num_pages(1);
             module.set_entry_export(Some(0));
-            *module.functions_ir_mut() = vec![IrFuncInfo::new(
-                mk_sig(&[], &[ValType::I32]),
-                Some(mk_ir_body(
-                    vec![],
-                    vec![BasicBlock {
-                        id: bid(0),
-                        insts: vec![Inst::I32Const(0)],
-                        terminator: Terminator::TailCallIndirect {
-                            type_index: 0,
-                            table_index: 0,
-                            index: r(0),
-                            args: vec![],
-                        },
-                    }],
-                )),
-            )];
+            set_ir_functions(
+                module,
+                vec![(
+                    mk_sig(&[], &[ValType::I32]),
+                    Some(crate::module::IrFuncBody::new(
+                        vec![],
+                        bid(0),
+                        vec![BasicBlock {
+                            id: bid(0),
+                            insts: vec![Inst::I32Const(0)],
+                            terminator: Terminator::TailCallIndirect {
+                                type_index: 0,
+                                table_index: 0,
+                                index: r(0),
+                                args: vec![],
+                            },
+                        }],
+                    )),
+                )],
+            );
         });
 
         let err = match lower8_module(&module, 65536) {
@@ -2576,7 +2734,7 @@ mod tests {
 
     #[test]
     fn lower8_reject_module_without_start_export() {
-        let module = Module::default();
+        let module = IrModule::new(crate::module::ModuleInfo::default(), vec![]);
         let err = match lower8_module(&module, 65536) {
             Ok(_) => panic!("module without _start export should fail"),
             Err(err) => err,

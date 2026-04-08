@@ -3,16 +3,12 @@ use super::{
     thread_empty_gotos_func,
 };
 use crate::ir8::{
-    Addr, BUILTIN_REM_U32, BUILTIN_SHL_32, BasicBlock8, BoolNary8, FrameInfo, Inst8, Inst8Kind,
-    Ir8Program, MemoryLayout, Pc, Terminator8, Val8, Word,
+    Addr, BasicBlock8, BoolNary8, BuiltinId, CallTarget, Inst8, Inst8Kind, Ir8Program, Pc,
+    Terminator8, Val8, Word,
 };
 
 fn r(i: u16) -> Val8 {
     Val8::vreg(i)
-}
-
-fn bool_or(regs: &[Val8]) -> Inst8Kind {
-    Inst8Kind::BoolOr(BoolNary8::from_regs(regs).unwrap())
 }
 
 fn mk_prog(blocks: Vec<BasicBlock8>) -> Ir8Program {
@@ -20,15 +16,11 @@ fn mk_prog(blocks: Vec<BasicBlock8>) -> Ir8Program {
         entry_func: 0,
         num_vregs: 64,
         func_blocks: vec![blocks],
+        func_entries: vec![Pc::new(0)],
+        func_num_locals: vec![0],
         cycles: Vec::new(),
-        frame_infos: vec![FrameInfo {
-            entry: Pc::new(0),
-            num_locals: 0,
-        }],
-        memory_layout: MemoryLayout {
-            memory_end: 0,
-            init_bytes: Vec::new(),
-        },
+        memory_end: 0,
+        init_bytes: Vec::new(),
         global_init: Vec::new(),
     }
 }
@@ -384,7 +376,7 @@ fn opt8_thread_empty_gotos_rewrites_callsetup_callee_and_cont_targets() {
             id: Pc::new(0),
             insts: vec![],
             terminator: Terminator8::CallSetup {
-                callee_entry: Pc::new(1),
+                callee_entry: CallTarget::Pc(Pc::new(1)),
                 cont: Pc::new(2),
                 args: vec![],
                 callee_arg_vregs: vec![],
@@ -419,7 +411,7 @@ fn opt8_thread_empty_gotos_rewrites_callsetup_callee_and_cont_targets() {
     else {
         panic!("expected entry callsetup");
     };
-    assert_eq!(callee_entry, Pc::new(3));
+    assert_eq!(callee_entry, CallTarget::Pc(Pc::new(3)));
     assert_eq!(cont, Pc::new(4));
 }
 
@@ -482,9 +474,18 @@ fn opt8_combines_bool_or_tree_into_nary_bool_or() {
     let mut prog = mk_prog(vec![BasicBlock8 {
         id: Pc::new(0),
         insts: vec![
-            Inst8::with_dst(r(10), bool_or(&[r(1), r(2)])),
-            Inst8::with_dst(r(11), bool_or(&[r(3), r(4)])),
-            Inst8::with_dst(r(12), bool_or(&[r(10), r(11)])),
+            Inst8::with_dst(
+                r(10),
+                Inst8Kind::BoolOr(BoolNary8::from_regs(&[r(1), r(2)]).unwrap()),
+            ),
+            Inst8::with_dst(
+                r(11),
+                Inst8Kind::BoolOr(BoolNary8::from_regs(&[r(3), r(4)]).unwrap()),
+            ),
+            Inst8::with_dst(
+                r(12),
+                Inst8Kind::BoolOr(BoolNary8::from_regs(&[r(10), r(11)]).unwrap()),
+            ),
         ],
         terminator: Terminator8::Branch {
             cond: r(12),
@@ -518,11 +519,26 @@ fn opt8_combines_large_bool_or_tree_into_single_nary_op() {
     let mut prog = mk_prog(vec![BasicBlock8 {
         id: Pc::new(0),
         insts: vec![
-            Inst8::with_dst(r(10), bool_or(&[r(1), r(2)])),
-            Inst8::with_dst(r(11), bool_or(&[r(3), r(4)])),
-            Inst8::with_dst(r(12), bool_or(&[r(5), r(6)])),
-            Inst8::with_dst(r(13), bool_or(&[r(10), r(11)])),
-            Inst8::with_dst(r(14), bool_or(&[r(13), r(12)])),
+            Inst8::with_dst(
+                r(10),
+                Inst8Kind::BoolOr(BoolNary8::from_regs(&[r(1), r(2)]).unwrap()),
+            ),
+            Inst8::with_dst(
+                r(11),
+                Inst8Kind::BoolOr(BoolNary8::from_regs(&[r(3), r(4)]).unwrap()),
+            ),
+            Inst8::with_dst(
+                r(12),
+                Inst8Kind::BoolOr(BoolNary8::from_regs(&[r(5), r(6)]).unwrap()),
+            ),
+            Inst8::with_dst(
+                r(13),
+                Inst8Kind::BoolOr(BoolNary8::from_regs(&[r(10), r(11)]).unwrap()),
+            ),
+            Inst8::with_dst(
+                r(14),
+                Inst8Kind::BoolOr(BoolNary8::from_regs(&[r(13), r(12)]).unwrap()),
+            ),
         ],
         terminator: Terminator8::Branch {
             cond: r(14),
@@ -560,9 +576,18 @@ fn opt8_combines_ne_bool_or_tree_into_nary_bool_or() {
             Inst8::with_dst(r(11), Inst8Kind::Ne(r(3), r(4))),
             Inst8::with_dst(r(12), Inst8Kind::Ne(r(5), r(6))),
             Inst8::with_dst(r(13), Inst8Kind::Ne(r(7), r(8))),
-            Inst8::with_dst(r(15), bool_or(&[r(10), r(11)])),
-            Inst8::with_dst(r(16), bool_or(&[r(12), r(13)])),
-            Inst8::with_dst(r(14), bool_or(&[r(15), r(16)])),
+            Inst8::with_dst(
+                r(15),
+                Inst8Kind::BoolOr(BoolNary8::from_regs(&[r(10), r(11)]).unwrap()),
+            ),
+            Inst8::with_dst(
+                r(16),
+                Inst8Kind::BoolOr(BoolNary8::from_regs(&[r(12), r(13)]).unwrap()),
+            ),
+            Inst8::with_dst(
+                r(14),
+                Inst8Kind::BoolOr(BoolNary8::from_regs(&[r(15), r(16)]).unwrap()),
+            ),
         ],
         terminator: Terminator8::Branch {
             cond: r(14),
@@ -638,7 +663,10 @@ fn opt8_simplifies_false_compare_checks_inside_nary_bool_or() {
                 Inst8::with_dst(r(21), Inst8Kind::Ne(r(2), r(2))),
                 Inst8::with_dst(r(22), Inst8Kind::Ne(r(2), r(2))),
                 Inst8::with_dst(r(23), Inst8Kind::Ne(r(2), r(2))),
-                Inst8::with_dst(r(4), bool_or(&[r(20), r(21), r(22), r(23)])),
+                Inst8::with_dst(
+                    r(4),
+                    Inst8Kind::BoolOr(BoolNary8::from_regs(&[r(20), r(21), r(22), r(23)]).unwrap()),
+                ),
             ],
             terminator: Terminator8::Branch {
                 cond: r(4),
@@ -991,7 +1019,7 @@ fn opt8_optimizer_keeps_saved_ret_lane_across_later_callsetup() {
             id: Pc::new(0),
             insts: vec![],
             terminator: Terminator8::CallSetup {
-                callee_entry: BUILTIN_SHL_32,
+                callee_entry: CallTarget::Builtin(BuiltinId::Shl32),
                 cont: Pc::new(1),
                 args: vec![],
                 callee_arg_vregs: vec![],
@@ -1004,7 +1032,7 @@ fn opt8_optimizer_keeps_saved_ret_lane_across_later_callsetup() {
                 Inst8::with_dst(r(21), Inst8Kind::Or8(r(20), Val8::imm(0))),
             ],
             terminator: Terminator8::CallSetup {
-                callee_entry: BUILTIN_REM_U32,
+                callee_entry: CallTarget::Builtin(BuiltinId::RemU32),
                 cont: Pc::new(2),
                 args: vec![],
                 callee_arg_vregs: vec![],

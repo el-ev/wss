@@ -5,13 +5,13 @@ pub(super) struct FuncAlloc {
     pub(super) local_vregs: Vec<Word>,
 }
 
-pub(super) fn prealloc_locals(module: &Module) -> (Vec<FuncAlloc>, u16) {
+pub(super) fn prealloc_locals(module: &IrModule) -> (Vec<FuncAlloc>, u16) {
     let mut counter = VREG_START;
     let allocs = module
-        .functions_ir()
+        .bodies()
         .iter()
-        .map(|func| {
-            let n = func.body().map_or(0, |b| b.locals().len());
+        .map(|body| {
+            let n = body.as_ref().map_or(0, |b| b.locals().len());
             let local_vregs = (0..n)
                 .map(|_| {
                     // TODO(i64): each local is currently represented as one 4-byte word.
@@ -101,13 +101,14 @@ impl FuncBuilder {
     }
 
     pub(super) fn alloc_block(&mut self) -> Pc {
-        let pc = Pc::new(self.func_id as u16 * PC_STRIDE + self.next_blk_idx);
+        let pc_value = self.func_id * u32::from(PC_STRIDE) + u32::from(self.next_blk_idx);
         assert!(
-            pc.index() < BUILTIN_PC_BASE,
-            "function {} ran out of block Pcs (block {} would enter builtin range)",
+            pc_value <= u32::from(u16::MAX),
+            "function {} ran out of block PCs (block {} would exceed u16 range)",
             self.func_id,
             self.next_blk_idx,
         );
+        let pc = Pc::new(pc_value as u16);
         self.next_blk_idx += 1;
         pc
     }

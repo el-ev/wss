@@ -1,23 +1,22 @@
 use anyhow::{Context, bail};
 use wasmparser::{BlockType, Operator, Parser, Payload::*, RefType, ValType};
 
-use crate::module::{FuncType, Module};
+use crate::module::{FuncType, ModuleInfo};
 
 mod operators;
 
 use operators::validate_operator;
 
-pub fn validate(wasm_bytes: &[u8]) -> anyhow::Result<()> {
-    let module = Module::from_wasm_module(wasm_bytes).context("parse module for validation")?;
-    validate_imports_exports(&module)?;
-    validate_types(&module)?;
-    validate_globals(&module)?;
-    validate_tables(&module)?;
-    validate_code_section(wasm_bytes, &module)?;
+pub fn validate(module: &ModuleInfo, wasm_bytes: &[u8]) -> anyhow::Result<()> {
+    validate_imports_exports(module)?;
+    validate_types(module)?;
+    validate_globals(module)?;
+    validate_tables(module)?;
+    validate_code_section(wasm_bytes, module)?;
     Ok(())
 }
 
-fn validate_globals(module: &Module) -> anyhow::Result<()> {
+fn validate_globals(module: &ModuleInfo) -> anyhow::Result<()> {
     module
         .globals()
         .iter()
@@ -25,7 +24,7 @@ fn validate_globals(module: &Module) -> anyhow::Result<()> {
         .try_for_each(|(i, g)| validate_valtype(g.content_type(), &format!("global[{i}]")))
 }
 
-fn validate_tables(module: &Module) -> anyhow::Result<()> {
+fn validate_tables(module: &ModuleInfo) -> anyhow::Result<()> {
     module
         .tables()
         .iter()
@@ -47,7 +46,7 @@ fn validate_tables(module: &Module) -> anyhow::Result<()> {
         })
 }
 
-fn validate_imports_exports(module: &Module) -> anyhow::Result<()> {
+fn validate_imports_exports(module: &ModuleInfo) -> anyhow::Result<()> {
     if module.num_imported_funcs() > 2 {
         bail!(
             "expected at most 2 imported functions (getchar, putchar), got {}",
@@ -79,7 +78,7 @@ fn validate_imports_exports(module: &Module) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn validate_types(module: &Module) -> anyhow::Result<()> {
+fn validate_types(module: &ModuleInfo) -> anyhow::Result<()> {
     module.types().iter().enumerate().try_for_each(|(i, ty)| {
         ty.params()
             .iter()
@@ -104,7 +103,11 @@ fn validate_valtype(v: ValType, location: &str) -> anyhow::Result<()> {
     }
 }
 
-fn validate_block_type(blockty: BlockType, module: &Module, location: &str) -> anyhow::Result<()> {
+fn validate_block_type(
+    blockty: BlockType,
+    module: &ModuleInfo,
+    location: &str,
+) -> anyhow::Result<()> {
     match blockty {
         BlockType::Empty => Ok(()),
         BlockType::Type(v) => validate_valtype(v, location),
@@ -123,7 +126,7 @@ fn validate_block_type(blockty: BlockType, module: &Module, location: &str) -> a
     }
 }
 
-fn validate_code_section(wasm_bytes: &[u8], module: &Module) -> anyhow::Result<()> {
+fn validate_code_section(wasm_bytes: &[u8], module: &ModuleInfo) -> anyhow::Result<()> {
     let parser = Parser::new(0);
     let mut code_index = 0usize;
     for payload in parser.parse_all(wasm_bytes) {
@@ -157,9 +160,8 @@ fn validate_code_section(wasm_bytes: &[u8], module: &Module) -> anyhow::Result<(
     Ok(())
 }
 
-fn func_signature(module: &Module, func_index: u32) -> anyhow::Result<&FuncType> {
+fn func_signature(module: &ModuleInfo, func_index: u32) -> anyhow::Result<&FuncType> {
     module
-        .func_ast_at(func_index)
+        .function_type_at(func_index)
         .with_context(|| format!("function index {} out of bounds", func_index))
-        .map(|f| f.signature())
 }
