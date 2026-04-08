@@ -37,6 +37,10 @@ fn emit_program_with_config(program: &Ir8Program, config: EmitConfig) -> anyhow:
     super::emit_program(program, config)
 }
 
+fn test_config() -> EmitConfig {
+    EmitConfig::default()
+}
+
 fn register_exprs(count: u16) -> HashMap<u16, String> {
     (0..count)
         .map(|idx| (idx, format!("var(--r{})", idx)))
@@ -50,10 +54,9 @@ fn emitter_new_uses_program_memory_end_when_memory_cap_is_zero() {
 
     let emitter = Emitter::new(
         &program,
-        EmitConfig {
-            memory_bytes_cap: 0,
-            ..EmitConfig::default()
-        },
+        test_config()
+            .with_memory_bytes_cap(0)
+            .expect("test config should be valid"),
     )
     .expect("emitter should initialize");
     assert_eq!(emitter.memory_end, 17);
@@ -187,10 +190,9 @@ fn eval_builtin_division_uses_js_coprocessor_channel_when_enabled() {
     let program = minimal_exit_program();
     let emitter = Emitter::new(
         &program,
-        EmitConfig {
-            js_coprocessor: true,
-            ..EmitConfig::default()
-        },
+        test_config()
+            .with_js_coprocessor(true)
+            .expect("test config should be valid"),
     )
     .expect("emitter should initialize");
 
@@ -236,10 +238,9 @@ fn emit_html_includes_js_coprocessor_runtime_when_enabled() {
     let program = minimal_exit_program();
     let html = emit_program_with_config(
         &program,
-        EmitConfig {
-            js_coprocessor: true,
-            ..EmitConfig::default()
-        },
+        test_config()
+            .with_js_coprocessor(true)
+            .expect("test config should be valid"),
     )
     .expect("emit should succeed");
     assert!(html.contains("@property --cop_op"));
@@ -255,10 +256,9 @@ fn emit_html_omits_js_clock_runtime_when_disabled() {
     let program = minimal_exit_program();
     let html = emit_program_with_config(
         &program,
-        EmitConfig {
-            js_clock: false,
-            ..EmitConfig::default()
-        },
+        test_config()
+            .with_js_clock(false)
+            .expect("test config should be valid"),
     )
     .expect("emit should succeed");
     assert!(!html.contains("<script>"));
@@ -272,11 +272,9 @@ fn emit_html_includes_js_clock_debugger_when_enabled() {
     let program = minimal_exit_program();
     let html = emit_program_with_config(
         &program,
-        EmitConfig {
-            js_clock: true,
-            js_clock_debugger: true,
-            ..EmitConfig::default()
-        },
+        test_config()
+            .with_js_clock_debugger(true)
+            .expect("test config should be valid"),
     )
     .expect("emit should succeed");
     assert!(html.contains("let paused = false;"));
@@ -294,11 +292,9 @@ fn emit_html_omits_js_clock_debugger_css_when_disabled() {
     let program = minimal_exit_program();
     let html = emit_program_with_config(
         &program,
-        EmitConfig {
-            js_clock: true,
-            js_clock_debugger: false,
-            ..EmitConfig::default()
-        },
+        test_config()
+            .with_js_clock_debugger(false)
+            .expect("test config should be valid"),
     )
     .expect("emit should succeed");
     assert!(!html.contains(".wss-debug-trigger {"));
@@ -310,16 +306,10 @@ fn emit_html_omits_js_clock_debugger_css_when_disabled() {
 
 #[test]
 fn emit_html_rejects_js_clock_debugger_without_js_clock() {
-    let program = minimal_exit_program();
-    let err = emit_program_with_config(
-        &program,
-        EmitConfig {
-            js_clock: false,
-            js_clock_debugger: true,
-            ..EmitConfig::default()
-        },
-    )
-    .expect_err("emit should fail without js_clock");
+    let err = test_config()
+        .with_js_clock(false)
+        .and_then(|config| config.with_js_clock_debugger(true))
+        .expect_err("config construction should fail without js_clock");
     assert!(
         err.to_string()
             .contains("js clock debugger requires js clock stepping to be enabled")
@@ -331,11 +321,9 @@ fn emit_html_omits_js_coprocessor_runtime_when_disabled() {
     let program = minimal_exit_program();
     let html = emit_program_with_config(
         &program,
-        EmitConfig {
-            js_clock: true,
-            js_coprocessor: false,
-            ..EmitConfig::default()
-        },
+        test_config()
+            .with_js_coprocessor(false)
+            .expect("test config should be valid"),
     )
     .expect("emit should succeed");
     assert!(!html.contains("const jsCoprocessorEnabled"));

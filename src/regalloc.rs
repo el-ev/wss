@@ -171,9 +171,10 @@ fn collect_referenced_groups(
                 if reg.reg_index().unwrap() < VREG_START {
                     continue;
                 }
-                let func_id = owners.owner_of(reg).with_context(|| {
-                    format!("missing owner for vreg r{}", reg.reg_index().unwrap())
-                })?;
+                let func_id = owners.owner_of(reg).context(format!(
+                    "missing owner for vreg r{}",
+                    reg.reg_index().unwrap()
+                ))?;
                 referenced[func_id].insert(group_of(reg));
             }
 
@@ -181,9 +182,10 @@ fn collect_referenced_groups(
                 if reg.reg_index().unwrap() < VREG_START {
                     continue;
                 }
-                let func_id = owners.owner_of(reg).with_context(|| {
-                    format!("missing owner for vreg r{}", reg.reg_index().unwrap())
-                })?;
+                let func_id = owners.owner_of(reg).context(format!(
+                    "missing owner for vreg r{}",
+                    reg.reg_index().unwrap()
+                ))?;
                 referenced[func_id].insert(group_of(reg));
             }
         }
@@ -534,14 +536,15 @@ fn map_vreg(
         return Ok(reg);
     }
 
-    let owner = owners
-        .owner_of(reg)
-        .with_context(|| format!("missing owner for vreg r{}", reg.reg_index().unwrap()))?;
+    let owner = owners.owner_of(reg).context(format!(
+        "missing owner for vreg r{}",
+        reg.reg_index().unwrap()
+    ))?;
     // TODO(i64): group/lane decomposition assumes 4 lanes per logical value.
     let group = group_of(reg);
     let lane = reg.reg_index().unwrap() % 4;
 
-    let local_phys_group = allocations[owner].get(&group).copied().with_context(|| {
+    let local_phys_group = allocations[owner].get(&group).copied().context({
         format!(
             "missing allocation for group {} (vreg r{})",
             group,
@@ -792,7 +795,7 @@ fn remap_dense_reg(reg: Val8, dense_map: &HashMap<Val8, Val8>) -> anyhow::Result
     if reg.is_imm() || reg.reg_index().unwrap() < VREG_START {
         return Ok(reg);
     }
-    dense_map.get(&reg).copied().with_context(|| {
+    dense_map.get(&reg).copied().context({
         format!(
             "missing dense remap for physical vreg r{}",
             reg.reg_index().unwrap()

@@ -124,15 +124,15 @@ fn main() -> Result<()> {
     let js_clock = args.js_clock_enabled();
     let output_file = args.output.clone();
     let dump = args.dump_config();
-    let emit_config = EmitConfig {
-        memory_bytes_cap: args.memory_bytes,
-        callstack_slots_cap: args.stack_slots,
+    let emit_config = EmitConfig::new(
+        args.memory_bytes,
+        args.stack_slots,
         js_clock,
-        js_coprocessor: args.js_coprocessor,
-        js_clock_debugger: args.js_clock_debugger,
-    };
+        args.js_coprocessor,
+        args.js_clock_debugger,
+    )?;
 
-    let wasm_bytes = std::fs::read(&args.wasm_file).with_context(|| {
+    let wasm_bytes = std::fs::read(&args.wasm_file).context({
         format!(
             "failed to read WebAssembly file '{}'",
             args.wasm_file.display()
@@ -189,8 +189,10 @@ fn main() -> Result<()> {
     }
 
     let result = emit_program(&ir8, emit_config)?;
-    std::fs::write(&output_file, result)
-        .with_context(|| format!("failed to write output HTML '{}'", output_file.display()))?;
+    std::fs::write(&output_file, result).context(format!(
+        "failed to write output HTML '{}'",
+        output_file.display()
+    ))?;
 
     Ok(())
 }

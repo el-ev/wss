@@ -25,7 +25,7 @@ pub fn parse_module(info: ModuleInfo, wasm_bytes: &[u8]) -> anyhow::Result<AstMo
             let parsed = parse_function(&module, idx, body)?;
             *module
                 .body_mut_at(idx as u32)
-                .with_context(|| format!("code section function index {} out of bounds", idx))? =
+                .context(format!("code section function index {} out of bounds", idx))? =
                 Some(parsed);
             func_index += 1;
         }
@@ -50,7 +50,7 @@ fn call_shape_from_func(
     function_index: u32,
     op_name: &str,
 ) -> anyhow::Result<(usize, bool)> {
-    let sig = module.function_type_at(function_index).with_context(|| {
+    let sig = module.function_type_at(function_index).context({
         format!(
             "{}: function index {} out of bounds",
             op_name, function_index
@@ -64,9 +64,10 @@ fn call_shape_from_type(
     type_index: u32,
     op_name: &str,
 ) -> anyhow::Result<(usize, bool)> {
-    let sig = module
-        .type_at(type_index)
-        .with_context(|| format!("{}: type index {} out of bounds", op_name, type_index))?;
+    let sig = module.type_at(type_index).context(format!(
+        "{}: type index {} out of bounds",
+        op_name, type_index
+    ))?;
     Ok((sig.params().len(), !sig.results().is_empty()))
 }
 
@@ -92,7 +93,7 @@ fn parse_function(
     let mut locals = Vec::new();
     let signature = module
         .function_type_at(func_index as u32)
-        .with_context(|| format!("function index {} out of bounds", func_index))?;
+        .context(format!("function index {} out of bounds", func_index))?;
     locals.extend(signature.params().iter().copied());
     extend_locals_from_body(&mut locals, &body)?;
     let mut ref_stack: Vec<AstRef> = Vec::new();

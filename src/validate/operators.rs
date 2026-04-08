@@ -209,7 +209,7 @@ pub(super) fn validate_operator(
             }
         }
         TableSize { table } => {
-            module.table_at(*table).with_context(|| {
+            module.table_at(*table).context({
                 format!(
                     "table.size table index {} out of bounds at {}",
                     table, location
@@ -302,7 +302,7 @@ fn validate_indirect_call(
     module: &ModuleInfo,
     location: &str,
 ) -> anyhow::Result<()> {
-    let ty = module.type_at(type_index).with_context(|| {
+    let ty = module.type_at(type_index).context({
         format!(
             "call_indirect type index {} out of bounds at {}",
             type_index, location
@@ -323,7 +323,7 @@ fn validate_indirect_call(
         validate_valtype(ty, &format!("type[{}].{}[{}]", type_index, kind, i))?;
     }
 
-    let table = module.table_at(table_index).with_context(|| {
+    let table = module.table_at(table_index).context({
         format!(
             "call_indirect table index {} out of bounds at {}",
             table_index, location

@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use anyhow::Context;
 
 use crate::ast::{BinOp, RelOp, UnOp};
+use crate::constants::MAX_ADDRESSABLE_MEMORY_BYTES;
 use crate::ir::{BasicBlock, BlockId, Inst, IrNode, Terminator};
 use crate::ir8::{
     BasicBlock8, BoolNary8, BuiltinId, CallTarget, Inst8, Inst8Kind, Ir8Program, PC_STRIDE, Pc,
@@ -25,36 +26,42 @@ pub struct Lower8Config {
 
 fn build_memory_layout(
     module: &IrModule,
-    memory_bytes_cap: u32,
+    runtime_memory_limit_bytes: u32,
     stack_pointer: Option<u32>,
 ) -> anyhow::Result<(u32, Vec<u8>)> {
-    let memory_size = (module.num_pages() as usize) * 65536;
+    let initial_memory_bytes = (module.num_pages() as usize) * 65536;
     anyhow::ensure!(
-        memory_size <= 65536,
+        initial_memory_bytes <= MAX_ADDRESSABLE_MEMORY_BYTES as usize,
         "linear memory too large for 16-bit addressing ({} bytes)",
-        memory_size
+        initial_memory_bytes
     );
-    let mut init_bytes = vec![0u8; memory_size];
+    let mut init_bytes = vec![0u8; initial_memory_bytes];
     for (off, bytes) in module.preloaded_data() {
         let end = off + bytes.len();
-        anyhow::ensure!(end <= memory_size, "data segment out of bounds");
+        anyhow::ensure!(end <= initial_memory_bytes, "data segment out of bounds");
         init_bytes[*off..end].copy_from_slice(bytes);
     }
-    let memory_end = if memory_bytes_cap == 0 {
-        stack_pointer.context("memory bytes cap is 0, but global 0 (stack pointer) is missing")?
+    let runtime_memory_end = if runtime_memory_limit_bytes == 0 {
+        stack_pointer
+            .context("runtime memory limit is 0, but global 0 (stack pointer) is missing")?
     } else {
-        memory_bytes_cap
+        runtime_memory_limit_bytes
     };
-    crate::constants::validate_memory_bytes_cap(memory_end)?;
+    anyhow::ensure!(
+        runtime_memory_limit_bytes <= MAX_ADDRESSABLE_MEMORY_BYTES,
+        "runtime memory limit {} exceeds 16-bit address space limit {}",
+        runtime_memory_limit_bytes,
+        MAX_ADDRESSABLE_MEMORY_BYTES
+    );
     if let Some(sp) = stack_pointer
-        && sp > memory_end
+        && sp > runtime_memory_end
     {
         eprintln!(
-            "warning: global 0 stack pointer ({}) exceeds memory cap ({} bytes)",
-            sp, memory_end
+            "warning: global 0 stack pointer ({}) exceeds runtime memory limit ({} bytes)",
+            sp, runtime_memory_end
         );
     }
-    Ok((memory_end, init_bytes))
+    Ok((runtime_memory_end, init_bytes))
 }
 
 fn build_global_init(module: &IrModule) -> anyhow::Result<Vec<u32>> {
@@ -487,7 +494,7 @@ fn lower_divrem_call_via_function(
     let div_builtins = div_builtins.context("div/rem helper table is unavailable")?;
     let callee_id = div_builtins
         .for_op(op)
-        .with_context(|| format!("expected div/rem op, got {:?}", op))?;
+        .context(format!("expected div/rem op, got {:?}", op))?;
     let callee_alloc = &allocs[callee_id as usize];
     let callee_arg_vregs = divrem_param_vregs(&callee_alloc.local_vregs, callee_id)?.to_vec();
     let callee_entry = Pc::new(callee_id as u16 * PC_STRIDE);
@@ -1184,7 +1191,7 @@ mod tests {
         assert_lower8_error_contains(
             &module,
             0,
-            "memory bytes cap is 0, but global 0 (stack pointer) is missing",
+            "runtime memory limit is 0, but global 0 (stack pointer) is missing",
         );
     }
 
@@ -1194,7 +1201,7 @@ mod tests {
         assert_lower8_error_contains(
             &module,
             crate::constants::MAX_ADDRESSABLE_MEMORY_BYTES + 1,
-            "memory bytes cap 65537 exceeds 16-bit address space limit 65536",
+            "runtime memory limit 65537 exceeds 16-bit address space limit 65536",
         );
     }
 
