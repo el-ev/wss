@@ -1,3 +1,4 @@
+__attribute((optnone))
 int _start(void) {
   unsigned int a = 0xf0f0f0f0u;
   unsigned int b = 0x0ff00ff0u;

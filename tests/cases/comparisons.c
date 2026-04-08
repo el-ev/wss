@@ -1,6 +1,9 @@
+static volatile int seed_a = -3;
+static volatile int seed_b = 2;
+
 int _start(void) {
-  int a = -3;
-  int b = 2;
+  int a = seed_a;
+  int b = seed_b;
   unsigned int ua = (unsigned int)a;
   unsigned int ub = 2u;
 
@@ -13,4 +16,3 @@ int _start(void) {
   if (ua != ub) mask |= 32;
   return mask; // 57 (0x39)
 }
-
