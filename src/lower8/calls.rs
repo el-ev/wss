@@ -347,7 +347,7 @@ fn resolve_indirect_target(
     type_index: u32,
 ) -> Option<IndirectTargetKind> {
     let expected = module.type_at(type_index)?;
-    let actual = module.function_type_at(func_index)?;
+    let actual = module.func_type_at(func_index)?;
     if actual.params() != expected.params() || actual.results() != expected.results() {
         return None;
     }

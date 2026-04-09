@@ -162,6 +162,6 @@ fn validate_code_section(wasm_bytes: &[u8], module: &ModuleInfo) -> anyhow::Resu
 
 fn func_signature(module: &ModuleInfo, func_index: u32) -> anyhow::Result<&FuncType> {
     module
-        .function_type_at(func_index)
+        .func_type_at(func_index)
         .context(format!("function index {} out of bounds", func_index))
 }

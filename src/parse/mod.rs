@@ -47,7 +47,7 @@ fn call_shape_from_func(
     function_index: u32,
     op_name: &str,
 ) -> anyhow::Result<(usize, bool)> {
-    let sig = module.function_type_at(function_index).context({
+    let sig = module.func_type_at(function_index).context({
         format!(
             "{}: function index {} out of bounds",
             op_name, function_index
@@ -89,7 +89,7 @@ fn parse_function(
 ) -> anyhow::Result<AstFuncBody> {
     let mut locals = Vec::new();
     let signature = module
-        .function_type_at(func_index as u32)
+        .func_type_at(func_index as u32)
         .context(format!("function index {} out of bounds", func_index))?;
     locals.extend(signature.params().iter().copied());
     extend_locals_from_body(&mut locals, &body)?;

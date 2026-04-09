@@ -568,7 +568,7 @@ fn lower_node(
 }
 
 fn call_returns_void(module: &AstModule, func: u32) -> anyhow::Result<bool> {
-    let sig = module.function_type_at(func).context(format!(
+    let sig = module.func_type_at(func).context(format!(
         "tail-call fusion: function index {} out of bounds",
         func
     ))?;

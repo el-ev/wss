@@ -36,7 +36,7 @@ fn opt8_dce_keeps_cs_load_pc_before_return() {
         terminator: Terminator8::Return { val: None },
     }]);
 
-    let _ = dead_code_elim(&mut prog);
+    dead_code_elim(&mut prog);
     let insts = &prog.func_blocks[0][0].insts;
     assert!(
         insts
@@ -248,7 +248,7 @@ fn opt8_copy_elim_rewrites_cross_block_copy_uses_when_source_is_stable() {
         },
     ]);
 
-    let _ = copy_elim(&mut prog);
+    copy_elim(&mut prog);
 
     let b0 = &prog.func_blocks[0][0];
     assert!(
@@ -279,7 +279,7 @@ fn opt8_copy_elim_pools_repeated_constants() {
         },
     ]);
 
-    let _ = copy_elim(&mut prog);
+    copy_elim(&mut prog);
 
     let count_ff = prog.func_blocks[0]
         .iter()
