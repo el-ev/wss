@@ -601,136 +601,50 @@ impl<'a> Emitter<'a> {
     }
 
     fn apply_template_features(&self, mut html: String) -> String {
-        {
-            let mut apply_feature = |feature: TemplateFeatures, start: &str, end: &str| {
-                Self::apply_marked_section(&mut html, start, end, self.features.contains(feature));
+        macro_rules! section {
+            ($keep:expr, $stem:ident) => {
+                paste! {
+                    Self::apply_marked_section(
+                        &mut html,
+                        [<KEEP_ $stem _START>],
+                        [<KEEP_ $stem _END>],
+                        $keep,
+                    );
+                }
             };
-
-            apply_feature(
-                TemplateFeatures::PROP_FB,
-                KEEP_PROP_FB_START,
-                KEEP_PROP_FB_END,
-            );
-            apply_feature(
-                TemplateFeatures::PROP_RA,
-                KEEP_PROP_RA_START,
-                KEEP_PROP_RA_END,
-            );
-            apply_feature(
-                TemplateFeatures::PROP_KB,
-                KEEP_PROP_KB_START,
-                KEEP_PROP_KB_END,
-            );
-            apply_feature(TemplateFeatures::FN_SEL, KEEP_FN_SEL_START, KEEP_FN_SEL_END);
-            apply_feature(TemplateFeatures::FN_EQZ, KEEP_FN_EQZ_START, KEEP_FN_EQZ_END);
-            apply_feature(TemplateFeatures::FN_NEZ, KEEP_FN_NEZ_START, KEEP_FN_NEZ_END);
-            apply_feature(TemplateFeatures::FN_EQ, KEEP_FN_EQ_START, KEEP_FN_EQ_END);
-            apply_feature(TemplateFeatures::FN_NE, KEEP_FN_NE_START, KEEP_FN_NE_END);
-            apply_feature(TemplateFeatures::FN_LT, KEEP_FN_LT_START, KEEP_FN_LT_END);
-            apply_feature(
-                TemplateFeatures::FN_ADDR16,
-                KEEP_FN_ADDR16_START,
-                KEEP_FN_ADDR16_END,
-            );
-            apply_feature(
-                TemplateFeatures::FN_MHALF,
-                KEEP_FN_MHALF_START,
-                KEEP_FN_MHALF_END,
-            );
-            apply_feature(
-                TemplateFeatures::FN_MPAR,
-                KEEP_FN_MPAR_START,
-                KEEP_FN_MPAR_END,
-            );
-            apply_feature(TemplateFeatures::FN_MLO, KEEP_FN_MLO_START, KEEP_FN_MLO_END);
-            apply_feature(TemplateFeatures::FN_MHI, KEEP_FN_MHI_START, KEEP_FN_MHI_END);
-            apply_feature(TemplateFeatures::FN_M16, KEEP_FN_M16_START, KEEP_FN_M16_END);
-            apply_feature(
-                TemplateFeatures::FN_MLOAD,
-                KEEP_FN_MLOAD_START,
-                KEEP_FN_MLOAD_END,
-            );
-            apply_feature(
-                TemplateFeatures::SP_INDICATOR,
-                KEEP_SP_IND_CSS_START,
-                KEEP_SP_IND_CSS_END,
-            );
-            apply_feature(
-                TemplateFeatures::SP_INDICATOR,
-                KEEP_SP_IND_HTML_START,
-                KEEP_SP_IND_HTML_END,
-            );
-            apply_feature(
-                TemplateFeatures::MEM_VISUALIZER,
-                KEEP_MEM_VIS_CSS_START,
-                KEEP_MEM_VIS_CSS_END,
-            );
-            apply_feature(
-                TemplateFeatures::MEM_VISUALIZER,
-                KEEP_MEM_VIS_HTML_START,
-                KEEP_MEM_VIS_HTML_END,
-            );
-            apply_feature(
-                TemplateFeatures::CS_VISUALIZER,
-                KEEP_CS_VIS_CSS_START,
-                KEEP_CS_VIS_CSS_END,
-            );
-            apply_feature(
-                TemplateFeatures::CS_VISUALIZER,
-                KEEP_CS_VIS_HTML_START,
-                KEEP_CS_VIS_HTML_END,
-            );
-            apply_feature(
-                TemplateFeatures::PROP_KB,
-                KEEP_KB_CSS_START,
-                KEEP_KB_CSS_END,
-            );
-            apply_feature(
-                TemplateFeatures::PROP_KB,
-                KEEP_KB_HINT_CSS_START,
-                KEEP_KB_HINT_CSS_END,
-            );
-            apply_feature(
-                TemplateFeatures::PROP_KB,
-                KEEP_KB_CLK_DEFAULT_START,
-                KEEP_KB_CLK_DEFAULT_END,
-            );
-            apply_feature(
-                TemplateFeatures::PROP_KB,
-                KEEP_KB_INPUT_CSS_START,
-                KEEP_KB_INPUT_CSS_END,
-            );
-            apply_feature(
-                TemplateFeatures::PROP_KB,
-                KEEP_KB_HTML_START,
-                KEEP_KB_HTML_END,
-            );
         }
-        Self::apply_marked_section(
-            &mut html,
-            KEEP_JS_COPROCESSOR_RUNTIME_START,
-            KEEP_JS_COPROCESSOR_RUNTIME_END,
-            self.js_coprocessor,
-        );
-        Self::apply_marked_section(
-            &mut html,
-            KEEP_JS_CLOCK_RUNTIME_START,
-            KEEP_JS_CLOCK_RUNTIME_END,
-            self.js_clock,
-        );
-        Self::apply_marked_section(
-            &mut html,
-            KEEP_JS_CLOCK_DEBUGGER_CSS_START,
-            KEEP_JS_CLOCK_DEBUGGER_CSS_END,
-            self.js_clock_debugger,
-        );
-        Self::apply_marked_section(
-            &mut html,
-            KEEP_JS_CLOCK_DEBUGGER_RUNTIME_START,
-            KEEP_JS_CLOCK_DEBUGGER_RUNTIME_END,
-            self.js_clock_debugger,
-        );
-
+        let f = &self.features;
+        section!(f.contains(TemplateFeatures::PROP_FB), PROP_FB);
+        section!(f.contains(TemplateFeatures::PROP_RA), PROP_RA);
+        section!(f.contains(TemplateFeatures::PROP_KB), PROP_KB);
+        section!(f.contains(TemplateFeatures::FN_SEL), FN_SEL);
+        section!(f.contains(TemplateFeatures::FN_EQZ), FN_EQZ);
+        section!(f.contains(TemplateFeatures::FN_NEZ), FN_NEZ);
+        section!(f.contains(TemplateFeatures::FN_EQ), FN_EQ);
+        section!(f.contains(TemplateFeatures::FN_NE), FN_NE);
+        section!(f.contains(TemplateFeatures::FN_LT), FN_LT);
+        section!(f.contains(TemplateFeatures::FN_ADDR16), FN_ADDR16);
+        section!(f.contains(TemplateFeatures::FN_MHALF), FN_MHALF);
+        section!(f.contains(TemplateFeatures::FN_MPAR), FN_MPAR);
+        section!(f.contains(TemplateFeatures::FN_MLO), FN_MLO);
+        section!(f.contains(TemplateFeatures::FN_MHI), FN_MHI);
+        section!(f.contains(TemplateFeatures::FN_M16), FN_M16);
+        section!(f.contains(TemplateFeatures::FN_MLOAD), FN_MLOAD);
+        section!(f.contains(TemplateFeatures::SP_INDICATOR), SP_IND_CSS);
+        section!(f.contains(TemplateFeatures::SP_INDICATOR), SP_IND_HTML);
+        section!(f.contains(TemplateFeatures::MEM_VISUALIZER), MEM_VIS_CSS);
+        section!(f.contains(TemplateFeatures::MEM_VISUALIZER), MEM_VIS_HTML);
+        section!(f.contains(TemplateFeatures::CS_VISUALIZER), CS_VIS_CSS);
+        section!(f.contains(TemplateFeatures::CS_VISUALIZER), CS_VIS_HTML);
+        section!(f.contains(TemplateFeatures::PROP_KB), KB_CSS);
+        section!(f.contains(TemplateFeatures::PROP_KB), KB_HINT_CSS);
+        section!(f.contains(TemplateFeatures::PROP_KB), KB_CLK_DEFAULT);
+        section!(f.contains(TemplateFeatures::PROP_KB), KB_INPUT_CSS);
+        section!(f.contains(TemplateFeatures::PROP_KB), KB_HTML);
+        section!(self.js_coprocessor, JS_COPROCESSOR_RUNTIME);
+        section!(self.js_clock, JS_CLOCK_RUNTIME);
+        section!(self.js_clock_debugger, JS_CLOCK_DEBUGGER_CSS);
+        section!(self.js_clock_debugger, JS_CLOCK_DEBUGGER_RUNTIME);
         html
     }
 }

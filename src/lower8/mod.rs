@@ -191,15 +191,17 @@ fn emit_bool_chain(
 }
 
 fn lower_eq32_bit(b: &mut FuncBuilder, lhs: Word, rhs: Word) -> Val8 {
-    let eq0 = b.alloc_reg();
-    b.emit(Inst8::with_dst(eq0, Inst8Kind::Eq(lhs.b0, rhs.b0)));
-    let eq1 = b.alloc_reg();
-    b.emit(Inst8::with_dst(eq1, Inst8Kind::Eq(lhs.b1, rhs.b1)));
-    let eq2 = b.alloc_reg();
-    b.emit(Inst8::with_dst(eq2, Inst8Kind::Eq(lhs.b2, rhs.b2)));
-    let eq3 = b.alloc_reg();
-    b.emit(Inst8::with_dst(eq3, Inst8Kind::Eq(lhs.b3, rhs.b3)));
-    emit_bool_chain(b, &[eq0, eq1, eq2, eq3], Inst8Kind::BoolAnd)
+    let eqs: Vec<Val8> = lhs
+        .bytes()
+        .iter()
+        .zip(rhs.bytes().iter())
+        .map(|(&l, &r)| {
+            let dst = b.alloc_reg();
+            b.emit(Inst8::with_dst(dst, Inst8Kind::Eq(l, r)));
+            dst
+        })
+        .collect();
+    emit_bool_chain(b, &eqs, Inst8Kind::BoolAnd)
 }
 
 fn lower_ltu32_bit(b: &mut FuncBuilder, lhs: Word, rhs: Word) -> Val8 {
@@ -240,12 +242,7 @@ fn add_lsb_bit(b: &mut FuncBuilder, w: Word, bit: Val8, zero: Val8) -> Word {
 }
 
 fn word_bit(b: &mut FuncBuilder, w: Word, bit_index: u8, zero: Val8) -> Val8 {
-    let byte = match bit_index / 8 {
-        0 => w.b0,
-        1 => w.b1,
-        2 => w.b2,
-        _ => w.b3,
-    };
+    let byte = w.byte(bit_index / 8);
     let mask = Val8::imm(1u8 << (bit_index % 8));
     let masked = b.alloc_reg();
     b.emit(Inst8::with_dst(masked, Inst8Kind::And8(byte, mask)));
@@ -348,42 +345,28 @@ fn divrem_u32_core(b: &mut FuncBuilder, numer: Word, denom: Word) -> (Word, Word
     (quotient_state, remainder_state)
 }
 
-fn lower_divrem_u32(b: &mut FuncBuilder, numer: Word, denom: Word, want_rem: bool) -> Word {
-    let zero_word = Word::from_u32_imm(0);
-    let denom_zero = lower_eq32_bit(b, denom, zero_word);
+fn emit_zero_check_trap(b: &mut FuncBuilder, denom: Word) {
+    let denom_zero = lower_eq32_bit(b, denom, Word::from_u32_imm(0));
     let trap_pc = b.alloc_block();
     let cont_pc = b.alloc_block();
-
     b.finish(Terminator8::Branch {
         cond: denom_zero,
         if_true: trap_pc,
         if_false: cont_pc,
     });
-
     b.switch_to(trap_pc);
     b.finish(Terminator8::Trap(TrapCode::DivisionByZero));
-
     b.switch_to(cont_pc);
+}
+
+fn lower_divrem_u32(b: &mut FuncBuilder, numer: Word, denom: Word, want_rem: bool) -> Word {
+    emit_zero_check_trap(b, denom);
     let (q, r) = divrem_u32_core(b, numer, denom);
     if want_rem { r } else { q }
 }
 
 fn lower_divrem_s32(b: &mut FuncBuilder, numer: Word, denom: Word, want_rem: bool) -> Word {
-    let zero_word = Word::from_u32_imm(0);
-    let denom_zero = lower_eq32_bit(b, denom, zero_word);
-    let trap_pc = b.alloc_block();
-    let cont_pc = b.alloc_block();
-
-    b.finish(Terminator8::Branch {
-        cond: denom_zero,
-        if_true: trap_pc,
-        if_false: cont_pc,
-    });
-
-    b.switch_to(trap_pc);
-    b.finish(Terminator8::Trap(TrapCode::DivisionByZero));
-
-    b.switch_to(cont_pc);
+    emit_zero_check_trap(b, denom);
     let zero = Val8::imm(0);
     let numer_sign = word_bit(b, numer, 31, zero);
     let denom_sign = word_bit(b, denom, 31, zero);
@@ -444,7 +427,7 @@ fn lower_divrem_const_u32(
             return Some(lower_word_bytewise_op(b, numer, mask, Inst8Kind::And8));
         }
         let sh = Word::from_u32_imm(denom_u32.trailing_zeros());
-        return Some(lower_builtin_binop(b, BuiltinId::ShrU32, numer, sh));
+        return Some(lower_builtin_call(b, BuiltinId::ShrU32, vec![numer, sh]));
     }
 
     // For non-trivial constants we prefer the shared helper to avoid
@@ -494,7 +477,7 @@ fn lower_divrem_call_via_function(
     let div_builtins = div_builtins.context("div/rem helper table is unavailable")?;
     let callee_id = div_builtins
         .for_op(op)
-        .context(format!("expected div/rem op, got {:?}", op))?;
+        .with_context(|| format!("expected div/rem op, got {:?}", op))?;
     let callee_alloc = &allocs[callee_id as usize];
     let callee_arg_vregs = divrem_param_vregs(&callee_alloc.local_vregs, callee_id)?.to_vec();
     let callee_entry = Pc::new(callee_id as u16 * PC_STRIDE);
@@ -516,30 +499,34 @@ fn lower_divrem_call_via_function(
     Ok(dst)
 }
 
-fn lower_builtin_unop(b: &mut FuncBuilder, builtin: BuiltinId, operand: Word) -> Word {
-    let arg0_dst = b.alloc_word();
-    let cont = b.alloc_block();
-    b.finish(Terminator8::CallSetup {
-        callee_entry: CallTarget::Builtin(builtin),
-        cont,
-        args: vec![operand],
-        callee_arg_vregs: vec![arg0_dst],
-    });
-    b.switch_to(cont);
+/// Sign-extend from `check_byte` (0 for i8, 1 for i16): copies bytes 0..=check_byte,
+/// fills the rest with the sign bit.
+fn lower_sign_extend(b: &mut FuncBuilder, operand: Word, check_byte: usize) -> Word {
     let dst = b.alloc_word();
-    b.copy_ret_to_word(dst);
+    let is_neg = b.alloc_reg();
+    let op_bytes = operand.bytes();
+    b.emit(Inst8::with_dst(
+        is_neg,
+        Inst8Kind::GeU(op_bytes[check_byte], Val8::imm(0x80)),
+    ));
+    let fill = b.alloc_reg();
+    b.emit(Inst8::with_dst(fill, Inst8Kind::Sub(Val8::imm(0), is_neg)));
+    let dst_bytes = dst.bytes();
+    for i in 0..4 {
+        let src = if i <= check_byte { op_bytes[i] } else { fill };
+        b.emit(Inst8::with_dst(dst_bytes[i], Inst8Kind::Copy(src)));
+    }
     dst
 }
 
-fn lower_builtin_binop(b: &mut FuncBuilder, builtin: BuiltinId, lhs: Word, rhs: Word) -> Word {
-    let arg0_dst = b.alloc_word();
-    let arg1_dst = b.alloc_word();
+fn lower_builtin_call(b: &mut FuncBuilder, builtin: BuiltinId, args: Vec<Word>) -> Word {
+    let callee_arg_vregs: Vec<Word> = args.iter().map(|_| b.alloc_word()).collect();
     let cont = b.alloc_block();
     b.finish(Terminator8::CallSetup {
         callee_entry: CallTarget::Builtin(builtin),
         cont,
-        args: vec![lhs, rhs],
-        callee_arg_vregs: vec![arg0_dst, arg1_dst],
+        args,
+        callee_arg_vregs,
     });
     b.switch_to(cont);
     let dst = b.alloc_word();
@@ -560,11 +547,11 @@ fn lower_binary(b: &mut FuncBuilder, op: BinOp, lhs: Word, rhs: Word) -> anyhow:
         BinOp::RemU => lower_divrem_u32(b, lhs, rhs, true),
         BinOp::DivS => lower_divrem_s32(b, lhs, rhs, false),
         BinOp::RemS => lower_divrem_s32(b, lhs, rhs, true),
-        BinOp::Shl => lower_builtin_binop(b, BuiltinId::Shl32, lhs, rhs),
-        BinOp::ShrU => lower_builtin_binop(b, BuiltinId::ShrU32, lhs, rhs),
-        BinOp::ShrS => lower_builtin_binop(b, BuiltinId::ShrS32, lhs, rhs),
-        BinOp::Rotl => lower_builtin_binop(b, BuiltinId::Rotl32, lhs, rhs),
-        BinOp::Rotr => lower_builtin_binop(b, BuiltinId::Rotr32, lhs, rhs),
+        BinOp::Shl => lower_builtin_call(b, BuiltinId::Shl32, vec![lhs, rhs]),
+        BinOp::ShrU => lower_builtin_call(b, BuiltinId::ShrU32, vec![lhs, rhs]),
+        BinOp::ShrS => lower_builtin_call(b, BuiltinId::ShrS32, vec![lhs, rhs]),
+        BinOp::Rotl => lower_builtin_call(b, BuiltinId::Rotl32, vec![lhs, rhs]),
+        BinOp::Rotr => lower_builtin_call(b, BuiltinId::Rotr32, vec![lhs, rhs]),
     })
 }
 
@@ -682,18 +669,20 @@ fn lower_gtu32(b: &mut FuncBuilder, lhs: Word, rhs: Word) -> Word {
     lower_ltu32(b, rhs, lhs)
 }
 
+fn negate_cmp(b: &mut FuncBuilder, result: Word) -> Word {
+    let bit = b.alloc_reg();
+    b.emit(Inst8::with_dst(bit, Inst8Kind::BoolNot(result.b0)));
+    bool_to_word(b, bit)
+}
+
 fn lower_leu32(b: &mut FuncBuilder, lhs: Word, rhs: Word) -> Word {
     let gt = lower_gtu32(b, lhs, rhs);
-    let bit = b.alloc_reg();
-    b.emit(Inst8::with_dst(bit, Inst8Kind::BoolNot(gt.b0)));
-    bool_to_word(b, bit)
+    negate_cmp(b, gt)
 }
 
 fn lower_geu32(b: &mut FuncBuilder, lhs: Word, rhs: Word) -> Word {
     let lt = lower_ltu32(b, lhs, rhs);
-    let bit = b.alloc_reg();
-    b.emit(Inst8::with_dst(bit, Inst8Kind::BoolNot(lt.b0)));
-    bool_to_word(b, bit)
+    negate_cmp(b, lt)
 }
 
 fn flip_sign(b: &mut FuncBuilder, value: Word) -> Word {
@@ -740,37 +729,11 @@ fn lower_unary(b: &mut FuncBuilder, op: UnOp, operand: Word) -> anyhow::Result<W
             let zero_const = Word::from_u32_imm(0);
             lower_eq32(b, operand, zero_const)
         }
-        UnOp::Extend8S => {
-            let dst = b.alloc_word();
-            let thresh = Val8::imm(0x80);
-            let is_neg = b.alloc_reg();
-            b.emit(Inst8::with_dst(is_neg, Inst8Kind::GeU(operand.b0, thresh)));
-            let zero = Val8::imm(0);
-            let fill = b.alloc_reg();
-            b.emit(Inst8::with_dst(fill, Inst8Kind::Sub(zero, is_neg)));
-            b.emit(Inst8::with_dst(dst.b0, Inst8Kind::Copy(operand.b0)));
-            b.emit(Inst8::with_dst(dst.b1, Inst8Kind::Copy(fill)));
-            b.emit(Inst8::with_dst(dst.b2, Inst8Kind::Copy(fill)));
-            b.emit(Inst8::with_dst(dst.b3, Inst8Kind::Copy(fill)));
-            dst
-        }
-        UnOp::Extend16S => {
-            let dst = b.alloc_word();
-            let thresh = Val8::imm(0x80);
-            let is_neg = b.alloc_reg();
-            b.emit(Inst8::with_dst(is_neg, Inst8Kind::GeU(operand.b1, thresh)));
-            let zero = Val8::imm(0);
-            let fill = b.alloc_reg();
-            b.emit(Inst8::with_dst(fill, Inst8Kind::Sub(zero, is_neg)));
-            b.emit(Inst8::with_dst(dst.b0, Inst8Kind::Copy(operand.b0)));
-            b.emit(Inst8::with_dst(dst.b1, Inst8Kind::Copy(operand.b1)));
-            b.emit(Inst8::with_dst(dst.b2, Inst8Kind::Copy(fill)));
-            b.emit(Inst8::with_dst(dst.b3, Inst8Kind::Copy(fill)));
-            dst
-        }
-        UnOp::Clz => lower_builtin_unop(b, BuiltinId::Clz32, operand),
-        UnOp::Ctz => lower_builtin_unop(b, BuiltinId::Ctz32, operand),
-        UnOp::Popcnt => lower_builtin_unop(b, BuiltinId::Popcnt32, operand),
+        UnOp::Extend8S => lower_sign_extend(b, operand, 0),
+        UnOp::Extend16S => lower_sign_extend(b, operand, 1),
+        UnOp::Clz => lower_builtin_call(b, BuiltinId::Clz32, vec![operand]),
+        UnOp::Ctz => lower_builtin_call(b, BuiltinId::Ctz32, vec![operand]),
+        UnOp::Popcnt => lower_builtin_call(b, BuiltinId::Popcnt32, vec![operand]),
     })
 }
 

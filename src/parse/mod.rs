@@ -47,7 +47,7 @@ fn call_shape_from_func(
     function_index: u32,
     op_name: &str,
 ) -> anyhow::Result<(usize, bool)> {
-    let sig = module.func_type_at(function_index).context({
+    let sig = module.func_type_at(function_index).with_context(|| {
         format!(
             "{}: function index {} out of bounds",
             op_name, function_index
@@ -61,10 +61,9 @@ fn call_shape_from_type(
     type_index: u32,
     op_name: &str,
 ) -> anyhow::Result<(usize, bool)> {
-    let sig = module.type_at(type_index).context(format!(
-        "{}: type index {} out of bounds",
-        op_name, type_index
-    ))?;
+    let sig = module
+        .type_at(type_index)
+        .with_context(|| format!("{}: type index {} out of bounds", op_name, type_index))?;
     Ok((sig.params().len(), !sig.results().is_empty()))
 }
 
@@ -90,7 +89,7 @@ fn parse_function(
     let mut locals = Vec::new();
     let signature = module
         .func_type_at(func_index as u32)
-        .context(format!("function index {} out of bounds", func_index))?;
+        .with_context(|| format!("function index {} out of bounds", func_index))?;
     locals.extend(signature.params().iter().copied());
     extend_locals_from_body(&mut locals, &body)?;
     let mut ref_stack: Vec<AstRef> = Vec::new();
@@ -526,7 +525,7 @@ fn parse_function(
                 let default_target_index = block_stack
                     .len()
                     .checked_sub(1 + default_depth as usize)
-                    .context({
+                    .with_context(|| {
                         format!(
                             "BrTable: default_depth {} exceeds block depth",
                             default_depth

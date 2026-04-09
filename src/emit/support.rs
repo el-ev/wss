@@ -122,34 +122,26 @@ impl<'a> Emitter<'a> {
         out.push_str("else: \"0\"); }\n");
     }
 
-    pub(super) fn emit_byte_clz_lookup(&self, out: &mut String) {
+    fn emit_byte_lookup(out: &mut String, name: &str, f: impl Fn(u8) -> u8) {
         let reads = (0u16..=255u16)
-            .map(|value| {
-                let byte = value as u8;
-                let clz = if byte == 0 {
-                    8
-                } else {
-                    byte.leading_zeros() as u8
-                };
-                (value as usize, clz.to_string())
+            .map(|v| {
+                let byte = v as u8;
+                (v as usize, f(byte).to_string())
             })
             .collect::<Vec<_>>();
-        Self::emit_chunked_read_function(out, "--byte_clz", &reads);
+        Self::emit_chunked_read_function(out, name, &reads);
+    }
+
+    pub(super) fn emit_byte_clz_lookup(&self, out: &mut String) {
+        Self::emit_byte_lookup(out, "--byte_clz", |b| {
+            if b == 0 { 8 } else { b.leading_zeros() as u8 }
+        });
     }
 
     pub(super) fn emit_byte_ctz_lookup(&self, out: &mut String) {
-        let reads = (0u16..=255u16)
-            .map(|value| {
-                let byte = value as u8;
-                let ctz = if byte == 0 {
-                    8
-                } else {
-                    byte.trailing_zeros() as u8
-                };
-                (value as usize, ctz.to_string())
-            })
-            .collect::<Vec<_>>();
-        Self::emit_chunked_read_function(out, "--byte_ctz", &reads);
+        Self::emit_byte_lookup(out, "--byte_ctz", |b| {
+            if b == 0 { 8 } else { b.trailing_zeros() as u8 }
+        });
     }
 
     pub(super) fn shadow_name(stage: u8, base: &str) -> String {

@@ -112,7 +112,7 @@ fn validate_block_type(
         BlockType::Empty => Ok(()),
         BlockType::Type(v) => validate_valtype(v, location),
         BlockType::FuncType(type_index) => {
-            let ty = module.type_at(type_index).context({
+            let ty = module.type_at(type_index).with_context(|| {
                 format!(
                     "block type index {} out of bounds at {}",
                     type_index, location
@@ -141,14 +141,14 @@ fn validate_code_section(wasm_bytes: &[u8], module: &ModuleInfo) -> anyhow::Resu
             for v in sig.results() {
                 validate_valtype(*v, &format!("{} result", loc))?;
             }
-            let mut locals_reader = body.get_locals_reader().context(loc.clone())?;
+            let mut locals_reader = body.get_locals_reader().with_context(|| loc.clone())?;
             for _ in 0..locals_reader.get_count() {
-                let (_, val_type) = locals_reader.read().context(loc.clone())?;
+                let (_, val_type) = locals_reader.read().with_context(|| loc.clone())?;
                 validate_valtype(val_type, &format!("{} local", loc))?;
             }
-            let mut ops_reader = body.get_operators_reader().context(loc.clone())?;
+            let mut ops_reader = body.get_operators_reader().with_context(|| loc.clone())?;
             loop {
-                let op = ops_reader.read().context(loc.clone())?;
+                let op = ops_reader.read().with_context(|| loc.clone())?;
                 if let Operator::End = op {
                     break;
                 }
@@ -163,5 +163,5 @@ fn validate_code_section(wasm_bytes: &[u8], module: &ModuleInfo) -> anyhow::Resu
 fn func_signature(module: &ModuleInfo, func_index: u32) -> anyhow::Result<&FuncType> {
     module
         .func_type_at(func_index)
-        .context(format!("function index {} out of bounds", func_index))
+        .with_context(|| format!("function index {} out of bounds", func_index))
 }

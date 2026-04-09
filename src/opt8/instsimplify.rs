@@ -37,9 +37,9 @@ fn simplify_blocks_with_facts(blocks: &mut [BasicBlock8], facts: &HashMap<Val8, 
             .retain(|inst| !matches!(inst.kind, Inst8Kind::Copy(src) if inst.dst == Some(src)));
         changed |= bb.insts.len() != old_len;
 
-        let old_term = bb.terminator.clone();
-        bb.terminator = simplify_term(old_term.clone(), facts);
-        if bb.terminator != old_term {
+        let new_term = simplify_term(bb.terminator.clone(), facts);
+        if new_term != bb.terminator {
+            bb.terminator = new_term;
             changed = true;
         }
     }
