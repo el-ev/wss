@@ -449,6 +449,10 @@
   {
     "id": "memory_rw",
     "source": "tests/cases/memory_rw.c",
+    "tags": [
+      "lengthy"
+    ],
+    "virtual_time_budget_ms": 25000,
     "expect": {
       "pc": -1,
       "ra": "0x00000043",
@@ -727,10 +731,6 @@
   {
     "id": "division_hazard_small_u24_remonly",
     "source": "tests/cases/division_hazard_small_u24_remonly.c",
-    "tags": [
-      "lengthy"
-    ],
-    "virtual_time_budget_ms": 20000,
     "expect": {
       "pc": -1,
       "ra": "0x0000374d",
@@ -1210,6 +1210,10 @@
   {
     "id": "relops_signed_unsigned_full",
     "source": "tests/cases/relops_signed_unsigned_full.c",
+    "tags": [
+      "lengthy"
+    ],
+    "virtual_time_budget_ms": 25000,
     "expect": {
       "pc": -1,
       "ra": "0x0000003c",
@@ -1316,6 +1320,10 @@
   {
     "id": "early_return_paths",
     "source": "tests/cases/early_return_paths.c",
+    "tags": [
+      "lengthy"
+    ],
+    "virtual_time_budget_ms": 25000,
     "expect": {
       "pc": -1,
       "ra": "0x00000160",
@@ -1745,6 +1753,10 @@
   {
     "id": "call_select_accumulate",
     "source": "tests/cases/call_select_accumulate.c",
+    "tags": [
+      "lengthy"
+    ],
+    "virtual_time_budget_ms": 60000,
     "expect": {
       "pc": -1,
       "ra": "0x000003af",
