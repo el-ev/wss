@@ -420,6 +420,14 @@ pub(crate) fn decode_module_info(wasm_bytes: &[u8]) -> anyhow::Result<ModuleInfo
     Ok(module)
 }
 
+macro_rules! delegate_info {
+    ($($vis:vis fn $name:ident(&self $(, $arg:ident : $argt:ty)*) -> $ret:ty;)*) => {
+        $(
+            $vis fn $name(&self $(, $arg: $argt)*) -> $ret { self.info.$name($($arg),*) }
+        )*
+    };
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct AstModule {
     info: ModuleInfo,
@@ -464,32 +472,14 @@ impl AstModule {
         &self.bodies
     }
 
-    pub(crate) fn type_at(&self, type_index: u32) -> Option<&FuncType> {
-        self.info.type_at(type_index)
-    }
-
-    pub(crate) fn func_type_at(&self, func_index: u32) -> Option<&FuncType> {
-        self.info.func_type_at(func_index)
-    }
-
-    pub(crate) fn globals(&self) -> &[GlobalInfo] {
-        self.info.globals()
-    }
-
-    pub(crate) fn num_imported_funcs(&self) -> usize {
-        self.info.num_imported_funcs()
-    }
-
-    pub(crate) fn putchar_import(&self) -> Option<u32> {
-        self.info.putchar_import()
-    }
-
-    pub(crate) fn getchar_import(&self) -> Option<u32> {
-        self.info.getchar_import()
-    }
-
-    pub(crate) fn entry_export(&self) -> Option<u32> {
-        self.info.entry_export()
+    delegate_info! {
+        pub(crate) fn type_at(&self, type_index: u32) -> Option<&FuncType>;
+        pub(crate) fn func_type_at(&self, func_index: u32) -> Option<&FuncType>;
+        pub(crate) fn globals(&self) -> &[GlobalInfo];
+        pub(crate) fn num_imported_funcs(&self) -> usize;
+        pub(crate) fn putchar_import(&self) -> Option<u32>;
+        pub(crate) fn getchar_import(&self) -> Option<u32>;
+        pub(crate) fn entry_export(&self) -> Option<u32>;
     }
 }
 
@@ -538,40 +528,16 @@ impl IrModule {
         &self.bodies
     }
 
-    pub(crate) fn type_at(&self, type_index: u32) -> Option<&FuncType> {
-        self.info.type_at(type_index)
-    }
-
-    pub(crate) fn func_type_at(&self, func_index: u32) -> Option<&FuncType> {
-        self.info.func_type_at(func_index)
-    }
-
-    pub(crate) fn globals(&self) -> &[GlobalInfo] {
-        self.info.globals()
-    }
-
-    pub(crate) fn table_at(&self, table_index: u32) -> Option<&TableInfo> {
-        self.info.table_at(table_index)
-    }
-
-    pub(crate) fn num_pages(&self) -> u64 {
-        self.info.num_pages()
-    }
-
-    pub(crate) fn preloaded_data(&self) -> &[(usize, Vec<u8>)] {
-        self.info.preloaded_data()
-    }
-
-    pub(crate) fn putchar_import(&self) -> Option<u32> {
-        self.info.putchar_import()
-    }
-
-    pub(crate) fn getchar_import(&self) -> Option<u32> {
-        self.info.getchar_import()
-    }
-
-    pub(crate) fn entry_export(&self) -> Option<u32> {
-        self.info.entry_export()
+    delegate_info! {
+        pub(crate) fn type_at(&self, type_index: u32) -> Option<&FuncType>;
+        pub(crate) fn func_type_at(&self, func_index: u32) -> Option<&FuncType>;
+        pub(crate) fn globals(&self) -> &[GlobalInfo];
+        pub(crate) fn table_at(&self, table_index: u32) -> Option<&TableInfo>;
+        pub(crate) fn num_pages(&self) -> u64;
+        pub(crate) fn preloaded_data(&self) -> &[(usize, Vec<u8>)];
+        pub(crate) fn putchar_import(&self) -> Option<u32>;
+        pub(crate) fn getchar_import(&self) -> Option<u32>;
+        pub(crate) fn entry_export(&self) -> Option<u32>;
     }
 }
 

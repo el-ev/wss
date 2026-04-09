@@ -128,12 +128,8 @@ fn parse_function(
             | Operator::I32Rotl
             | Operator::I32Rotr => {
                 let frame = current_frame_mut(&mut block_stack)?;
-                let rhs = frame
-                    .pop_ref(&mut ref_stack)
-                    .context("stack underflow while popping rhs for i32 binop")?;
-                let lhs = frame
-                    .pop_ref(&mut ref_stack)
-                    .context("stack underflow while popping lhs for i32 binop")?;
+                let rhs = frame.pop_ref(&mut ref_stack).context("empty stack?")?;
+                let lhs = frame.pop_ref(&mut ref_stack).context("empty stack?")?;
                 let binop = match op {
                     Operator::I32Add => BinOp::Add,
                     Operator::I32Sub => BinOp::Sub,
@@ -152,15 +148,12 @@ fn parse_function(
                     Operator::I32Rotr => BinOp::Rotr,
                     _ => bail!("ice: unexpected i32 binop variant {:?}", op),
                 };
-                let frame = current_frame_mut(&mut block_stack)?;
                 let r = frame.emit(Node::Binary(binop, lhs, rhs));
                 ref_stack.push(r);
             }
             Operator::I32Clz | Operator::I32Ctz | Operator::I32Popcnt | Operator::I32Eqz => {
                 let frame = current_frame_mut(&mut block_stack)?;
-                let val = frame
-                    .pop_ref(&mut ref_stack)
-                    .context("stack underflow while popping operand for i32 unop")?;
+                let val = frame.pop_ref(&mut ref_stack).context("empty stack?")?;
                 let unop = match op {
                     Operator::I32Clz => UnOp::Clz,
                     Operator::I32Ctz => UnOp::Ctz,
@@ -168,7 +161,6 @@ fn parse_function(
                     Operator::I32Eqz => UnOp::Eqz,
                     _ => bail!("ice: unexpected i32 unop variant {:?}", op),
                 };
-                let frame = current_frame_mut(&mut block_stack)?;
                 let r = frame.emit(Node::Unary(unop, val));
                 ref_stack.push(r);
             }
@@ -183,12 +175,8 @@ fn parse_function(
             | Operator::I32LeU
             | Operator::I32GeU => {
                 let frame = current_frame_mut(&mut block_stack)?;
-                let rhs = frame
-                    .pop_ref(&mut ref_stack)
-                    .context("stack underflow while popping rhs for i32 relop")?;
-                let lhs = frame
-                    .pop_ref(&mut ref_stack)
-                    .context("stack underflow while popping lhs for i32 relop")?;
+                let rhs = frame.pop_ref(&mut ref_stack).context("empty stack?")?;
+                let lhs = frame.pop_ref(&mut ref_stack).context("empty stack?")?;
                 let relop = match op {
                     Operator::I32Eq => RelOp::Eq,
                     Operator::I32Ne => RelOp::Ne,
@@ -202,7 +190,6 @@ fn parse_function(
                     Operator::I32GeU => RelOp::GeU,
                     _ => bail!("ice: unexpected i32 relop variant {:?}", op),
                 };
-                let frame = current_frame_mut(&mut block_stack)?;
                 let r = frame.emit(Node::Compare(relop, lhs, rhs));
                 ref_stack.push(r);
             }

@@ -1133,6 +1133,13 @@ impl<'a> Emitter<'a> {
         }
     }
 
+    fn shr_byte_expr(byte: &str, carry: &str, p: u32) -> String {
+        format!(
+            "mod(round(down, calc((({}) + 256 * ({})) / {})), 256)",
+            byte, carry, p
+        )
+    }
+
     pub(super) fn shr_u_stage_expr(word: &[String; 4], amount: u8) -> [String; 4] {
         match amount {
             0 => word.clone(),
@@ -1140,24 +1147,9 @@ impl<'a> Emitter<'a> {
                 let p = 1u32 << amount;
                 let carry = |x: &str| format!("mod(({}), {})", x, p);
                 [
-                    format!(
-                        "mod(round(down, calc((({}) + 256 * ({})) / {})), 256)",
-                        word[0],
-                        carry(&word[1]),
-                        p
-                    ),
-                    format!(
-                        "mod(round(down, calc((({}) + 256 * ({})) / {})), 256)",
-                        word[1],
-                        carry(&word[2]),
-                        p
-                    ),
-                    format!(
-                        "mod(round(down, calc((({}) + 256 * ({})) / {})), 256)",
-                        word[2],
-                        carry(&word[3]),
-                        p
-                    ),
+                    Self::shr_byte_expr(&word[0], &carry(&word[1]), p),
+                    Self::shr_byte_expr(&word[1], &carry(&word[2]), p),
+                    Self::shr_byte_expr(&word[2], &carry(&word[3]), p),
                     format!("round(down, calc(({}) / {}))", word[3], p),
                 ]
             }
@@ -1186,28 +1178,10 @@ impl<'a> Emitter<'a> {
                 let fill = format!("calc(({}) * {})", sign, p - 1);
                 let carry = |x: &str| format!("mod(({}), {})", x, p);
                 [
-                    format!(
-                        "mod(round(down, calc((({}) + 256 * ({})) / {})), 256)",
-                        word[0],
-                        carry(&word[1]),
-                        p
-                    ),
-                    format!(
-                        "mod(round(down, calc((({}) + 256 * ({})) / {})), 256)",
-                        word[1],
-                        carry(&word[2]),
-                        p
-                    ),
-                    format!(
-                        "mod(round(down, calc((({}) + 256 * ({})) / {})), 256)",
-                        word[2],
-                        carry(&word[3]),
-                        p
-                    ),
-                    format!(
-                        "mod(round(down, calc((({}) + 256 * ({}) ) / {})), 256)",
-                        word[3], fill, p
-                    ),
+                    Self::shr_byte_expr(&word[0], &carry(&word[1]), p),
+                    Self::shr_byte_expr(&word[1], &carry(&word[2]), p),
+                    Self::shr_byte_expr(&word[2], &carry(&word[3]), p),
+                    Self::shr_byte_expr(&word[3], &fill, p),
                 ]
             }
             8 => {
