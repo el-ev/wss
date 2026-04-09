@@ -86,7 +86,7 @@ fn eliminate_global_copies(blocks: &mut [BasicBlock8]) -> bool {
             let (Some(dst), Inst8Kind::Copy(src)) = (inst.dst, inst.kind) else {
                 continue;
             };
-            if dst.reg_index().unwrap() < VREG_START
+            if dst.expect_vreg() < VREG_START
                 || def_counts.get(&dst).copied().unwrap_or(0) != 1
                 || used_before_def.contains(&dst)
             {
@@ -121,7 +121,7 @@ fn eliminate_global_copies(blocks: &mut [BasicBlock8]) -> bool {
             match inst.kind {
                 Inst8Kind::Copy(src) if src == dst => false,
                 Inst8Kind::Copy(_)
-                    if dst.reg_index().unwrap() >= VREG_START
+                    if dst.expect_vreg() >= VREG_START
                         && use_counts.get(&dst).copied().unwrap_or(0) == 0 =>
                 {
                     false

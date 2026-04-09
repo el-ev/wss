@@ -55,14 +55,13 @@ impl<'a> Emitter<'a> {
                 match &op.kind {
                     Inst8Kind::Copy(s) => {
                         if let Some(dst) = op.dst {
-                            // FIXME
-                            reg_now.insert(dst.reg_index().unwrap(), Self::reg_expr(&reg_now, *s));
+                            reg_now.insert(dst.expect_vreg(), Self::val_expr(&reg_now, *s));
                         }
                     }
                     Inst8Kind::Add32Byte { lhs, rhs, lane } => {
                         if let Some(dst) = op.dst {
                             reg_now.insert(
-                                dst.reg_index().unwrap(),
+                                dst.expect_vreg(),
                                 Self::add32_byte_expr(&reg_now, *lhs, *rhs, *lane),
                             );
                         }
@@ -70,7 +69,7 @@ impl<'a> Emitter<'a> {
                     Inst8Kind::Sub32Byte { lhs, rhs, lane } => {
                         if let Some(dst) = op.dst {
                             reg_now.insert(
-                                dst.reg_index().unwrap(),
+                                dst.expect_vreg(),
                                 Self::sub32_byte_expr(&reg_now, *lhs, *rhs, *lane),
                             );
                         }
@@ -78,7 +77,7 @@ impl<'a> Emitter<'a> {
                     Inst8Kind::Sub32Borrow { lhs, rhs } => {
                         if let Some(dst) = op.dst {
                             reg_now.insert(
-                                dst.reg_index().unwrap(),
+                                dst.expect_vreg(),
                                 Self::sub32_borrow_expr(&reg_now, *lhs, *rhs),
                             );
                         }
@@ -87,90 +86,90 @@ impl<'a> Emitter<'a> {
                         if let Some(dst) = op.dst {
                             let e = format!(
                                 "mod(calc(({}) + ({})), 256)",
-                                Self::reg_expr(&reg_now, *l),
-                                Self::reg_expr(&reg_now, *r)
+                                Self::val_expr(&reg_now, *l),
+                                Self::val_expr(&reg_now, *r)
                             );
-                            reg_now.insert(dst.reg_index().unwrap(), e);
+                            reg_now.insert(dst.expect_vreg(), e);
                         }
                     }
                     Inst8Kind::Carry(l, r) => {
                         if let Some(dst) = op.dst {
                             let e = format!(
                                 "--lt(255, calc(({}) + ({})))",
-                                Self::reg_expr(&reg_now, *l),
-                                Self::reg_expr(&reg_now, *r)
+                                Self::val_expr(&reg_now, *l),
+                                Self::val_expr(&reg_now, *r)
                             );
-                            reg_now.insert(dst.reg_index().unwrap(), e);
+                            reg_now.insert(dst.expect_vreg(), e);
                         }
                     }
                     Inst8Kind::Sub(l, r) => {
                         if let Some(dst) = op.dst {
                             let e = format!(
                                 "mod(calc(({}) - ({}) + 256), 256)",
-                                Self::reg_expr(&reg_now, *l),
-                                Self::reg_expr(&reg_now, *r)
+                                Self::val_expr(&reg_now, *l),
+                                Self::val_expr(&reg_now, *r)
                             );
-                            reg_now.insert(dst.reg_index().unwrap(), e);
+                            reg_now.insert(dst.expect_vreg(), e);
                         }
                     }
                     Inst8Kind::MulLo(l, r) => {
                         if let Some(dst) = op.dst {
                             let e = format!(
                                 "mod(calc(({}) * ({})), 256)",
-                                Self::reg_expr(&reg_now, *l),
-                                Self::reg_expr(&reg_now, *r)
+                                Self::val_expr(&reg_now, *l),
+                                Self::val_expr(&reg_now, *r)
                             );
-                            reg_now.insert(dst.reg_index().unwrap(), e);
+                            reg_now.insert(dst.expect_vreg(), e);
                         }
                     }
                     Inst8Kind::MulHi(l, r) => {
                         if let Some(dst) = op.dst {
                             let e = format!(
                                 "mod(round(down, calc((({}) * ({})) / 256)), 256)",
-                                Self::reg_expr(&reg_now, *l),
-                                Self::reg_expr(&reg_now, *r)
+                                Self::val_expr(&reg_now, *l),
+                                Self::val_expr(&reg_now, *r)
                             );
-                            reg_now.insert(dst.reg_index().unwrap(), e);
+                            reg_now.insert(dst.expect_vreg(), e);
                         }
                     }
                     Inst8Kind::And8(l, r) => {
                         if let Some(dst) = op.dst {
                             let e = Self::bitwise_expr(
                                 "and",
-                                &Self::reg_expr(&reg_now, *l),
-                                &Self::reg_expr(&reg_now, *r),
+                                &Self::val_expr(&reg_now, *l),
+                                &Self::val_expr(&reg_now, *r),
                             );
-                            reg_now.insert(dst.reg_index().unwrap(), e);
+                            reg_now.insert(dst.expect_vreg(), e);
                         }
                     }
                     Inst8Kind::Or8(l, r) => {
                         if let Some(dst) = op.dst {
                             let e = Self::bitwise_expr(
                                 "or",
-                                &Self::reg_expr(&reg_now, *l),
-                                &Self::reg_expr(&reg_now, *r),
+                                &Self::val_expr(&reg_now, *l),
+                                &Self::val_expr(&reg_now, *r),
                             );
-                            reg_now.insert(dst.reg_index().unwrap(), e);
+                            reg_now.insert(dst.expect_vreg(), e);
                         }
                     }
                     Inst8Kind::Xor8(l, r) => {
                         if let Some(dst) = op.dst {
                             let e = Self::bitwise_expr(
                                 "xor",
-                                &Self::reg_expr(&reg_now, *l),
-                                &Self::reg_expr(&reg_now, *r),
+                                &Self::val_expr(&reg_now, *l),
+                                &Self::val_expr(&reg_now, *r),
                             );
-                            reg_now.insert(dst.reg_index().unwrap(), e);
+                            reg_now.insert(dst.expect_vreg(), e);
                         }
                     }
                     Inst8Kind::Eq(l, r) => {
                         if let Some(dst) = op.dst {
                             reg_now.insert(
-                                dst.reg_index().unwrap(),
+                                dst.expect_vreg(),
                                 format!(
                                     "--eq({}, {})",
-                                    Self::reg_expr(&reg_now, *l),
-                                    Self::reg_expr(&reg_now, *r)
+                                    Self::val_expr(&reg_now, *l),
+                                    Self::val_expr(&reg_now, *r)
                                 ),
                             );
                         }
@@ -178,11 +177,11 @@ impl<'a> Emitter<'a> {
                     Inst8Kind::Ne(l, r) => {
                         if let Some(dst) = op.dst {
                             reg_now.insert(
-                                dst.reg_index().unwrap(),
+                                dst.expect_vreg(),
                                 format!(
                                     "--ne({}, {})",
-                                    Self::reg_expr(&reg_now, *l),
-                                    Self::reg_expr(&reg_now, *r)
+                                    Self::val_expr(&reg_now, *l),
+                                    Self::val_expr(&reg_now, *r)
                                 ),
                             );
                         }
@@ -190,11 +189,11 @@ impl<'a> Emitter<'a> {
                     Inst8Kind::LtU(l, r) => {
                         if let Some(dst) = op.dst {
                             reg_now.insert(
-                                dst.reg_index().unwrap(),
+                                dst.expect_vreg(),
                                 format!(
                                     "--lt({}, {})",
-                                    Self::reg_expr(&reg_now, *l),
-                                    Self::reg_expr(&reg_now, *r)
+                                    Self::val_expr(&reg_now, *l),
+                                    Self::val_expr(&reg_now, *r)
                                 ),
                             );
                         }
@@ -202,11 +201,11 @@ impl<'a> Emitter<'a> {
                     Inst8Kind::GeU(l, r) => {
                         if let Some(dst) = op.dst {
                             reg_now.insert(
-                                dst.reg_index().unwrap(),
+                                dst.expect_vreg(),
                                 format!(
                                     "calc(1 - (--lt({}, {})))",
-                                    Self::reg_expr(&reg_now, *l),
-                                    Self::reg_expr(&reg_now, *r)
+                                    Self::val_expr(&reg_now, *l),
+                                    Self::val_expr(&reg_now, *r)
                                 ),
                             );
                         }
@@ -214,7 +213,7 @@ impl<'a> Emitter<'a> {
                     Inst8Kind::BoolAnd(bool_op) => {
                         if let Some(dst) = op.dst {
                             reg_now.insert(
-                                dst.reg_index().unwrap(),
+                                dst.expect_vreg(),
                                 Self::bool_nary_expr(&reg_now, bool_op, true),
                             );
                         }
@@ -222,7 +221,7 @@ impl<'a> Emitter<'a> {
                     Inst8Kind::BoolOr(bool_op) => {
                         if let Some(dst) = op.dst {
                             reg_now.insert(
-                                dst.reg_index().unwrap(),
+                                dst.expect_vreg(),
                                 Self::bool_nary_expr(&reg_now, bool_op, false),
                             );
                         }
@@ -230,18 +229,18 @@ impl<'a> Emitter<'a> {
                     Inst8Kind::BoolNot(s) => {
                         if let Some(dst) = op.dst {
                             reg_now.insert(
-                                dst.reg_index().unwrap(),
-                                format!("calc(1 - min(1, ({})))", Self::reg_expr(&reg_now, *s)),
+                                dst.expect_vreg(),
+                                format!("calc(1 - min(1, ({})))", Self::val_expr(&reg_now, *s)),
                             );
                         }
                     }
                     Inst8Kind::Sel(c, l, r) => {
                         if let Some(dst) = op.dst {
-                            let c_expr = Self::reg_expr(&reg_now, *c);
-                            let t_expr = Self::reg_expr(&reg_now, *l);
-                            let f_expr = Self::reg_expr(&reg_now, *r);
+                            let c_expr = Self::val_expr(&reg_now, *c);
+                            let t_expr = Self::val_expr(&reg_now, *l);
+                            let f_expr = Self::val_expr(&reg_now, *r);
                             reg_now.insert(
-                                dst.reg_index().unwrap(),
+                                dst.expect_vreg(),
                                 Self::sel_expr(&c_expr, &t_expr, &f_expr),
                             );
                         }
@@ -249,7 +248,7 @@ impl<'a> Emitter<'a> {
                     Inst8Kind::GlobalGetByte { global_idx, lane } => {
                         if let Some(dst) = op.dst {
                             reg_now.insert(
-                                dst.reg_index().unwrap(),
+                                dst.expect_vreg(),
                                 format!(
                                     "var({})",
                                     Self::staged_global_lane_name(1, *global_idx, *lane)
@@ -262,14 +261,14 @@ impl<'a> Emitter<'a> {
                         lane,
                         val,
                     } => {
-                        global_sets.insert((*global_idx, *lane), Self::reg_expr(&reg_now, *val));
+                        global_sets.insert((*global_idx, *lane), Self::val_expr(&reg_now, *val));
                     }
                     Inst8Kind::LoadMem { base, addr, lane } => {
                         if let Some(dst) = op.dst {
                             let addr = format!(
                                 "--addr16({}, {}, {})",
-                                Self::reg_expr(&reg_now, addr.lo),
-                                Self::reg_expr(&reg_now, addr.hi),
+                                Self::val_expr(&reg_now, addr.lo),
+                                Self::val_expr(&reg_now, addr.hi),
                                 (*base as u32) + (*lane as u32)
                             );
                             let in_bounds = format!("--lt({}, {})", addr, self.memory_end);
@@ -282,9 +281,9 @@ impl<'a> Emitter<'a> {
                             let e = Self::sel_expr(
                                 &in_bounds,
                                 &format!("--mload({})", addr),
-                                &format!("var(--_1r{})", dst.reg_index().unwrap()),
+                                &format!("var(--_1r{})", dst.expect_vreg()),
                             );
-                            reg_now.insert(dst.reg_index().unwrap(), e);
+                            reg_now.insert(dst.expect_vreg(), e);
                         }
                     }
                     Inst8Kind::StoreMem {
@@ -295,8 +294,8 @@ impl<'a> Emitter<'a> {
                     } => {
                         let byte_addr = format!(
                             "--addr16({}, {}, {})",
-                            Self::reg_expr(&reg_now, addr.lo),
-                            Self::reg_expr(&reg_now, addr.hi),
+                            Self::val_expr(&reg_now, addr.lo),
+                            Self::val_expr(&reg_now, addr.hi),
                             (*base as u32) + (*lane as u32)
                         );
                         let in_bounds = format!("--lt({}, {})", byte_addr, self.memory_end);
@@ -304,7 +303,7 @@ impl<'a> Emitter<'a> {
                         mem_stores_raw.push(MemStoreByte {
                             cell: format!("--mhalf({})", byte_addr),
                             parity: format!("--mpar({})", byte_addr),
-                            val: format!("mod({}, 256)", Self::reg_expr(&reg_now, *val)),
+                            val: format!("mod({}, 256)", Self::val_expr(&reg_now, *val)),
                             ok: in_bounds,
                         });
                     }
@@ -313,17 +312,17 @@ impl<'a> Emitter<'a> {
                             has_getchar = true;
                             getchar_ready = "--ne(var(--kb, -1), -1)".to_string();
                             reg_now.insert(
-                                dst.reg_index().unwrap(),
+                                dst.expect_vreg(),
                                 Self::sel_expr(
                                     &getchar_ready,
                                     "mod(var(--kb, -1), 256)",
-                                    &format!("var(--_1r{})", dst.reg_index().unwrap()),
+                                    &format!("var(--_1r{})", dst.expect_vreg()),
                                 ),
                             );
                         }
                     }
                     Inst8Kind::Putchar(v) => {
-                        putchars.push(Self::reg_expr(&reg_now, *v));
+                        putchars.push(Self::val_expr(&reg_now, *v));
                     }
                     Inst8Kind::CsStore { offset, val } => {
                         let slot_off = (*offset) / 2;
@@ -339,7 +338,7 @@ impl<'a> Emitter<'a> {
                         cs_stores.push(CsStore {
                             idx,
                             parity: format!("{}", parity),
-                            val: format!("mod({}, 256)", Self::reg_expr(&reg_now, *val)),
+                            val: format!("mod({}, 256)", Self::val_expr(&reg_now, *val)),
                             ok,
                         });
                     }
@@ -367,11 +366,11 @@ impl<'a> Emitter<'a> {
                                 format!("--mhi({})", word)
                             };
                             reg_now.insert(
-                                dst.reg_index().unwrap(),
+                                dst.expect_vreg(),
                                 Self::sel_expr(
                                     &ok,
                                     &load,
-                                    &format!("var(--_1r{})", dst.reg_index().unwrap()),
+                                    &format!("var(--_1r{})", dst.expect_vreg()),
                                 ),
                             );
                         }
@@ -832,7 +831,7 @@ impl<'a> Emitter<'a> {
                 if_true,
                 if_false,
             } => {
-                let c = Self::reg_expr(reg_now, *cond);
+                let c = Self::val_expr(reg_now, *cond);
                 TermResult {
                     pc_expr: Self::sel_expr(
                         &c,
@@ -848,7 +847,7 @@ impl<'a> Emitter<'a> {
                 targets,
                 default,
             } => {
-                let idx = Self::reg_expr(reg_now, *index);
+                let idx = Self::val_expr(reg_now, *index);
                 let mut expr = format!("{}", default.index());
                 for (i, target) in targets.iter().enumerate().rev() {
                     expr = Self::sel_expr(
@@ -883,14 +882,10 @@ impl<'a> Emitter<'a> {
                 }
                 CallTarget::Pc(callee_pc) => {
                     for (src, dst) in args.iter().zip(callee_arg_vregs.iter()) {
-                        reg_now
-                            .insert(dst.b0.reg_index().unwrap(), Self::reg_expr(reg_now, src.b0));
-                        reg_now
-                            .insert(dst.b1.reg_index().unwrap(), Self::reg_expr(reg_now, src.b1));
-                        reg_now
-                            .insert(dst.b2.reg_index().unwrap(), Self::reg_expr(reg_now, src.b2));
-                        reg_now
-                            .insert(dst.b3.reg_index().unwrap(), Self::reg_expr(reg_now, src.b3));
+                        reg_now.insert(dst.b0.expect_vreg(), Self::val_expr(reg_now, src.b0));
+                        reg_now.insert(dst.b1.expect_vreg(), Self::val_expr(reg_now, src.b1));
+                        reg_now.insert(dst.b2.expect_vreg(), Self::val_expr(reg_now, src.b2));
+                        reg_now.insert(dst.b3.expect_vreg(), Self::val_expr(reg_now, src.b3));
                     }
                     TermResult {
                         pc_expr: format!("{}", callee_pc.index()),
@@ -902,10 +897,10 @@ impl<'a> Emitter<'a> {
             Terminator8::Return { val } => {
                 let exit_code_expr = val.map(|w| Self::word_hex_expr(reg_now, w));
                 if let Some(w) = val {
-                    reg_now.insert(0, Self::reg_expr(reg_now, w.b0));
-                    reg_now.insert(1, Self::reg_expr(reg_now, w.b1));
-                    reg_now.insert(2, Self::reg_expr(reg_now, w.b2));
-                    reg_now.insert(3, Self::reg_expr(reg_now, w.b3));
+                    reg_now.insert(0, Self::val_expr(reg_now, w.b0));
+                    reg_now.insert(1, Self::val_expr(reg_now, w.b1));
+                    reg_now.insert(2, Self::val_expr(reg_now, w.b2));
+                    reg_now.insert(3, Self::val_expr(reg_now, w.b3));
                 }
                 let fallback_pc_expr = if self.uses_callstack {
                     // Return may be in a later packed cycle than CsLoadPc; in that case,
@@ -930,10 +925,10 @@ impl<'a> Emitter<'a> {
             Terminator8::Exit { val } => {
                 let exit_code_expr = val.map(|w| Self::word_hex_expr(reg_now, w));
                 if let Some(w) = val {
-                    reg_now.insert(0, Self::reg_expr(reg_now, w.b0));
-                    reg_now.insert(1, Self::reg_expr(reg_now, w.b1));
-                    reg_now.insert(2, Self::reg_expr(reg_now, w.b2));
-                    reg_now.insert(3, Self::reg_expr(reg_now, w.b3));
+                    reg_now.insert(0, Self::val_expr(reg_now, w.b0));
+                    reg_now.insert(1, Self::val_expr(reg_now, w.b1));
+                    reg_now.insert(2, Self::val_expr(reg_now, w.b2));
+                    reg_now.insert(3, Self::val_expr(reg_now, w.b3));
                 }
                 TermResult {
                     pc_expr: "-1".to_string(),
@@ -949,13 +944,13 @@ impl<'a> Emitter<'a> {
         }
     }
 
-    pub(super) fn reg_expr(now: &HashMap<u16, String>, r: Val8) -> String {
+    pub(super) fn val_expr(now: &HashMap<u16, String>, r: Val8) -> String {
         if let Some(v) = r.imm_value() {
             return format!("{}", v);
         }
-        now.get(&r.reg_index().unwrap())
+        now.get(&r.expect_vreg())
             .cloned()
-            .unwrap_or_else(|| format!("var(--_1r{})", r.reg_index().unwrap()))
+            .unwrap_or_else(|| format!("var(--_1r{})", r.expect_vreg()))
     }
 
     pub(super) fn bool_nary_expr(
@@ -966,7 +961,7 @@ impl<'a> Emitter<'a> {
         let terms: Vec<String> = op
             .as_slice()
             .iter()
-            .map(|r| Self::reg_expr(now, *r))
+            .map(|r| Self::val_expr(now, *r))
             .collect();
         if terms.is_empty() {
             return if and {
@@ -998,10 +993,10 @@ impl<'a> Emitter<'a> {
 
     pub(super) fn word_bytes_expr(now: &HashMap<u16, String>, w: Word) -> [String; 4] {
         [
-            Self::reg_expr(now, w.b0),
-            Self::reg_expr(now, w.b1),
-            Self::reg_expr(now, w.b2),
-            Self::reg_expr(now, w.b3),
+            Self::val_expr(now, w.b0),
+            Self::val_expr(now, w.b1),
+            Self::val_expr(now, w.b2),
+            Self::val_expr(now, w.b3),
         ]
     }
 
@@ -1024,8 +1019,8 @@ impl<'a> Emitter<'a> {
     fn add32_carry_in_expr(now: &HashMap<u16, String>, lhs: Word, rhs: Word, lane: u8) -> String {
         let mut carry = "0".to_string();
         for idx in 0..lane {
-            let lhs_byte = Self::reg_expr(now, lhs.byte(idx));
-            let rhs_byte = Self::reg_expr(now, rhs.byte(idx));
+            let lhs_byte = Self::val_expr(now, lhs.byte(idx));
+            let rhs_byte = Self::val_expr(now, rhs.byte(idx));
             let total = Self::byte_add_total_expr(&lhs_byte, &rhs_byte, &carry);
             carry = format!("round(down, calc(({total}) / 256))");
         }
@@ -1035,8 +1030,8 @@ impl<'a> Emitter<'a> {
     fn sub32_borrow_in_expr(now: &HashMap<u16, String>, lhs: Word, rhs: Word, lane: u8) -> String {
         let mut borrow = "0".to_string();
         for idx in 0..lane {
-            let lhs_byte = Self::reg_expr(now, lhs.byte(idx));
-            let rhs_byte = Self::reg_expr(now, rhs.byte(idx));
+            let lhs_byte = Self::val_expr(now, lhs.byte(idx));
+            let rhs_byte = Self::val_expr(now, rhs.byte(idx));
             borrow = format!(
                 "round(down, calc((255 - ({lhs_byte}) + ({rhs_byte}) + ({borrow})) / 256))"
             );
@@ -1050,8 +1045,8 @@ impl<'a> Emitter<'a> {
         rhs: Word,
         lane: u8,
     ) -> String {
-        let lhs_byte = Self::reg_expr(now, lhs.byte(lane));
-        let rhs_byte = Self::reg_expr(now, rhs.byte(lane));
+        let lhs_byte = Self::val_expr(now, lhs.byte(lane));
+        let rhs_byte = Self::val_expr(now, rhs.byte(lane));
         let carry_in = Self::add32_carry_in_expr(now, lhs, rhs, lane);
         let total = Self::byte_add_total_expr(&lhs_byte, &rhs_byte, &carry_in);
         format!("mod({total}, 256)")
@@ -1063,8 +1058,8 @@ impl<'a> Emitter<'a> {
         rhs: Word,
         lane: u8,
     ) -> String {
-        let lhs_byte = Self::reg_expr(now, lhs.byte(lane));
-        let rhs_byte = Self::reg_expr(now, rhs.byte(lane));
+        let lhs_byte = Self::val_expr(now, lhs.byte(lane));
+        let rhs_byte = Self::val_expr(now, rhs.byte(lane));
         let borrow_in = Self::sub32_borrow_in_expr(now, lhs, rhs, lane);
         let total = Self::byte_sub_total_expr(&lhs_byte, &rhs_byte, &borrow_in);
         format!("mod(calc(({total}) + 256), 256)")
@@ -1073,8 +1068,8 @@ impl<'a> Emitter<'a> {
     pub(super) fn sub32_borrow_expr(now: &HashMap<u16, String>, lhs: Word, rhs: Word) -> String {
         let mut borrow = "0".to_string();
         for idx in 0..4u8 {
-            let lhs_byte = Self::reg_expr(now, lhs.byte(idx));
-            let rhs_byte = Self::reg_expr(now, rhs.byte(idx));
+            let lhs_byte = Self::val_expr(now, lhs.byte(idx));
+            let rhs_byte = Self::val_expr(now, rhs.byte(idx));
             borrow = format!(
                 "round(down, calc((255 - ({lhs_byte}) + ({rhs_byte}) + ({borrow})) / 256))"
             );
@@ -1320,10 +1315,10 @@ impl<'a> Emitter<'a> {
     }
 
     pub(super) fn word_hex_expr(now: &HashMap<u16, String>, w: Word) -> String {
-        let b3 = Self::byte_hex_expr(&Self::reg_expr(now, w.b3));
-        let b2 = Self::byte_hex_expr(&Self::reg_expr(now, w.b2));
-        let b1 = Self::byte_hex_expr(&Self::reg_expr(now, w.b1));
-        let b0 = Self::byte_hex_expr(&Self::reg_expr(now, w.b0));
+        let b3 = Self::byte_hex_expr(&Self::val_expr(now, w.b3));
+        let b2 = Self::byte_hex_expr(&Self::val_expr(now, w.b2));
+        let b1 = Self::byte_hex_expr(&Self::val_expr(now, w.b1));
+        let b0 = Self::byte_hex_expr(&Self::val_expr(now, w.b0));
         format!("\"0x\" {} {} {} {}", b3, b2, b1, b0)
     }
 

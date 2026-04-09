@@ -19,12 +19,12 @@ pub(super) fn bool_op_and_operands(kind: Inst8Kind) -> Option<(BoolOp, Vec<Val8>
     }
 }
 
-pub(super) fn make_bool_kind(op: BoolOp, regs: &[Val8]) -> Option<Inst8Kind> {
-    match regs {
+pub(super) fn make_bool_kind(op: BoolOp, vals: &[Val8]) -> Option<Inst8Kind> {
+    match vals {
         [] => None,
-        [reg] => Some(Inst8Kind::Copy(*reg)),
+        [val] => Some(Inst8Kind::Copy(*val)),
         _ => {
-            let nary = crate::ir8::BoolNary8::from_regs(regs)?;
+            let nary = crate::ir8::BoolNary8::from_vals(vals)?;
             Some(match op {
                 BoolOp::And => Inst8Kind::BoolAnd(nary),
                 BoolOp::Or => Inst8Kind::BoolOr(nary),
@@ -84,9 +84,9 @@ fn combine_boolean_chains_func(blocks: &mut [BasicBlock8]) -> bool {
             let mut leaves = Vec::new();
             let mut consumed = Vec::new();
             let mut seen = HashSet::new();
-            for reg in root_ops.clone() {
+            for val in root_ops.clone() {
                 collect_bool_leaves(
-                    reg,
+                    val,
                     op,
                     dst,
                     &defs,
@@ -105,8 +105,8 @@ fn combine_boolean_chains_func(blocks: &mut [BasicBlock8]) -> bool {
             }
 
             inst.kind = new_kind;
-            for reg in consumed {
-                drop_defs.insert(reg);
+            for val in consumed {
+                drop_defs.insert(val);
             }
             changed = true;
         }
@@ -128,7 +128,7 @@ fn combine_boolean_chains_func(blocks: &mut [BasicBlock8]) -> bool {
 
 #[allow(clippy::too_many_arguments)]
 fn collect_bool_leaves(
-    reg: Val8,
+    val: Val8,
     op: BoolOp,
     root_dst: Val8,
     defs: &HashMap<Val8, DefLoc>,
@@ -137,32 +137,32 @@ fn collect_bool_leaves(
     leaves: &mut Vec<Val8>,
     consumed: &mut Vec<Val8>,
 ) {
-    if !seen.insert(reg) {
-        leaves.push(reg);
+    if !seen.insert(val) {
+        leaves.push(val);
         return;
     }
 
-    let Some(def_loc) = defs.get(&reg).copied() else {
-        leaves.push(reg);
+    let Some(def_loc) = defs.get(&val).copied() else {
+        leaves.push(val);
         return;
     };
 
-    if reg == root_dst || use_counts.get(&reg).copied().unwrap_or(0) != 1 {
-        leaves.push(reg);
+    if val == root_dst || use_counts.get(&val).copied().unwrap_or(0) != 1 {
+        leaves.push(val);
         return;
     }
 
     let Some((inner_op, ops)) = bool_op_and_operands(def_loc.kind) else {
-        leaves.push(reg);
+        leaves.push(val);
         return;
     };
     if inner_op != op {
-        leaves.push(reg);
+        leaves.push(val);
         return;
     }
 
-    consumed.push(reg);
-    for reg in ops {
-        collect_bool_leaves(reg, op, root_dst, defs, use_counts, seen, leaves, consumed);
+    consumed.push(val);
+    for val in ops {
+        collect_bool_leaves(val, op, root_dst, defs, use_counts, seen, leaves, consumed);
     }
 }

@@ -8,7 +8,7 @@ use crate::ir8::{
 };
 
 fn r(i: u16) -> Val8 {
-    Val8::vreg(i)
+    Val8::reg(i)
 }
 
 fn mk_prog(blocks: Vec<BasicBlock8>) -> Ir8Program {
@@ -476,15 +476,15 @@ fn opt8_combines_bool_or_tree_into_nary_bool_or() {
         insts: vec![
             Inst8::with_dst(
                 r(10),
-                Inst8Kind::BoolOr(BoolNary8::from_regs(&[r(1), r(2)]).unwrap()),
+                Inst8Kind::BoolOr(BoolNary8::from_vals(&[r(1), r(2)]).unwrap()),
             ),
             Inst8::with_dst(
                 r(11),
-                Inst8Kind::BoolOr(BoolNary8::from_regs(&[r(3), r(4)]).unwrap()),
+                Inst8Kind::BoolOr(BoolNary8::from_vals(&[r(3), r(4)]).unwrap()),
             ),
             Inst8::with_dst(
                 r(12),
-                Inst8Kind::BoolOr(BoolNary8::from_regs(&[r(10), r(11)]).unwrap()),
+                Inst8Kind::BoolOr(BoolNary8::from_vals(&[r(10), r(11)]).unwrap()),
             ),
         ],
         terminator: Terminator8::Branch {
@@ -521,23 +521,23 @@ fn opt8_combines_large_bool_or_tree_into_single_nary_op() {
         insts: vec![
             Inst8::with_dst(
                 r(10),
-                Inst8Kind::BoolOr(BoolNary8::from_regs(&[r(1), r(2)]).unwrap()),
+                Inst8Kind::BoolOr(BoolNary8::from_vals(&[r(1), r(2)]).unwrap()),
             ),
             Inst8::with_dst(
                 r(11),
-                Inst8Kind::BoolOr(BoolNary8::from_regs(&[r(3), r(4)]).unwrap()),
+                Inst8Kind::BoolOr(BoolNary8::from_vals(&[r(3), r(4)]).unwrap()),
             ),
             Inst8::with_dst(
                 r(12),
-                Inst8Kind::BoolOr(BoolNary8::from_regs(&[r(5), r(6)]).unwrap()),
+                Inst8Kind::BoolOr(BoolNary8::from_vals(&[r(5), r(6)]).unwrap()),
             ),
             Inst8::with_dst(
                 r(13),
-                Inst8Kind::BoolOr(BoolNary8::from_regs(&[r(10), r(11)]).unwrap()),
+                Inst8Kind::BoolOr(BoolNary8::from_vals(&[r(10), r(11)]).unwrap()),
             ),
             Inst8::with_dst(
                 r(14),
-                Inst8Kind::BoolOr(BoolNary8::from_regs(&[r(13), r(12)]).unwrap()),
+                Inst8Kind::BoolOr(BoolNary8::from_vals(&[r(13), r(12)]).unwrap()),
             ),
         ],
         terminator: Terminator8::Branch {
@@ -578,15 +578,15 @@ fn opt8_combines_ne_bool_or_tree_into_nary_bool_or() {
             Inst8::with_dst(r(13), Inst8Kind::Ne(r(7), r(8))),
             Inst8::with_dst(
                 r(15),
-                Inst8Kind::BoolOr(BoolNary8::from_regs(&[r(10), r(11)]).unwrap()),
+                Inst8Kind::BoolOr(BoolNary8::from_vals(&[r(10), r(11)]).unwrap()),
             ),
             Inst8::with_dst(
                 r(16),
-                Inst8Kind::BoolOr(BoolNary8::from_regs(&[r(12), r(13)]).unwrap()),
+                Inst8Kind::BoolOr(BoolNary8::from_vals(&[r(12), r(13)]).unwrap()),
             ),
             Inst8::with_dst(
                 r(14),
-                Inst8Kind::BoolOr(BoolNary8::from_regs(&[r(15), r(16)]).unwrap()),
+                Inst8Kind::BoolOr(BoolNary8::from_vals(&[r(15), r(16)]).unwrap()),
             ),
         ],
         terminator: Terminator8::Branch {
@@ -665,7 +665,7 @@ fn opt8_simplifies_false_compare_checks_inside_nary_bool_or() {
                 Inst8::with_dst(r(23), Inst8Kind::Ne(r(2), r(2))),
                 Inst8::with_dst(
                     r(4),
-                    Inst8Kind::BoolOr(BoolNary8::from_regs(&[r(20), r(21), r(22), r(23)]).unwrap()),
+                    Inst8Kind::BoolOr(BoolNary8::from_vals(&[r(20), r(21), r(22), r(23)]).unwrap()),
                 ),
             ],
             terminator: Terminator8::Branch {

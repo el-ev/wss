@@ -37,8 +37,8 @@ struct OwnerInfo {
 }
 
 impl OwnerInfo {
-    fn owner_of(&self, v: Val8) -> Option<FuncId> {
-        self.owner_by_vreg.get(&v).copied()
+    fn owner_of(&self, reg: Val8) -> Option<FuncId> {
+        self.owner_by_vreg.get(&reg).copied()
     }
 }
 
@@ -103,7 +103,7 @@ fn build_owner_info(ir8: &Ir8Program) -> anyhow::Result<OwnerInfo> {
         // TODO(i64): local vreg ownership currently allocates 4 registers per value word.
         let local_bytes = num_locals as u16 * 4;
         for i in 0..local_bytes {
-            owner_by_vreg.insert(Val8::vreg(local_cursor + i), func_id);
+            owner_by_vreg.insert(Val8::reg(local_cursor + i), func_id);
         }
         local_cursor = local_cursor.saturating_add(local_bytes);
     }
@@ -116,7 +116,7 @@ fn build_owner_info(ir8: &Ir8Program) -> anyhow::Result<OwnerInfo> {
                     .defs()
                     .into_iter()
                     .chain(inst.uses())
-                    .filter(|r| r.reg_index().unwrap() >= fresh_start)
+                    .filter(|reg| reg.expect_vreg() >= fresh_start)
                 {
                     assign_owner(&mut owner_by_vreg, reg, func_id)?;
                 }
@@ -127,7 +127,7 @@ fn build_owner_info(ir8: &Ir8Program) -> anyhow::Result<OwnerInfo> {
                 .defs()
                 .into_iter()
                 .chain(bb.terminator.uses())
-                .filter(|r| r.reg_index().unwrap() >= fresh_start)
+                .filter(|reg| reg.expect_vreg() >= fresh_start)
             {
                 assign_owner(&mut owner_by_vreg, reg, func_id)?;
             }
@@ -147,7 +147,7 @@ fn assign_owner(
     {
         bail!(
             "vreg r{} is referenced by multiple functions ({} and {})",
-            reg.reg_index().unwrap(),
+            reg.expect_vreg(),
             prev,
             func_id
         );
@@ -168,24 +168,22 @@ fn collect_referenced_groups(
                 .iter()
                 .flat_map(|i| i.defs().into_iter().chain(i.uses()))
             {
-                if reg.reg_index().unwrap() < VREG_START {
+                if reg.expect_vreg() < VREG_START {
                     continue;
                 }
-                let func_id = owners.owner_of(reg).context(format!(
-                    "missing owner for vreg r{}",
-                    reg.reg_index().unwrap()
-                ))?;
+                let func_id = owners
+                    .owner_of(reg)
+                    .context(format!("missing owner for vreg r{}", reg.expect_vreg()))?;
                 referenced[func_id].insert(group_of(reg));
             }
 
             for reg in bb.terminator.defs().into_iter().chain(bb.terminator.uses()) {
-                if reg.reg_index().unwrap() < VREG_START {
+                if reg.expect_vreg() < VREG_START {
                     continue;
                 }
-                let func_id = owners.owner_of(reg).context(format!(
-                    "missing owner for vreg r{}",
-                    reg.reg_index().unwrap()
-                ))?;
+                let func_id = owners
+                    .owner_of(reg)
+                    .context(format!("missing owner for vreg r{}", reg.expect_vreg()))?;
                 referenced[func_id].insert(group_of(reg));
             }
         }
@@ -357,14 +355,14 @@ fn build_intervals(
             for reg in inst
                 .uses()
                 .into_iter()
-                .filter(|&r| belongs_to_func(r, func_id, owners))
+                .filter(|&reg| belongs_to_func(reg, func_id, owners))
             {
                 touch_use(&mut intervals, reg, p);
             }
             for reg in inst
                 .defs()
                 .into_iter()
-                .filter(|&r| belongs_to_func(r, func_id, owners))
+                .filter(|&reg| belongs_to_func(reg, func_id, owners))
             {
                 touch_def(&mut intervals, reg, p);
             }
@@ -377,7 +375,7 @@ fn build_intervals(
             .terminator
             .uses()
             .into_iter()
-            .filter(|&r| belongs_to_func(r, func_id, owners))
+            .filter(|&reg| belongs_to_func(reg, func_id, owners))
         {
             touch_use(&mut intervals, reg, p);
         }
@@ -385,7 +383,7 @@ fn build_intervals(
             .terminator
             .defs()
             .into_iter()
-            .filter(|&r| belongs_to_func(r, func_id, owners))
+            .filter(|&reg| belongs_to_func(reg, func_id, owners))
         {
             touch_def(&mut intervals, reg, p);
         }
@@ -532,28 +530,28 @@ fn map_vreg(
     allocations: &[HashMap<GroupId, u16>],
     func_group_offsets: &[u16],
 ) -> anyhow::Result<Val8> {
-    if reg.is_imm() || reg.reg_index().unwrap() < VREG_START {
+    if reg.is_imm() {
+        return Ok(reg);
+    }
+    let reg_idx = reg.expect_vreg();
+    if reg_idx < VREG_START {
         return Ok(reg);
     }
 
-    let owner = owners.owner_of(reg).context(format!(
-        "missing owner for vreg r{}",
-        reg.reg_index().unwrap()
-    ))?;
+    let owner = owners
+        .owner_of(reg)
+        .context(format!("missing owner for vreg r{reg_idx}"))?;
     // TODO(i64): group/lane decomposition assumes 4 lanes per logical value.
-    let group = group_of(reg);
-    let lane = reg.reg_index().unwrap() % 4;
+    let group = reg_idx / 4;
+    let lane = reg_idx % 4;
 
-    let local_phys_group = allocations[owner].get(&group).copied().context({
-        format!(
-            "missing allocation for group {} (vreg r{})",
-            group,
-            reg.reg_index().unwrap()
-        )
-    })?;
+    let local_phys_group = allocations[owner].get(&group).copied().context(format!(
+        "missing allocation for group {} (vreg r{})",
+        group, reg_idx
+    ))?;
     let phys_group = func_group_offsets[owner].saturating_add(local_phys_group);
 
-    Ok(Val8::vreg(phys_group * 4 + lane))
+    Ok(Val8::reg(phys_group * 4 + lane))
 }
 
 fn rewrite_word(
@@ -641,7 +639,7 @@ fn rewrite_inst_kind(
             map1(r)?;
         }
         Inst8Kind::BoolAnd(op) | Inst8Kind::BoolOr(op) => {
-            *op = op.try_map_regs(|r| map_vreg(r, owners, allocations, func_group_offsets))?;
+            *op = op.try_map_vals(|val| map_vreg(val, owners, allocations, func_group_offsets))?;
         }
         Inst8Kind::Sel(c, l, r) => {
             map1(l)?;
@@ -714,12 +712,13 @@ fn rewrite_terminator(
 }
 
 fn belongs_to_func(reg: Val8, func_id: FuncId, owners: &OwnerInfo) -> bool {
-    reg.reg_index().unwrap() >= VREG_START && !reg.is_imm() && owners.owner_of(reg) == Some(func_id)
+    matches!(reg.reg_index(), Some(idx) if idx >= VREG_START)
+        && owners.owner_of(reg) == Some(func_id)
 }
 
 fn group_of(reg: Val8) -> GroupId {
     // TODO(i64): register groups are currently packed as 4-byte words.
-    reg.reg_index().unwrap() / 4
+    reg.expect_vreg() / 4
 }
 
 fn compact_physical_vregs(prog: &mut Ir8Program, max_phys_regs: u16) -> anyhow::Result<()> {
@@ -728,19 +727,19 @@ fn compact_physical_vregs(prog: &mut Ir8Program, max_phys_regs: u16) -> anyhow::
         for bb in blocks {
             for inst in &bb.insts {
                 if let Some(dst) = inst.dst
-                    && dst.reg_index().unwrap() >= VREG_START
+                    && dst.expect_vreg() >= VREG_START
                 {
-                    active.insert(dst.reg_index().unwrap());
+                    active.insert(dst.expect_vreg());
                 }
                 for r in inst.uses() {
-                    if r.reg_index().unwrap() >= VREG_START {
-                        active.insert(r.reg_index().unwrap());
+                    if r.expect_vreg() >= VREG_START {
+                        active.insert(r.expect_vreg());
                     }
                 }
             }
             for r in bb.terminator.defs().into_iter().chain(bb.terminator.uses()) {
-                if r.reg_index().unwrap() >= VREG_START {
-                    active.insert(r.reg_index().unwrap());
+                if r.expect_vreg() >= VREG_START {
+                    active.insert(r.expect_vreg());
                 }
             }
         }
@@ -768,7 +767,7 @@ fn compact_physical_vregs(prog: &mut Ir8Program, max_phys_regs: u16) -> anyhow::
 
     let mut dense_map = HashMap::new();
     for (i, reg) in active.into_iter().enumerate() {
-        dense_map.insert(Val8::vreg(reg), Val8::vreg(VREG_START + i as u16));
+        dense_map.insert(Val8::reg(reg), Val8::reg(VREG_START + i as u16));
     }
 
     remap_dense_vregs(prog, &dense_map)?;
@@ -791,16 +790,18 @@ fn remap_dense_vregs(prog: &mut Ir8Program, dense_map: &HashMap<Val8, Val8>) -> 
     Ok(())
 }
 
-fn remap_dense_reg(reg: Val8, dense_map: &HashMap<Val8, Val8>) -> anyhow::Result<Val8> {
-    if reg.is_imm() || reg.reg_index().unwrap() < VREG_START {
-        return Ok(reg);
+fn remap_dense_reg(val: Val8, dense_map: &HashMap<Val8, Val8>) -> anyhow::Result<Val8> {
+    let reg = match val {
+        Val8::Imm(_) => return Ok(val),
+        Val8::VReg(reg) => reg,
+    };
+    if reg < VREG_START {
+        return Ok(val);
     }
-    dense_map.get(&reg).copied().context({
-        format!(
-            "missing dense remap for physical vreg r{}",
-            reg.reg_index().unwrap()
-        )
-    })
+    dense_map
+        .get(&val)
+        .copied()
+        .context(format!("missing dense remap for physical vreg r{}", reg))
 }
 
 fn remap_dense_word(w: &mut Word, dense_map: &HashMap<Val8, Val8>) -> anyhow::Result<()> {
@@ -880,7 +881,7 @@ fn remap_dense_inst_kind(
             map1(r)?;
         }
         Inst8Kind::BoolAnd(op) | Inst8Kind::BoolOr(op) => {
-            *op = op.try_map_regs(|r| remap_dense_reg(r, dense_map))?;
+            *op = op.try_map_vals(|val| remap_dense_reg(val, dense_map))?;
         }
         Inst8Kind::Sel(c, l, r) => {
             map1(l)?;
@@ -990,12 +991,12 @@ mod tests {
 
     #[test]
     fn regalloc_separates_physical_banks_per_function() {
-        let f0_r0 = Val8::vreg(4);
-        let f0_r1 = Val8::vreg(5);
-        let f0_r2 = Val8::vreg(6);
-        let f0_r3 = Val8::vreg(7);
-        let f1_addr_lo = Val8::vreg(8);
-        let f1_addr_hi = Val8::vreg(9);
+        let f0_r0 = Val8::reg(4);
+        let f0_r1 = Val8::reg(5);
+        let f0_r2 = Val8::reg(6);
+        let f0_r3 = Val8::reg(7);
+        let f1_addr_lo = Val8::reg(8);
+        let f1_addr_hi = Val8::reg(9);
 
         let func0 = vec![BasicBlock8 {
             id: Pc::new(0),
@@ -1030,7 +1031,7 @@ mod tests {
                     base: 12,
                     addr: Addr::new(f1_addr_lo, f1_addr_hi),
                     lane: 0,
-                    val: Val8::vreg(0),
+                    val: Val8::reg(0),
                 })],
                 terminator: Terminator8::Exit { val: None },
             },
@@ -1052,8 +1053,8 @@ mod tests {
 
         let mut f0_regs = regs_in_func(&out.func_blocks[0]);
         let mut f1_regs = regs_in_func(&out.func_blocks[1]);
-        f0_regs.retain(|r| r.reg_index().unwrap() >= 4);
-        f1_regs.retain(|r| r.reg_index().unwrap() >= 4);
+        f0_regs.retain(|r| r.expect_vreg() >= 4);
+        f1_regs.retain(|r| r.expect_vreg() >= 4);
 
         let overlap: HashSet<Val8> = f0_regs.intersection(&f1_regs).copied().collect();
         assert!(
@@ -1064,10 +1065,10 @@ mod tests {
 
     #[test]
     fn regalloc_compacts_physical_vregs_to_dense_range() {
-        let r_a = Val8::vreg(4);
-        let r_b = Val8::vreg(5);
-        let r_c = Val8::vreg(16);
-        let r_d = Val8::vreg(17);
+        let r_a = Val8::reg(4);
+        let r_b = Val8::reg(5);
+        let r_c = Val8::reg(16);
+        let r_d = Val8::reg(17);
 
         let prog = Ir8Program {
             entry_func: 0,
@@ -1086,7 +1087,7 @@ mod tests {
                     id: Pc::new(1),
                     insts: vec![Inst8::with_dst(r_d, Inst8Kind::Copy(r_c))],
                     terminator: Terminator8::Return {
-                        val: Some(Word::new(r_d, Val8::vreg(0), Val8::vreg(1), Val8::vreg(2))),
+                        val: Some(Word::new(r_d, Val8::reg(0), Val8::reg(1), Val8::reg(2))),
                     },
                 },
             ]],
@@ -1101,7 +1102,7 @@ mod tests {
         let out = regalloc(prog, DEFAULT_MAX_PHYS_REGS).expect("regalloc should succeed");
         let mut regs: Vec<u16> = regs_in_program(&out)
             .into_iter()
-            .map(|r| r.reg_index().unwrap())
+            .map(|r| r.expect_vreg())
             .filter(|idx| *idx >= 4)
             .collect();
         regs.sort_unstable();
@@ -1117,10 +1118,10 @@ mod tests {
         let mut args = Vec::new();
         let mut next = 4u16;
         for _ in 0..64 {
-            let b0 = Val8::vreg(next);
-            let b1 = Val8::vreg(next + 1);
-            let b2 = Val8::vreg(next + 2);
-            let b3 = Val8::vreg(next + 3);
+            let b0 = Val8::reg(next);
+            let b1 = Val8::reg(next + 1);
+            let b2 = Val8::reg(next + 2);
+            let b3 = Val8::reg(next + 3);
             next += 4;
 
             insts.push(Inst8::with_dst(b0, Inst8Kind::Copy(Val8::imm(1))));
@@ -1174,15 +1175,15 @@ mod tests {
             func_blocks: vec![vec![BasicBlock8 {
                 id: Pc::new(0),
                 insts: vec![
-                    Inst8::with_dst(Val8::vreg(4), Inst8Kind::Copy(Val8::imm(1))),
+                    Inst8::with_dst(Val8::reg(4), Inst8Kind::Copy(Val8::imm(1))),
                     Inst8::with_dst(
-                        Val8::vreg(5),
+                        Val8::reg(5),
                         Inst8Kind::Add32Byte {
                             lhs: Word::new(
-                                Val8::vreg(4),
-                                Val8::vreg(12),
-                                Val8::vreg(13),
-                                Val8::vreg(14),
+                                Val8::reg(4),
+                                Val8::reg(12),
+                                Val8::reg(13),
+                                Val8::reg(14),
                             ),
                             rhs: Word::from_u32_imm(2),
                             lane: 0,
@@ -1191,7 +1192,7 @@ mod tests {
                 ],
                 terminator: Terminator8::Exit {
                     val: Some(Word::new(
-                        Val8::vreg(5),
+                        Val8::reg(5),
                         Val8::imm(0),
                         Val8::imm(0),
                         Val8::imm(0),

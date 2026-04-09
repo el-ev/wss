@@ -72,8 +72,8 @@ fn expr_byte_hex_masks_input_to_single_byte() {
 
 #[test]
 fn expr_add32_byte_reads_only_required_prefix_bytes() {
-    let lhs = Word::new(Val8::vreg(0), Val8::vreg(1), Val8::vreg(2), Val8::vreg(3));
-    let rhs = Word::new(Val8::vreg(4), Val8::vreg(5), Val8::vreg(6), Val8::vreg(7));
+    let lhs = Word::new(Val8::reg(0), Val8::reg(1), Val8::reg(2), Val8::reg(3));
+    let rhs = Word::new(Val8::reg(4), Val8::reg(5), Val8::reg(6), Val8::reg(7));
     let now = HashMap::new();
 
     let expr = Emitter::add32_byte_expr(&now, lhs, rhs, 1);
@@ -92,8 +92,8 @@ fn expr_add32_byte_reads_only_required_prefix_bytes() {
 
 #[test]
 fn expr_sub32_byte_reads_only_required_prefix_bytes() {
-    let lhs = Word::new(Val8::vreg(0), Val8::vreg(1), Val8::vreg(2), Val8::vreg(3));
-    let rhs = Word::new(Val8::vreg(4), Val8::vreg(5), Val8::vreg(6), Val8::vreg(7));
+    let lhs = Word::new(Val8::reg(0), Val8::reg(1), Val8::reg(2), Val8::reg(3));
+    let rhs = Word::new(Val8::reg(4), Val8::reg(5), Val8::reg(6), Val8::reg(7));
     let now = HashMap::new();
 
     let expr = Emitter::sub32_byte_expr(&now, lhs, rhs, 2);
@@ -113,7 +113,7 @@ fn expr_sub32_byte_reads_only_required_prefix_bytes() {
 
 #[test]
 fn expr_add32_byte_avoids_wide_constants_for_small_immediate() {
-    let lhs = Word::new(Val8::vreg(0), Val8::vreg(1), Val8::vreg(2), Val8::vreg(3));
+    let lhs = Word::new(Val8::reg(0), Val8::reg(1), Val8::reg(2), Val8::reg(3));
     let rhs = Word::from_u32_imm(1);
     let now = HashMap::new();
 
@@ -147,12 +147,7 @@ fn expr_word_hex_is_big_endian_without_u32_widening() {
     now.insert(12, "var(--b2)".to_string());
     now.insert(13, "var(--b3)".to_string());
 
-    let word = Word::new(
-        Val8::vreg(10),
-        Val8::vreg(11),
-        Val8::vreg(12),
-        Val8::vreg(13),
-    );
+    let word = Word::new(Val8::reg(10), Val8::reg(11), Val8::reg(12), Val8::reg(13));
     let expr = Emitter::word_hex_expr(&now, word);
 
     assert!(expr.starts_with("\"0x\" "));
@@ -169,8 +164,8 @@ fn eval_builtin_division_entries_trap_when_js_coprocessor_is_disabled() {
     let program = minimal_exit_program();
     let emitter = Emitter::new(&program, EmitConfig::default()).expect("emitter should initialize");
 
-    let lhs = Word::new(Val8::vreg(0), Val8::vreg(1), Val8::vreg(2), Val8::vreg(3));
-    let rhs = Word::new(Val8::vreg(4), Val8::vreg(5), Val8::vreg(6), Val8::vreg(7));
+    let lhs = Word::new(Val8::reg(0), Val8::reg(1), Val8::reg(2), Val8::reg(3));
+    let rhs = Word::new(Val8::reg(4), Val8::reg(5), Val8::reg(6), Val8::reg(7));
     let now = register_exprs(8);
 
     for builtin in [
@@ -196,8 +191,8 @@ fn eval_builtin_division_uses_js_coprocessor_channel_when_enabled() {
     )
     .expect("emitter should initialize");
 
-    let lhs = Word::new(Val8::vreg(0), Val8::vreg(1), Val8::vreg(2), Val8::vreg(3));
-    let rhs = Word::new(Val8::vreg(4), Val8::vreg(5), Val8::vreg(6), Val8::vreg(7));
+    let lhs = Word::new(Val8::reg(0), Val8::reg(1), Val8::reg(2), Val8::reg(3));
+    let rhs = Word::new(Val8::reg(4), Val8::reg(5), Val8::reg(6), Val8::reg(7));
     let now = register_exprs(8);
 
     let (ret, trap) = emitter.eval_builtin(BuiltinId::DivU32, &[lhs, rhs], &now);
@@ -221,7 +216,7 @@ fn eval_builtin_clz_ctz_css_path_avoids_nested_sel_calls() {
     let program = minimal_exit_program();
     let emitter = Emitter::new(&program, EmitConfig::default()).expect("emitter should initialize");
 
-    let lhs = Word::new(Val8::vreg(0), Val8::vreg(1), Val8::vreg(2), Val8::vreg(3));
+    let lhs = Word::new(Val8::reg(0), Val8::reg(1), Val8::reg(2), Val8::reg(3));
     let now = register_exprs(4);
 
     let (clz_ret, clz_trap) = emitter.eval_builtin(BuiltinId::Clz32, &[lhs], &now);
@@ -399,7 +394,7 @@ fn emit_html_omits_callstack_state_when_unused() {
 
 #[test]
 fn emit_html_memory_visualizer_tracks_read_and_write_slots() {
-    let addr = crate::ir8::Addr::new(Val8::vreg(0), Val8::vreg(1));
+    let addr = crate::ir8::Addr::new(Val8::reg(0), Val8::reg(1));
     let program = Ir8Program {
         entry_func: 0,
         num_vregs: 3,
@@ -408,7 +403,7 @@ fn emit_html_memory_visualizer_tracks_read_and_write_slots() {
             pc: crate::ir8::Pc::new(0),
             ops: vec![
                 crate::ir8::Inst8::with_dst(
-                    Val8::vreg(2),
+                    Val8::reg(2),
                     Inst8Kind::LoadMem {
                         base: 0,
                         addr,
@@ -419,7 +414,7 @@ fn emit_html_memory_visualizer_tracks_read_and_write_slots() {
                     base: 0,
                     addr,
                     lane: 1,
-                    val: Val8::vreg(2),
+                    val: Val8::reg(2),
                 }),
             ],
             terminator: Terminator8::Exit { val: None },
@@ -451,9 +446,9 @@ fn emit_html_callstack_visualizer_tracks_read_and_write_slots() {
             ops: vec![
                 crate::ir8::Inst8::no_dst(Inst8Kind::CsStore {
                     offset: 0,
-                    val: Val8::vreg(0),
+                    val: Val8::reg(0),
                 }),
-                crate::ir8::Inst8::with_dst(Val8::vreg(0), Inst8Kind::CsLoad { offset: 0 }),
+                crate::ir8::Inst8::with_dst(Val8::reg(0), Inst8Kind::CsLoad { offset: 0 }),
             ],
             terminator: Terminator8::Exit { val: None },
         }],
@@ -489,7 +484,7 @@ fn emit_html_callstack_visualizer_tracks_read_and_write_slots() {
 #[test]
 fn emit_html_partitions_active_flags_when_many_writer_pcs() {
     let total = (ACTIVE_FLAG_ARMS_CHUNK as u16) + 3;
-    let addr = crate::ir8::Addr::new(Val8::vreg(0), Val8::vreg(1));
+    let addr = crate::ir8::Addr::new(Val8::reg(0), Val8::reg(1));
     let mut cycles = Vec::with_capacity(total as usize);
     for i in 0..total {
         let term = if i + 1 < total {
@@ -504,11 +499,11 @@ fn emit_html_partitions_active_flags_when_many_writer_pcs() {
                     base: 0,
                     addr,
                     lane: 0,
-                    val: Val8::vreg(2),
+                    val: Val8::reg(2),
                 }),
                 crate::ir8::Inst8::no_dst(Inst8Kind::CsStore {
                     offset: 0,
-                    val: Val8::vreg(3),
+                    val: Val8::reg(3),
                 }),
             ],
             terminator: term,
@@ -537,7 +532,7 @@ fn emit_html_partitions_active_flags_when_many_writer_pcs() {
 
 #[test]
 fn emit_html_mload_helper_avoids_local_aliasing() {
-    let addr = crate::ir8::Addr::new(Val8::vreg(0), Val8::vreg(1));
+    let addr = crate::ir8::Addr::new(Val8::reg(0), Val8::reg(1));
     let program = Ir8Program {
         entry_func: 0,
         num_vregs: 2,
@@ -545,7 +540,7 @@ fn emit_html_mload_helper_avoids_local_aliasing() {
         cycles: vec![crate::ir8::Cycle {
             pc: crate::ir8::Pc::new(0),
             ops: vec![crate::ir8::Inst8::with_dst(
-                Val8::vreg(0),
+                Val8::reg(0),
                 Inst8Kind::LoadMem {
                     base: 0,
                     addr,
@@ -589,7 +584,7 @@ fn emit_html_includes_keyboard_ui_when_getchar_is_used() {
         cycles: vec![crate::ir8::Cycle {
             pc: crate::ir8::Pc::new(0),
             ops: vec![crate::ir8::Inst8::with_dst(
-                Val8::vreg(0),
+                Val8::reg(0),
                 Inst8Kind::Getchar,
             )],
             terminator: Terminator8::Exit { val: None },
@@ -614,7 +609,7 @@ fn emit_html_includes_keyboard_ui_when_getchar_is_used() {
 
 #[test]
 fn emit_html_includes_ne_helper_when_clz_builtin_is_used() {
-    let arg = Word::new(Val8::vreg(0), Val8::vreg(1), Val8::vreg(2), Val8::vreg(3));
+    let arg = Word::new(Val8::reg(0), Val8::reg(1), Val8::reg(2), Val8::reg(3));
     let program = Ir8Program {
         entry_func: 0,
         num_vregs: 4,
@@ -701,7 +696,7 @@ fn emit_html_pc_fallback_increments_for_trivial_fallthrough() {
 
 #[test]
 fn emit_html_pc_keeps_explicit_arm_when_cycle_has_trap_guard() {
-    let addr = crate::ir8::Addr::new(Val8::vreg(0), Val8::vreg(1));
+    let addr = crate::ir8::Addr::new(Val8::reg(0), Val8::reg(1));
     let program = Ir8Program {
         entry_func: 0,
         num_vregs: 2,
@@ -713,7 +708,7 @@ fn emit_html_pc_keeps_explicit_arm_when_cycle_has_trap_guard() {
                     base: 0,
                     addr,
                     lane: 0,
-                    val: Val8::vreg(0),
+                    val: Val8::reg(0),
                 })],
                 terminator: Terminator8::Goto(crate::ir8::Pc::new(1)),
             },
@@ -822,7 +817,7 @@ fn emit_html_globals_emit_all_lanes_on_single_line_per_global() {
 
 #[test]
 fn emit_html_memory_store_merge_expr_stays_compact() {
-    let addr = crate::ir8::Addr::new(Val8::vreg(10), Val8::vreg(11));
+    let addr = crate::ir8::Addr::new(Val8::reg(10), Val8::reg(11));
     let program = Ir8Program {
         entry_func: 0,
         num_vregs: 16,
@@ -834,25 +829,25 @@ fn emit_html_memory_store_merge_expr_stays_compact() {
                     base: 0,
                     addr,
                     lane: 0,
-                    val: Val8::vreg(12),
+                    val: Val8::reg(12),
                 }),
                 crate::ir8::Inst8::no_dst(Inst8Kind::StoreMem {
                     base: 0,
                     addr,
                     lane: 1,
-                    val: Val8::vreg(13),
+                    val: Val8::reg(13),
                 }),
                 crate::ir8::Inst8::no_dst(Inst8Kind::StoreMem {
                     base: 0,
                     addr,
                     lane: 2,
-                    val: Val8::vreg(14),
+                    val: Val8::reg(14),
                 }),
                 crate::ir8::Inst8::no_dst(Inst8Kind::StoreMem {
                     base: 0,
                     addr,
                     lane: 3,
-                    val: Val8::vreg(15),
+                    val: Val8::reg(15),
                 }),
             ],
             terminator: Terminator8::Exit { val: None },
@@ -895,7 +890,7 @@ fn emit_html_memory_store_merge_expr_stays_compact() {
 
 #[test]
 fn emit_html_memory_store_merge_expr_flattens_slot_conditions() {
-    let addr = crate::ir8::Addr::new(Val8::vreg(10), Val8::vreg(11));
+    let addr = crate::ir8::Addr::new(Val8::reg(10), Val8::reg(11));
     let program = Ir8Program {
         entry_func: 0,
         num_vregs: 16,
@@ -907,13 +902,13 @@ fn emit_html_memory_store_merge_expr_flattens_slot_conditions() {
                     base: 0,
                     addr,
                     lane: 0,
-                    val: Val8::vreg(12),
+                    val: Val8::reg(12),
                 }),
                 crate::ir8::Inst8::no_dst(Inst8Kind::StoreMem {
                     base: 0,
                     addr,
                     lane: 1,
-                    val: Val8::vreg(13),
+                    val: Val8::reg(13),
                 }),
             ],
             terminator: Terminator8::Exit { val: None },

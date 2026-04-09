@@ -483,7 +483,7 @@ mod tests {
     };
 
     fn r(i: u16) -> Val8 {
-        Val8::vreg(i)
+        Val8::reg(i)
     }
 
     #[test]

@@ -210,15 +210,15 @@ fn combine_kind(
 }
 
 fn resolve_bool_view(
-    reg: Val8,
+    val: Val8,
     facts: &HashMap<Val8, super::facts::RegFact>,
     defs: &HashMap<Val8, Inst8Kind>,
 ) -> Option<(Val8, bool)> {
-    if !is_bool_fact(facts, reg) {
+    if !is_bool_fact(facts, val) {
         return None;
     }
 
-    let mut cur = reg;
+    let mut cur = val;
     let mut inverted = false;
     let mut seen = HashSet::new();
 
