@@ -1704,6 +1704,62 @@
     }
   },
   {
+    "id": "select_narrow_memory_mix",
+    "source": "tests/cases/select_narrow_memory_mix.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x85a4c758",
+      "rendered_includes": [
+        "Program exited with code",
+        "0x85a4c758"
+      ]
+    }
+  },
+  {
+    "id": "indirect_switch_memory_long",
+    "source": "tests/cases/indirect_switch_memory_long.c",
+    "tags": [
+      "lengthy"
+    ],
+    "virtual_time_budget_ms": 60000,
+    "expect": {
+      "pc": -1,
+      "ra": "0x000641ef",
+      "rendered_includes": [
+        "Program exited with code",
+        "0x000641ef"
+      ]
+    }
+  },
+  {
+    "id": "call_select_accumulate",
+    "source": "tests/cases/call_select_accumulate.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x000003af",
+      "rendered_includes": [
+        "Program exited with code",
+        "0x000003af"
+      ]
+    }
+  },
+  {
+    "id": "table_memory_stride_long",
+    "source": "tests/cases/table_memory_stride_long.c",
+    "tags": [
+      "lengthy"
+    ],
+    "virtual_time_budget_ms": 60000,
+    "expect": {
+      "pc": -1,
+      "ra": "0xddbcb67f",
+      "rendered_includes": [
+        "Program exited with code",
+        "0xddbcb67f"
+      ]
+    }
+  },
+  {
     "id": "up8cc_pointer_ptrdiff_lp64",
     "source": "tests/cases/up8cc_pointer_ptrdiff_lp64.c",
     "tags": [
