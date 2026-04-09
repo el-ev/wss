@@ -140,8 +140,8 @@ pub(super) fn rewrite_inst(mut inst: Inst8, subst: &HashMap<Val8, Val8>) -> Inst
         Inst8Kind::Ne(l, r) => Inst8Kind::Ne(rw(subst, l), rw(subst, r)),
         Inst8Kind::LtU(l, r) => Inst8Kind::LtU(rw(subst, l), rw(subst, r)),
         Inst8Kind::GeU(l, r) => Inst8Kind::GeU(rw(subst, l), rw(subst, r)),
-        Inst8Kind::BoolAnd(op) => Inst8Kind::BoolAnd(op.map_regs(|r| rw(subst, r))),
-        Inst8Kind::BoolOr(op) => Inst8Kind::BoolOr(op.map_regs(|r| rw(subst, r))),
+        Inst8Kind::BoolAnd(op) => Inst8Kind::BoolAnd(op.map_vals(|val| rw(subst, val))),
+        Inst8Kind::BoolOr(op) => Inst8Kind::BoolOr(op.map_vals(|val| rw(subst, val))),
         Inst8Kind::BoolNot(v) => Inst8Kind::BoolNot(rw(subst, v)),
         Inst8Kind::Sel(c, t, f) => Inst8Kind::Sel(rw(subst, c), rw(subst, t), rw(subst, f)),
 
@@ -224,9 +224,9 @@ pub(super) fn has_side_effect(kind: &Inst8Kind) -> bool {
 }
 
 pub(super) fn inst_uses(kind: &Inst8Kind, live: &mut HashSet<Val8>) {
-    let add_use = |live: &mut HashSet<Val8>, r: Val8| {
-        if !r.is_imm() {
-            live.insert(r);
+    let add_use = |live: &mut HashSet<Val8>, val: Val8| {
+        if !val.is_imm() {
+            live.insert(val);
         }
     };
 
@@ -269,8 +269,8 @@ pub(super) fn inst_uses(kind: &Inst8Kind, live: &mut HashSet<Val8>) {
             add_use(live, *r);
         }
         Inst8Kind::BoolAnd(op) | Inst8Kind::BoolOr(op) => {
-            for &r in op.as_slice() {
-                add_use(live, r);
+            for &val in op.as_slice() {
+                add_use(live, val);
             }
         }
         Inst8Kind::Sel(c, l, r) => {

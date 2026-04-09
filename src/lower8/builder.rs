@@ -16,10 +16,10 @@ pub(super) fn prealloc_locals(module: &IrModule) -> (Vec<FuncAlloc>, u16) {
                 .map(|_| {
                     // TODO(i64): each local is currently represented as one 4-byte word.
                     let w = Word::new(
-                        Val8::vreg(counter),
-                        Val8::vreg(counter + 1),
-                        Val8::vreg(counter + 2),
-                        Val8::vreg(counter + 3),
+                        Val8::reg(counter),
+                        Val8::reg(counter + 1),
+                        Val8::reg(counter + 2),
+                        Val8::reg(counter + 3),
                     );
                     counter += 4;
                     w
@@ -33,17 +33,17 @@ pub(super) fn prealloc_locals(module: &IrModule) -> (Vec<FuncAlloc>, u16) {
 
 pub(super) fn alloc_builtin_div_params(counter: &mut u16) -> FuncAlloc {
     let word0 = Word::new(
-        Val8::vreg(*counter),
-        Val8::vreg(*counter + 1),
-        Val8::vreg(*counter + 2),
-        Val8::vreg(*counter + 3),
+        Val8::reg(*counter),
+        Val8::reg(*counter + 1),
+        Val8::reg(*counter + 2),
+        Val8::reg(*counter + 3),
     );
     *counter += 4;
     let word1 = Word::new(
-        Val8::vreg(*counter),
-        Val8::vreg(*counter + 1),
-        Val8::vreg(*counter + 2),
-        Val8::vreg(*counter + 3),
+        Val8::reg(*counter),
+        Val8::reg(*counter + 1),
+        Val8::reg(*counter + 2),
+        Val8::reg(*counter + 3),
     );
     *counter += 4;
     FuncAlloc {
@@ -86,7 +86,7 @@ impl FuncBuilder {
     }
 
     pub(super) fn alloc_reg(&mut self) -> Val8 {
-        let v = Val8::vreg(self.vreg_counter);
+        let v = Val8::reg(self.vreg_counter);
         self.vreg_counter += 1;
         v
     }

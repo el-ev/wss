@@ -5,7 +5,7 @@ pub enum Val8 {
 }
 
 impl Val8 {
-    pub const fn vreg(value: u16) -> Self {
+    pub const fn reg(value: u16) -> Self {
         Self::VReg(value)
     }
     pub const fn imm(value: u8) -> Self {
@@ -24,6 +24,14 @@ impl Val8 {
         match self {
             Self::VReg(i) => Some(i),
             _ => None,
+        }
+    }
+
+    #[track_caller]
+    pub fn expect_vreg(self) -> u16 {
+        match self {
+            Self::VReg(i) => i,
+            Self::Imm(v) => panic!("expected vreg, found immediate {v:#04x}"),
         }
     }
 }
@@ -110,10 +118,10 @@ impl Addr {
     }
 }
 
-pub const RET_B0: Val8 = Val8::vreg(0);
-pub const RET_B1: Val8 = Val8::vreg(1);
-pub const RET_B2: Val8 = Val8::vreg(2);
-pub const RET_B3: Val8 = Val8::vreg(3);
+pub const RET_B0: Val8 = Val8::reg(0);
+pub const RET_B1: Val8 = Val8::reg(1);
+pub const RET_B2: Val8 = Val8::reg(2);
+pub const RET_B3: Val8 = Val8::reg(3);
 pub const RET: Word = Word {
     b0: RET_B0,
     b1: RET_B1,
@@ -175,47 +183,47 @@ pub const BOOL_NARY_MAX_INPUTS: usize = 16;
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct BoolNary8 {
     pub len: u8,
-    pub regs: [Val8; BOOL_NARY_MAX_INPUTS],
+    pub vals: [Val8; BOOL_NARY_MAX_INPUTS],
 }
 
 impl BoolNary8 {
-    pub fn from_regs(regs: &[Val8]) -> Option<Self> {
-        if regs.is_empty() || regs.len() > BOOL_NARY_MAX_INPUTS {
+    pub fn from_vals(vals: &[Val8]) -> Option<Self> {
+        if vals.is_empty() || vals.len() > BOOL_NARY_MAX_INPUTS {
             return None;
         }
 
         let mut out = Self {
-            len: regs.len() as u8,
-            regs: [Val8::imm(0); BOOL_NARY_MAX_INPUTS],
+            len: vals.len() as u8,
+            vals: [Val8::imm(0); BOOL_NARY_MAX_INPUTS],
         };
-        out.regs[..regs.len()].copy_from_slice(regs);
+        out.vals[..vals.len()].copy_from_slice(vals);
         Some(out)
     }
 
     pub fn as_slice(&self) -> &[Val8] {
-        &self.regs[..usize::from(self.len)]
+        &self.vals[..usize::from(self.len)]
     }
 
     pub fn regs(self) -> Vec<Val8> {
         self.as_slice()
             .iter()
             .copied()
-            .filter(|r| !r.is_imm())
+            .filter(|val| !val.is_imm())
             .collect()
     }
 
-    pub fn map_regs(self, mut f: impl FnMut(Val8) -> Val8) -> Self {
+    pub fn map_vals(self, mut f: impl FnMut(Val8) -> Val8) -> Self {
         let mut out = self;
-        for reg in &mut out.regs[..usize::from(out.len)] {
-            *reg = f(*reg);
+        for val in &mut out.vals[..usize::from(out.len)] {
+            *val = f(*val);
         }
         out
     }
 
-    pub fn try_map_regs<E>(self, mut f: impl FnMut(Val8) -> Result<Val8, E>) -> Result<Self, E> {
+    pub fn try_map_vals<E>(self, mut f: impl FnMut(Val8) -> Result<Val8, E>) -> Result<Self, E> {
         let mut out = self;
-        for reg in &mut out.regs[..usize::from(out.len)] {
-            *reg = f(*reg)?;
+        for val in &mut out.vals[..usize::from(out.len)] {
+            *val = f(*val)?;
         }
         Ok(out)
     }

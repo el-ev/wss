@@ -68,18 +68,18 @@ pub(super) fn build_reg_facts(blocks: &[BasicBlock8]) -> HashMap<Val8, RegFact> 
     facts
 }
 
-pub(super) fn const_fact(facts: &HashMap<Val8, RegFact>, reg: Val8) -> Option<u8> {
-    if let Some(v) = reg.imm_value() {
+pub(super) fn const_fact(facts: &HashMap<Val8, RegFact>, val: Val8) -> Option<u8> {
+    if let Some(v) = val.imm_value() {
         return Some(v);
     }
-    match facts.get(&reg) {
+    match facts.get(&val) {
         Some(RegFact::Const(v)) => Some(*v),
         _ => None,
     }
 }
 
-pub(super) fn is_bool_fact(facts: &HashMap<Val8, RegFact>, reg: Val8) -> bool {
-    match facts.get(&reg) {
+pub(super) fn is_bool_fact(facts: &HashMap<Val8, RegFact>, val: Val8) -> bool {
+    match facts.get(&val) {
         Some(RegFact::Bool) => true,
         Some(RegFact::Const(v)) => *v <= 1,
         None => false,

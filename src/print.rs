@@ -543,20 +543,20 @@ pub fn print_program(prog: &Ir8Program) -> String {
     out
 }
 
-fn fmt_vreg(r: Val8) -> String {
-    if let Some(v) = r.imm_value() {
-        return format!("{:#04x}", v);
+fn fmt_val8(r: Val8) -> String {
+    match r {
+        Val8::VReg(v) => format!("%r{}", v),
+        Val8::Imm(i) => format!("{:#04x}", i),
     }
-    format!("%r{}", r.reg_index().unwrap())
 }
 
 fn fmt_word(w: Word) -> String {
     format!(
         "({}:{}:{}:{})",
-        fmt_vreg(w.b0),
-        fmt_vreg(w.b1),
-        fmt_vreg(w.b2),
-        fmt_vreg(w.b3)
+        fmt_val8(w.b0),
+        fmt_val8(w.b1),
+        fmt_val8(w.b2),
+        fmt_val8(w.b3)
     )
 }
 
@@ -578,17 +578,17 @@ fn fmt_builtin(builtin: BuiltinId) -> &'static str {
 fn fmt_bool_nary(op: &BoolNary8) -> String {
     op.as_slice()
         .iter()
-        .map(|r| fmt_vreg(*r))
+        .map(|r| fmt_val8(*r))
         .collect::<Vec<_>>()
         .join(" ")
 }
 
 fn print_inst8(out: &mut String, inst: &crate::ir8::Inst8) {
     if let Some(dst) = inst.dst {
-        write!(out, "{} = ", fmt_vreg(dst)).unwrap();
+        write!(out, "{} = ", fmt_val8(dst)).unwrap();
     }
     match &inst.kind {
-        Inst8Kind::Copy(s) => write!(out, "copy {}", fmt_vreg(*s)).unwrap(),
+        Inst8Kind::Copy(s) => write!(out, "copy {}", fmt_val8(*s)).unwrap(),
 
         Inst8Kind::Add32Byte { lhs, rhs, lane } => {
             write!(out, "add32.b{} {} {}", lane, fmt_word(*lhs), fmt_word(*rhs)).unwrap()
@@ -600,32 +600,32 @@ fn print_inst8(out: &mut String, inst: &crate::ir8::Inst8) {
             write!(out, "sub32.borrow {} {}", fmt_word(*lhs), fmt_word(*rhs)).unwrap()
         }
 
-        Inst8Kind::Add(l, r) => write!(out, "add {} {}", fmt_vreg(*l), fmt_vreg(*r)).unwrap(),
-        Inst8Kind::Carry(l, r) => write!(out, "carry {} {}", fmt_vreg(*l), fmt_vreg(*r)).unwrap(),
-        Inst8Kind::Sub(l, r) => write!(out, "sub {} {}", fmt_vreg(*l), fmt_vreg(*r)).unwrap(),
+        Inst8Kind::Add(l, r) => write!(out, "add {} {}", fmt_val8(*l), fmt_val8(*r)).unwrap(),
+        Inst8Kind::Carry(l, r) => write!(out, "carry {} {}", fmt_val8(*l), fmt_val8(*r)).unwrap(),
+        Inst8Kind::Sub(l, r) => write!(out, "sub {} {}", fmt_val8(*l), fmt_val8(*r)).unwrap(),
 
-        Inst8Kind::MulLo(l, r) => write!(out, "mul.lo {} {}", fmt_vreg(*l), fmt_vreg(*r)).unwrap(),
-        Inst8Kind::MulHi(l, r) => write!(out, "mul.hi {} {}", fmt_vreg(*l), fmt_vreg(*r)).unwrap(),
+        Inst8Kind::MulLo(l, r) => write!(out, "mul.lo {} {}", fmt_val8(*l), fmt_val8(*r)).unwrap(),
+        Inst8Kind::MulHi(l, r) => write!(out, "mul.hi {} {}", fmt_val8(*l), fmt_val8(*r)).unwrap(),
 
-        Inst8Kind::And8(l, r) => write!(out, "and {} {}", fmt_vreg(*l), fmt_vreg(*r)).unwrap(),
-        Inst8Kind::Or8(l, r) => write!(out, "or  {} {}", fmt_vreg(*l), fmt_vreg(*r)).unwrap(),
-        Inst8Kind::Xor8(l, r) => write!(out, "xor {} {}", fmt_vreg(*l), fmt_vreg(*r)).unwrap(),
+        Inst8Kind::And8(l, r) => write!(out, "and {} {}", fmt_val8(*l), fmt_val8(*r)).unwrap(),
+        Inst8Kind::Or8(l, r) => write!(out, "or  {} {}", fmt_val8(*l), fmt_val8(*r)).unwrap(),
+        Inst8Kind::Xor8(l, r) => write!(out, "xor {} {}", fmt_val8(*l), fmt_val8(*r)).unwrap(),
 
-        Inst8Kind::Eq(l, r) => write!(out, "eq  {} {}", fmt_vreg(*l), fmt_vreg(*r)).unwrap(),
-        Inst8Kind::Ne(l, r) => write!(out, "ne  {} {}", fmt_vreg(*l), fmt_vreg(*r)).unwrap(),
-        Inst8Kind::LtU(l, r) => write!(out, "lt_u {} {}", fmt_vreg(*l), fmt_vreg(*r)).unwrap(),
-        Inst8Kind::GeU(l, r) => write!(out, "ge_u {} {}", fmt_vreg(*l), fmt_vreg(*r)).unwrap(),
+        Inst8Kind::Eq(l, r) => write!(out, "eq  {} {}", fmt_val8(*l), fmt_val8(*r)).unwrap(),
+        Inst8Kind::Ne(l, r) => write!(out, "ne  {} {}", fmt_val8(*l), fmt_val8(*r)).unwrap(),
+        Inst8Kind::LtU(l, r) => write!(out, "lt_u {} {}", fmt_val8(*l), fmt_val8(*r)).unwrap(),
+        Inst8Kind::GeU(l, r) => write!(out, "ge_u {} {}", fmt_val8(*l), fmt_val8(*r)).unwrap(),
 
         Inst8Kind::BoolAnd(op) => write!(out, "bool.and {}", fmt_bool_nary(op)).unwrap(),
         Inst8Kind::BoolOr(op) => write!(out, "bool.or  {}", fmt_bool_nary(op)).unwrap(),
-        Inst8Kind::BoolNot(v) => write!(out, "bool.not {}", fmt_vreg(*v)).unwrap(),
+        Inst8Kind::BoolNot(v) => write!(out, "bool.not {}", fmt_val8(*v)).unwrap(),
 
         Inst8Kind::Sel(c, t, f) => write!(
             out,
             "sel {} {} {}",
-            fmt_vreg(*c),
-            fmt_vreg(*t),
-            fmt_vreg(*f)
+            fmt_val8(*c),
+            fmt_val8(*t),
+            fmt_val8(*f)
         )
         .unwrap(),
 
@@ -641,7 +641,7 @@ fn print_inst8(out: &mut String, inst: &crate::ir8::Inst8) {
             "global.set g{}[{}] {}",
             global_idx,
             lane,
-            fmt_vreg(*val)
+            fmt_val8(*val)
         )
         .unwrap(),
 
@@ -649,8 +649,8 @@ fn print_inst8(out: &mut String, inst: &crate::ir8::Inst8) {
             out,
             "load.mem [{:#x}+{}:{}] lane={}",
             base,
-            fmt_vreg(addr.lo),
-            fmt_vreg(addr.hi),
+            fmt_val8(addr.lo),
+            fmt_val8(addr.hi),
             lane
         )
         .unwrap(),
@@ -663,18 +663,18 @@ fn print_inst8(out: &mut String, inst: &crate::ir8::Inst8) {
             out,
             "store.mem [{:#x}+{}:{}] lane={} {}",
             base,
-            fmt_vreg(addr.lo),
-            fmt_vreg(addr.hi),
+            fmt_val8(addr.lo),
+            fmt_val8(addr.hi),
             lane,
-            fmt_vreg(*val)
+            fmt_val8(*val)
         )
         .unwrap(),
 
         Inst8Kind::Getchar => write!(out, "getchar").unwrap(),
-        Inst8Kind::Putchar(v) => write!(out, "putchar {}", fmt_vreg(*v)).unwrap(),
+        Inst8Kind::Putchar(v) => write!(out, "putchar {}", fmt_val8(*v)).unwrap(),
 
         Inst8Kind::CsStore { offset, val } => {
-            write!(out, "cs.store [cs_sp+{}] {}", offset, fmt_vreg(*val)).unwrap()
+            write!(out, "cs.store [cs_sp+{}] {}", offset, fmt_val8(*val)).unwrap()
         }
         Inst8Kind::CsLoad { offset } => write!(out, "cs.load [cs_sp+{}]", offset).unwrap(),
         Inst8Kind::CsStorePc { offset, val } => {
@@ -696,7 +696,7 @@ fn print_term8(out: &mut String, term: &Terminator8) {
         } => write!(
             out,
             "branch {} {} {}",
-            fmt_vreg(*cond),
+            fmt_val8(*cond),
             fmt_pc(*if_true),
             fmt_pc(*if_false)
         )
@@ -706,7 +706,7 @@ fn print_term8(out: &mut String, term: &Terminator8) {
             targets,
             default,
         } => {
-            write!(out, "switch {}", fmt_vreg(*index)).unwrap();
+            write!(out, "switch {}", fmt_val8(*index)).unwrap();
             for (i, t) in targets.iter().enumerate() {
                 write!(out, " {}:{}", i, fmt_pc(*t)).unwrap();
             }

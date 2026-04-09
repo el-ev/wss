@@ -181,11 +181,11 @@ fn select_word(b: &mut FuncBuilder, cond: Val8, if_true: Word, if_false: Word) -
 
 fn emit_bool_chain(
     b: &mut FuncBuilder,
-    regs: &[Val8],
+    vals: &[Val8],
     make_kind: impl Fn(BoolNary8) -> Inst8Kind,
 ) -> Val8 {
     let dst = b.alloc_reg();
-    let op = BoolNary8::from_regs(regs).expect("bool op inputs should fit IR8 nary limit");
+    let op = BoolNary8::from_vals(vals).expect("bool op inputs should fit IR8 nary limit");
     b.emit(Inst8::with_dst(dst, make_kind(op)));
     dst
 }
@@ -1139,7 +1139,7 @@ mod tests {
             .iter()
             .flat_map(|bb| bb.insts.iter())
             .find_map(|inst| (inst.dst == Some(reg)).then_some(&inst.kind))
-            .unwrap_or_else(|| panic!("missing definition for v{}", reg.reg_index().unwrap()))
+            .unwrap_or_else(|| panic!("missing definition for v{}", reg.expect_vreg()))
     }
 
     fn mk_trivial_main_block() -> BasicBlock {
