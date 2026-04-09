@@ -131,6 +131,13 @@ fn write_ir_operand(out: &mut String, v: IrNode) {
     }
 }
 
+fn write_ir_binop(out: &mut String, name: &str, lhs: IrNode, rhs: IrNode) {
+    write!(out, "{} ", name).unwrap();
+    write_ir_operand(out, lhs);
+    write!(out, " ").unwrap();
+    write_ir_operand(out, rhs);
+}
+
 fn print_ir_inst(out: &mut String, r: IrNode, inst: &Inst) {
     if ir_produces_value(inst) {
         write!(out, "%{} = ", r).unwrap();
@@ -149,27 +156,14 @@ fn print_ir_inst(out: &mut String, r: IrNode, inst: &Inst) {
             write!(out, "{} ", unop_name(op)).unwrap();
             write_ir_operand(out, *v);
         }
-        Inst::Binary(op, l, r) => {
-            write!(out, "{} ", binop_name(op)).unwrap();
-            write_ir_operand(out, *l);
-            write!(out, " ").unwrap();
-            write_ir_operand(out, *r);
-        }
-        Inst::Compare(op, l, r) => {
-            write!(out, "{} ", relop_name(op)).unwrap();
-            write_ir_operand(out, *l);
-            write!(out, " ").unwrap();
-            write_ir_operand(out, *r);
-        }
+        Inst::Binary(op, l, r) => write_ir_binop(out, &binop_name(op), *l, *r),
+        Inst::Compare(op, l, r) => write_ir_binop(out, &relop_name(op), *l, *r),
         Inst::Select {
             cond,
             if_true,
             if_false,
         } => {
-            write!(out, "select ").unwrap();
-            write_ir_operand(out, *cond);
-            write!(out, " ").unwrap();
-            write_ir_operand(out, *if_true);
+            write_ir_binop(out, "select", *cond, *if_true);
             write!(out, " ").unwrap();
             write_ir_operand(out, *if_false);
         }
@@ -587,14 +581,11 @@ fn print_inst8(out: &mut String, inst: &crate::ir8::Inst8) {
         Inst8Kind::Add(l, r) => write!(out, "add {} {}", fmt_val8(*l), fmt_val8(*r)).unwrap(),
         Inst8Kind::Carry(l, r) => write!(out, "carry {} {}", fmt_val8(*l), fmt_val8(*r)).unwrap(),
         Inst8Kind::Sub(l, r) => write!(out, "sub {} {}", fmt_val8(*l), fmt_val8(*r)).unwrap(),
-
         Inst8Kind::MulLo(l, r) => write!(out, "mul.lo {} {}", fmt_val8(*l), fmt_val8(*r)).unwrap(),
         Inst8Kind::MulHi(l, r) => write!(out, "mul.hi {} {}", fmt_val8(*l), fmt_val8(*r)).unwrap(),
-
         Inst8Kind::And8(l, r) => write!(out, "and {} {}", fmt_val8(*l), fmt_val8(*r)).unwrap(),
         Inst8Kind::Or8(l, r) => write!(out, "or  {} {}", fmt_val8(*l), fmt_val8(*r)).unwrap(),
         Inst8Kind::Xor8(l, r) => write!(out, "xor {} {}", fmt_val8(*l), fmt_val8(*r)).unwrap(),
-
         Inst8Kind::Eq(l, r) => write!(out, "eq  {} {}", fmt_val8(*l), fmt_val8(*r)).unwrap(),
         Inst8Kind::Ne(l, r) => write!(out, "ne  {} {}", fmt_val8(*l), fmt_val8(*r)).unwrap(),
         Inst8Kind::LtU(l, r) => write!(out, "lt_u {} {}", fmt_val8(*l), fmt_val8(*r)).unwrap(),

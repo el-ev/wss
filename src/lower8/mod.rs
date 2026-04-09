@@ -190,17 +190,23 @@ fn emit_bool_chain(
     dst
 }
 
+fn compare_word_lanes(
+    b: &mut FuncBuilder,
+    lhs: Word,
+    rhs: Word,
+    op: fn(Val8, Val8) -> Inst8Kind,
+) -> [Val8; 4] {
+    let mut out = [Val8::imm(0); 4];
+    for (i, (&l, &r)) in lhs.bytes().iter().zip(rhs.bytes().iter()).enumerate() {
+        let dst = b.alloc_reg();
+        b.emit(Inst8::with_dst(dst, op(l, r)));
+        out[i] = dst;
+    }
+    out
+}
+
 fn lower_eq32_bit(b: &mut FuncBuilder, lhs: Word, rhs: Word) -> Val8 {
-    let eqs: Vec<Val8> = lhs
-        .bytes()
-        .iter()
-        .zip(rhs.bytes().iter())
-        .map(|(&l, &r)| {
-            let dst = b.alloc_reg();
-            b.emit(Inst8::with_dst(dst, Inst8Kind::Eq(l, r)));
-            dst
-        })
-        .collect();
+    let eqs = compare_word_lanes(b, lhs, rhs, Inst8Kind::Eq);
     emit_bool_chain(b, &eqs, Inst8Kind::BoolAnd)
 }
 
@@ -623,17 +629,9 @@ fn lower_mul32(b: &mut FuncBuilder, lhs: Word, rhs: Word) -> Word {
 }
 
 fn bool32(b: &mut FuncBuilder, val: Word) -> Val8 {
-    // TODO(i64): truthiness reduction currently checks only the low 32 bits.
-    let zero = Val8::imm(0);
-    let nz0 = b.alloc_reg();
-    b.emit(Inst8::with_dst(nz0, Inst8Kind::Ne(val.b0, zero)));
-    let nz1 = b.alloc_reg();
-    b.emit(Inst8::with_dst(nz1, Inst8Kind::Ne(val.b1, zero)));
-    let nz2 = b.alloc_reg();
-    b.emit(Inst8::with_dst(nz2, Inst8Kind::Ne(val.b2, zero)));
-    let nz3 = b.alloc_reg();
-    b.emit(Inst8::with_dst(nz3, Inst8Kind::Ne(val.b3, zero)));
-    emit_bool_chain(b, &[nz0, nz1, nz2, nz3], Inst8Kind::BoolOr)
+    let zero = Word::from_u32_imm(0);
+    let nes = compare_word_lanes(b, val, zero, Inst8Kind::Ne);
+    emit_bool_chain(b, &nes, Inst8Kind::BoolOr)
 }
 
 fn bool_to_word(b: &mut FuncBuilder, bit: Val8) -> Word {
@@ -648,15 +646,8 @@ fn lower_eq32(b: &mut FuncBuilder, lhs: Word, rhs: Word) -> Word {
 }
 
 fn lower_ne32(b: &mut FuncBuilder, lhs: Word, rhs: Word) -> Word {
-    let ne0 = b.alloc_reg();
-    b.emit(Inst8::with_dst(ne0, Inst8Kind::Ne(lhs.b0, rhs.b0)));
-    let ne1 = b.alloc_reg();
-    b.emit(Inst8::with_dst(ne1, Inst8Kind::Ne(lhs.b1, rhs.b1)));
-    let ne2 = b.alloc_reg();
-    b.emit(Inst8::with_dst(ne2, Inst8Kind::Ne(lhs.b2, rhs.b2)));
-    let ne3 = b.alloc_reg();
-    b.emit(Inst8::with_dst(ne3, Inst8Kind::Ne(lhs.b3, rhs.b3)));
-    let bit = emit_bool_chain(b, &[ne0, ne1, ne2, ne3], Inst8Kind::BoolOr);
+    let nes = compare_word_lanes(b, lhs, rhs, Inst8Kind::Ne);
+    let bit = emit_bool_chain(b, &nes, Inst8Kind::BoolOr);
     bool_to_word(b, bit)
 }
 

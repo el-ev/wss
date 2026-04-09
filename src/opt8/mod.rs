@@ -492,24 +492,17 @@ fn kill_aliases_for(subst: &mut HashMap<Val8, Val8>, reg: Val8) {
 }
 
 fn compress_subst(subst: &mut HashMap<Val8, Val8>) {
-    let keys: Vec<Val8> = subst.keys().copied().collect();
-    let mut remove = Vec::new();
-    let mut update = Vec::new();
-
-    for k in keys {
-        let r = resolve(subst, k);
+    let updates: Vec<(Val8, Val8)> = subst
+        .keys()
+        .copied()
+        .map(|k| (k, resolve(subst, k)))
+        .collect();
+    for (k, r) in updates {
         if r == k {
-            remove.push(k);
-        } else if subst.get(&k).copied() != Some(r) {
-            update.push((k, r));
+            subst.remove(&k);
+        } else {
+            subst.insert(k, r);
         }
-    }
-
-    for k in remove {
-        subst.remove(&k);
-    }
-    for (k, r) in update {
-        subst.insert(k, r);
     }
 }
 
