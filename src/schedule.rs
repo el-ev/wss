@@ -269,41 +269,27 @@ enum CsAccess {
     StackPtrAdjust,
 }
 
+impl CsAccess {
+    fn slot_mask(self) -> (u16, u8) {
+        match self {
+            CsAccess::Read { slot, lane_mask } | CsAccess::Write { slot, lane_mask } => {
+                (slot, lane_mask)
+            }
+            CsAccess::StackPtrAdjust => unreachable!(),
+        }
+    }
+}
+
 fn effect_order_dependent(a: &Inst8Kind, b: &Inst8Kind) -> bool {
     if let (Some(lhs), Some(rhs)) = (cs_access(a), cs_access(b)) {
         return match (lhs, rhs) {
             (CsAccess::StackPtrAdjust, _) | (_, CsAccess::StackPtrAdjust) => true,
             (CsAccess::Read { .. }, CsAccess::Read { .. }) => false,
-            (
-                CsAccess::Read {
-                    slot: l_slot,
-                    lane_mask: l_mask,
-                },
-                CsAccess::Write {
-                    slot: r_slot,
-                    lane_mask: r_mask,
-                },
-            )
-            | (
-                CsAccess::Write {
-                    slot: l_slot,
-                    lane_mask: l_mask,
-                },
-                CsAccess::Read {
-                    slot: r_slot,
-                    lane_mask: r_mask,
-                },
-            )
-            | (
-                CsAccess::Write {
-                    slot: l_slot,
-                    lane_mask: l_mask,
-                },
-                CsAccess::Write {
-                    slot: r_slot,
-                    lane_mask: r_mask,
-                },
-            ) => l_slot == r_slot && (l_mask & r_mask) != 0,
+            _ => {
+                let (l_slot, l_mask) = lhs.slot_mask();
+                let (r_slot, r_mask) = rhs.slot_mask();
+                l_slot == r_slot && (l_mask & r_mask) != 0
+            }
         };
     }
 

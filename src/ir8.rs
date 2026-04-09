@@ -235,6 +235,12 @@ pub struct Inst8 {
     pub kind: Inst8Kind,
 }
 
+fn push_vreg(out: &mut Vec<Val8>, r: Val8) {
+    if !r.is_imm() {
+        out.push(r);
+    }
+}
+
 impl Inst8 {
     pub fn with_dst(dst: Val8, kind: Inst8Kind) -> Self {
         Self {
@@ -247,17 +253,11 @@ impl Inst8 {
     }
 
     pub fn uses(&self) -> Vec<Val8> {
-        let maybe_push = |out: &mut Vec<Val8>, r: Val8| {
-            if !r.is_imm() {
-                out.push(r);
-            }
-        };
-
         match &self.kind {
             Inst8Kind::Getchar | Inst8Kind::GlobalGetByte { .. } => vec![],
             Inst8Kind::Copy(s) | Inst8Kind::BoolNot(s) | Inst8Kind::Putchar(s) => {
                 let mut out = Vec::new();
-                maybe_push(&mut out, *s);
+                push_vreg(&mut out, *s);
                 out
             }
             Inst8Kind::Add32Byte { lhs, rhs, lane } | Inst8Kind::Sub32Byte { lhs, rhs, lane } => {
@@ -283,32 +283,32 @@ impl Inst8 {
             | Inst8Kind::LtU(l, r)
             | Inst8Kind::GeU(l, r) => {
                 let mut out = Vec::new();
-                maybe_push(&mut out, *l);
-                maybe_push(&mut out, *r);
+                push_vreg(&mut out, *l);
+                push_vreg(&mut out, *r);
                 out
             }
             Inst8Kind::BoolAnd(op) | Inst8Kind::BoolOr(op) => op.regs(),
             Inst8Kind::Sel(c, l, r) => {
                 let mut out = Vec::new();
-                maybe_push(&mut out, *l);
-                maybe_push(&mut out, *r);
-                maybe_push(&mut out, *c);
+                push_vreg(&mut out, *l);
+                push_vreg(&mut out, *r);
+                push_vreg(&mut out, *c);
                 out
             }
             Inst8Kind::GlobalSetByte { val, .. } => {
                 let mut out = Vec::new();
-                maybe_push(&mut out, *val);
+                push_vreg(&mut out, *val);
                 out
             }
             Inst8Kind::LoadMem { addr, .. } => addr.uses(),
             Inst8Kind::StoreMem { addr, val, .. } => {
                 let mut out = addr.uses();
-                maybe_push(&mut out, *val);
+                push_vreg(&mut out, *val);
                 out
             }
             Inst8Kind::CsStore { val, .. } => {
                 let mut out = Vec::new();
-                maybe_push(&mut out, *val);
+                push_vreg(&mut out, *val);
                 out
             }
             Inst8Kind::CsLoad { .. }
@@ -485,29 +485,23 @@ pub enum Terminator8 {
 
 impl Terminator8 {
     pub fn uses(&self) -> Vec<Val8> {
-        let maybe_push = |out: &mut Vec<Val8>, r: Val8| {
-            if !r.is_imm() {
-                out.push(r);
-            }
-        };
-
         match self {
             Terminator8::Goto(_) => vec![],
             Terminator8::Branch { cond, .. } => {
                 let mut out = Vec::new();
-                maybe_push(&mut out, *cond);
+                push_vreg(&mut out, *cond);
                 out
             }
             Terminator8::Switch { index, .. } => {
                 let mut out = Vec::new();
-                maybe_push(&mut out, *index);
+                push_vreg(&mut out, *index);
                 out
             }
             Terminator8::CallSetup { args, .. } => {
                 let mut out = Vec::new();
                 for w in args {
                     for r in w.bytes() {
-                        maybe_push(&mut out, r);
+                        push_vreg(&mut out, r);
                     }
                 }
                 out
@@ -516,7 +510,7 @@ impl Terminator8 {
                 if let Some(w) = val {
                     let mut out = Vec::new();
                     for r in w.bytes() {
-                        maybe_push(&mut out, r);
+                        push_vreg(&mut out, r);
                     }
                     out
                 } else {
