@@ -1,5 +1,5 @@
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, Default)]
-pub struct AstRef(pub usize);
+pub struct AstRef(usize);
 
 impl AstRef {
     pub const fn new(value: usize) -> Self {

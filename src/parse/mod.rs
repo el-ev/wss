@@ -23,10 +23,7 @@ pub fn parse_module(info: ModuleInfo, wasm_bytes: &[u8]) -> anyhow::Result<AstMo
         if let CodeSectionEntry(body) = payload {
             let idx = module.num_imported_funcs() + func_index;
             let parsed = parse_function(&module, idx, body)?;
-            *module
-                .body_mut_at(idx as u32)
-                .context(format!("code section function index {} out of bounds", idx))? =
-                Some(parsed);
+            module.set_body(idx as u32, Some(parsed))?;
             func_index += 1;
         }
     }

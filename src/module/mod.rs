@@ -456,8 +456,20 @@ impl AstModule {
         self.bodies.get(func_index as usize)?.as_ref()
     }
 
-    pub(crate) fn body_mut_at(&mut self, func_index: u32) -> Option<&mut Option<AstFuncBody>> {
-        self.bodies.get_mut(func_index as usize)
+    pub(crate) fn set_body(
+        &mut self,
+        func_index: u32,
+        body: Option<AstFuncBody>,
+    ) -> anyhow::Result<()> {
+        let slot = self
+            .bodies
+            .get_mut(func_index as usize)
+            .context(format!("invalid function index {}", func_index))?;
+        if slot.is_some() {
+            bail!("function index {} already has a body", func_index);
+        }
+        *slot = body;
+        Ok(())
     }
 
     pub(crate) fn bodies(&self) -> &[Option<AstFuncBody>] {

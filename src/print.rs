@@ -96,7 +96,7 @@ fn print_ir_func_body(out: &mut String, body: &IrFuncBody, indent: usize) {
         }
         writeln!(out).unwrap();
     }
-    let mut ref_offset = IrNode::new(0);
+    let mut ref_offset = IrNode(0);
     for bb in body.blocks() {
         let is_entry = bb.id == body.entry();
         print_ir_basic_block(out, bb, &pad, ref_offset, is_entry);
@@ -112,9 +112,9 @@ fn print_ir_basic_block(
     is_entry: bool,
 ) {
     if is_entry {
-        writeln!(out, "{}$B{}: ; entry", pad, bb.id).unwrap();
+        writeln!(out, "{}$B{}: ; entry", pad, bb.id.index()).unwrap();
     } else {
-        writeln!(out, "{}$B{}:", pad, bb.id).unwrap();
+        writeln!(out, "{}$B{}:", pad, bb.id.index()).unwrap();
     }
     let inner_pad = format!("{}  ", pad);
     for (i, inst) in bb.insts.iter().enumerate() {
@@ -254,7 +254,7 @@ fn print_ir_inst(out: &mut String, r: IrNode, inst: &Inst) {
 
 fn print_terminator(out: &mut String, term: &Terminator) {
     match term {
-        Terminator::Goto(id) => write!(out, "goto $B{}", id).unwrap(),
+        Terminator::Goto(id) => write!(out, "goto $B{}", id.index()).unwrap(),
         Terminator::Branch {
             cond,
             if_true,
@@ -262,7 +262,7 @@ fn print_terminator(out: &mut String, term: &Terminator) {
         } => {
             write!(out, "branch ").unwrap();
             write_ir_operand(out, *cond);
-            write!(out, " $B{} $B{}", if_true, if_false).unwrap();
+            write!(out, " $B{} $B{}", if_true.index(), if_false.index()).unwrap();
         }
         Terminator::Switch {
             index,
@@ -272,9 +272,9 @@ fn print_terminator(out: &mut String, term: &Terminator) {
             write!(out, "switch ").unwrap();
             write_ir_operand(out, *index);
             for (i, t) in targets.iter().enumerate() {
-                write!(out, " {}:$B{}", i, t).unwrap();
+                write!(out, " {}:$B{}", i, t.index()).unwrap();
             }
-            write!(out, " default:$B{}", default).unwrap();
+            write!(out, " default:$B{}", default.index()).unwrap();
         }
         Terminator::TailCall { func, args } => {
             write!(out, "tail_call {}", func).unwrap();
