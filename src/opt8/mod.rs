@@ -45,6 +45,7 @@ pub fn run(prog: &mut Ir8Program) {
         changed |= copy_elim(prog);
         changed |= instcombine(prog);
         changed |= combine_boolean_chains(prog);
+        changed |= store_to_load_forwarding(prog);
         changed |= local_dead_mem_store_elim(prog);
         changed |= thread_empty_gotos(prog);
         changed |= dead_code_elim(prog);
@@ -79,6 +80,16 @@ fn program_state_sig(prog: &Ir8Program) -> u64 {
     let mut hasher = DefaultHasher::new();
     prog.func_blocks.hash(&mut hasher);
     hasher.finish()
+}
+
+fn run_block_pass(prog: &mut Ir8Program, pass: fn(&mut BasicBlock8) -> bool) -> bool {
+    let mut changed = false;
+    for blocks in &mut prog.func_blocks {
+        for bb in blocks {
+            changed |= pass(bb);
+        }
+    }
+    changed
 }
 
 fn eliminate_global_copies(blocks: &mut [BasicBlock8]) -> bool {
@@ -345,14 +356,60 @@ fn coalesce_linear_blocks(prog: &mut Ir8Program) -> bool {
     changed
 }
 
-fn local_dead_mem_store_elim(prog: &mut Ir8Program) -> bool {
+fn store_to_load_forwarding(prog: &mut Ir8Program) -> bool {
+    run_block_pass(prog, stlf_block)
+}
+
+fn stlf_block(bb: &mut BasicBlock8) -> bool {
     let mut changed = false;
-    for blocks in &mut prog.func_blocks {
-        for bb in blocks {
-            changed |= local_dead_mem_store_elim_block(bb);
+    let mut tracked_addr: Option<Addr> = None;
+    let mut forwarded: HashMap<u32, Val8> = HashMap::new();
+
+    for inst in bb.insts.iter_mut() {
+        match inst.kind {
+            Inst8Kind::LoadMem { base, addr, lane } if tracked_addr == Some(addr) => {
+                let offset = (base as u32) + (lane as u32);
+                if let Some(&stored_val) = forwarded.get(&offset) {
+                    inst.kind = Inst8Kind::Copy(stored_val);
+                    changed = true;
+                }
+            }
+            Inst8Kind::StoreMem {
+                base,
+                addr,
+                lane,
+                val,
+            } => {
+                let offset = (base as u32) + (lane as u32);
+                if tracked_addr.is_some() && tracked_addr != Some(addr) {
+                    forwarded.clear();
+                }
+                tracked_addr = Some(addr);
+                forwarded.insert(offset, val);
+            }
+            _ => {}
+        }
+
+        if let Some(dst) = inst.dst
+            && let Some(a) = tracked_addr
+        {
+            if dst == a.lo || dst == a.hi {
+                forwarded.clear();
+                tracked_addr = None;
+            } else {
+                forwarded.retain(|_, val| *val != dst);
+                if forwarded.is_empty() {
+                    tracked_addr = None;
+                }
+            }
         }
     }
+
     changed
+}
+
+fn local_dead_mem_store_elim(prog: &mut Ir8Program) -> bool {
+    run_block_pass(prog, local_dead_mem_store_elim_block)
 }
 
 fn local_dead_mem_store_elim_block(bb: &mut BasicBlock8) -> bool {
@@ -417,13 +474,7 @@ fn local_dead_mem_store_elim_block(bb: &mut BasicBlock8) -> bool {
 }
 
 fn local_copy_propagation(prog: &mut Ir8Program) -> bool {
-    let mut changed = false;
-    for blocks in &mut prog.func_blocks {
-        for bb in blocks.iter_mut() {
-            changed |= local_copy_propagation_block(bb);
-        }
-    }
-    changed
+    run_block_pass(prog, local_copy_propagation_block)
 }
 
 fn local_copy_propagation_block(bb: &mut BasicBlock8) -> bool {
