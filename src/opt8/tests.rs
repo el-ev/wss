@@ -728,6 +728,35 @@ fn opt8_simplifies_false_compare_checks_inside_nary_bool_or() {
 }
 
 #[test]
+fn opt8_instsimplify_treats_nonzero_constants_as_true_in_nary_bool_ops() {
+    let mut blocks = vec![BasicBlock8 {
+        id: Pc::new(0),
+        insts: vec![
+            Inst8::with_dst(
+                r(20),
+                Inst8Kind::BoolAnd(
+                    BoolNary8::from_vals(&[Val8::imm(2), Val8::imm(3), r(8)]).unwrap(),
+                ),
+            ),
+            Inst8::with_dst(
+                r(21),
+                Inst8Kind::BoolOr(
+                    BoolNary8::from_vals(&[Val8::imm(0), Val8::imm(2), r(9)]).unwrap(),
+                ),
+            ),
+        ],
+        terminator: Terminator8::Exit { val: None },
+    }];
+
+    let mut pass = super::instsimplify::InstSimplify::default();
+    assert!(pass.run(&mut blocks));
+
+    let insts = &blocks[0].insts;
+    assert_eq!(insts[0].kind, Inst8Kind::Copy(r(8)));
+    assert_eq!(insts[1].kind, Inst8Kind::Copy(Val8::imm(1)));
+}
+
+#[test]
 fn opt8_folds_ltu_self_comparison_to_false() {
     let mut prog = mk_prog(vec![
         BasicBlock8 {

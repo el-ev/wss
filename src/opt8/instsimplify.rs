@@ -50,24 +50,6 @@ fn simplify_blocks_with_facts(blocks: &mut [BasicBlock8], facts: &HashMap<Val8, 
 fn simplify_bool_nary(op: BoolOp, vals: &BoolNary8, facts: &HashMap<Val8, RegFact>) -> Inst8Kind {
     let const_of = |val: Val8| const_fact(facts, val);
 
-    let mut all_const = true;
-    let mut const_vals = Vec::with_capacity(usize::from(vals.len));
-    for &val in vals.as_slice() {
-        if let Some(v) = const_of(val) {
-            const_vals.push(v);
-        } else {
-            all_const = false;
-            break;
-        }
-    }
-    if all_const {
-        let folded = match op {
-            BoolOp::And => const_vals.iter().all(|&v| v != 0) as u8,
-            BoolOp::Or => const_vals.iter().any(|&v| v != 0) as u8,
-        };
-        return imm_kind(folded);
-    }
-
     let mut kept = Vec::with_capacity(usize::from(vals.len));
     let mut seen = HashSet::new();
     for &val in vals.as_slice() {
@@ -77,12 +59,12 @@ fn simplify_bool_nary(op: BoolOp, vals: &BoolNary8, facts: &HashMap<Val8, RegFac
                 if matches!(cst, Some(0)) {
                     return imm_kind(0);
                 }
-                if matches!(cst, Some(1)) {
+                if cst.is_some() {
                     continue;
                 }
             }
             BoolOp::Or => {
-                if matches!(cst, Some(1)) {
+                if matches!(cst, Some(v) if v != 0) {
                     return imm_kind(1);
                 }
                 if matches!(cst, Some(0)) {
