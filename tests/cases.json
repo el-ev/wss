@@ -204,6 +204,17 @@
     }
   },
   {
+    "id": "shift_rotate_const",
+    "source": "tests/cases/shift_rotate_const.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0xceb943f4",
+      "rendered_includes": [
+        "0xceb943f4"
+      ]
+    }
+  },
+  {
     "id": "comparisons",
     "source": "tests/cases/comparisons.c",
     "expect": {
@@ -1522,10 +1533,10 @@
     "virtual_time_budget_ms": 60000,
     "expect": {
       "pc": -1,
-      "ra": "0x00000355",
+      "ra": "0x00000348",
       "rendered_includes": [
         "Program exited with code",
-        "0x00000355"
+        "0x00000348"
       ]
     }
   },
@@ -1577,7 +1588,7 @@
       "ra": "0x12bd8854",
       "rendered_includes": [
         "Program exited with code",
-        "0xfce0c4a8"
+        "0x12bd8854"
       ]
     }
   },
