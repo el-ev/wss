@@ -1,6 +1,6 @@
 use super::{
     copy_elim, dead_code_elim, instcombine::instcombine, local_dead_mem_store_elim, run,
-    thread_empty_gotos_func,
+    store_to_load_forwarding, thread_empty_gotos_func,
 };
 use crate::ir8::{
     Addr, BasicBlock8, BoolNary8, BuiltinId, CallTarget, Inst8, Inst8Kind, Ir8Program, Pc,
@@ -1093,4 +1093,289 @@ fn opt8_optimizer_keeps_saved_ret_lane_across_later_callsetup() {
         Val8::imm(0),
         "saved return lane should survive across a later callsetup"
     );
+}
+
+#[test]
+fn opt8_stlf_forwards_store_to_matching_load() {
+    let addr = Addr::new(r(10), r(11));
+    let mut prog = mk_prog(vec![BasicBlock8 {
+        id: Pc::new(0),
+        insts: vec![
+            Inst8::no_dst(Inst8Kind::StoreMem {
+                base: 0,
+                addr,
+                lane: 0,
+                val: r(20),
+            }),
+            Inst8::with_dst(
+                r(30),
+                Inst8Kind::LoadMem {
+                    base: 0,
+                    addr,
+                    lane: 0,
+                },
+            ),
+        ],
+        terminator: Terminator8::Exit {
+            val: Some(Word::new(r(30), r(4), r(4), r(4))),
+        },
+    }]);
+
+    assert!(store_to_load_forwarding(&mut prog));
+    let insts = &prog.func_blocks[0][0].insts;
+    assert_eq!(insts[1].kind, Inst8Kind::Copy(r(20)));
+}
+
+#[test]
+fn opt8_stlf_forwards_matching_effective_offset() {
+    let addr = Addr::new(r(10), r(11));
+    let mut prog = mk_prog(vec![BasicBlock8 {
+        id: Pc::new(0),
+        insts: vec![
+            Inst8::no_dst(Inst8Kind::StoreMem {
+                base: 1,
+                addr,
+                lane: 0,
+                val: r(20),
+            }),
+            Inst8::with_dst(
+                r(30),
+                Inst8Kind::LoadMem {
+                    base: 0,
+                    addr,
+                    lane: 1,
+                },
+            ),
+        ],
+        terminator: Terminator8::Exit {
+            val: Some(Word::new(r(30), r(4), r(4), r(4))),
+        },
+    }]);
+
+    assert!(store_to_load_forwarding(&mut prog));
+    let insts = &prog.func_blocks[0][0].insts;
+    assert_eq!(insts[1].kind, Inst8Kind::Copy(r(20)));
+}
+
+#[test]
+fn opt8_stlf_does_not_forward_different_offset() {
+    let addr = Addr::new(r(10), r(11));
+    let mut prog = mk_prog(vec![BasicBlock8 {
+        id: Pc::new(0),
+        insts: vec![
+            Inst8::no_dst(Inst8Kind::StoreMem {
+                base: 0,
+                addr,
+                lane: 0,
+                val: r(20),
+            }),
+            Inst8::with_dst(
+                r(30),
+                Inst8Kind::LoadMem {
+                    base: 0,
+                    addr,
+                    lane: 1,
+                },
+            ),
+        ],
+        terminator: Terminator8::Exit {
+            val: Some(Word::new(r(30), r(4), r(4), r(4))),
+        },
+    }]);
+
+    assert!(!store_to_load_forwarding(&mut prog));
+}
+
+#[test]
+fn opt8_stlf_does_not_forward_different_addr() {
+    let addr1 = Addr::new(r(10), r(11));
+    let addr2 = Addr::new(r(12), r(13));
+    let mut prog = mk_prog(vec![BasicBlock8 {
+        id: Pc::new(0),
+        insts: vec![
+            Inst8::no_dst(Inst8Kind::StoreMem {
+                base: 0,
+                addr: addr1,
+                lane: 0,
+                val: r(20),
+            }),
+            Inst8::with_dst(
+                r(30),
+                Inst8Kind::LoadMem {
+                    base: 0,
+                    addr: addr2,
+                    lane: 0,
+                },
+            ),
+        ],
+        terminator: Terminator8::Exit {
+            val: Some(Word::new(r(30), r(4), r(4), r(4))),
+        },
+    }]);
+
+    assert!(!store_to_load_forwarding(&mut prog));
+}
+
+#[test]
+fn opt8_stlf_invalidates_on_addr_reg_redefinition() {
+    let addr = Addr::new(r(10), r(11));
+    let mut prog = mk_prog(vec![BasicBlock8 {
+        id: Pc::new(0),
+        insts: vec![
+            Inst8::no_dst(Inst8Kind::StoreMem {
+                base: 0,
+                addr,
+                lane: 0,
+                val: r(20),
+            }),
+            Inst8::with_dst(r(10), Inst8Kind::Copy(Val8::imm(7))),
+            Inst8::with_dst(
+                r(30),
+                Inst8Kind::LoadMem {
+                    base: 0,
+                    addr,
+                    lane: 0,
+                },
+            ),
+        ],
+        terminator: Terminator8::Exit {
+            val: Some(Word::new(r(30), r(4), r(4), r(4))),
+        },
+    }]);
+
+    assert!(!store_to_load_forwarding(&mut prog));
+}
+
+#[test]
+fn opt8_stlf_invalidates_on_stored_val_redefinition() {
+    let addr = Addr::new(r(10), r(11));
+    let mut prog = mk_prog(vec![BasicBlock8 {
+        id: Pc::new(0),
+        insts: vec![
+            Inst8::no_dst(Inst8Kind::StoreMem {
+                base: 0,
+                addr,
+                lane: 0,
+                val: r(20),
+            }),
+            Inst8::with_dst(r(20), Inst8Kind::Copy(Val8::imm(99))),
+            Inst8::with_dst(
+                r(30),
+                Inst8Kind::LoadMem {
+                    base: 0,
+                    addr,
+                    lane: 0,
+                },
+            ),
+        ],
+        terminator: Terminator8::Exit {
+            val: Some(Word::new(r(30), r(4), r(4), r(4))),
+        },
+    }]);
+
+    assert!(!store_to_load_forwarding(&mut prog));
+}
+
+#[test]
+fn opt8_stlf_updates_forwarded_val_on_second_store() {
+    let addr = Addr::new(r(10), r(11));
+    let mut prog = mk_prog(vec![BasicBlock8 {
+        id: Pc::new(0),
+        insts: vec![
+            Inst8::no_dst(Inst8Kind::StoreMem {
+                base: 0,
+                addr,
+                lane: 0,
+                val: r(20),
+            }),
+            Inst8::no_dst(Inst8Kind::StoreMem {
+                base: 0,
+                addr,
+                lane: 0,
+                val: r(21),
+            }),
+            Inst8::with_dst(
+                r(30),
+                Inst8Kind::LoadMem {
+                    base: 0,
+                    addr,
+                    lane: 0,
+                },
+            ),
+        ],
+        terminator: Terminator8::Exit {
+            val: Some(Word::new(r(30), r(4), r(4), r(4))),
+        },
+    }]);
+
+    assert!(store_to_load_forwarding(&mut prog));
+    let insts = &prog.func_blocks[0][0].insts;
+    assert_eq!(insts[2].kind, Inst8Kind::Copy(r(21)));
+}
+
+#[test]
+fn opt8_stlf_forwards_immediate_value() {
+    let addr = Addr::new(r(10), r(11));
+    let mut prog = mk_prog(vec![BasicBlock8 {
+        id: Pc::new(0),
+        insts: vec![
+            Inst8::no_dst(Inst8Kind::StoreMem {
+                base: 0,
+                addr,
+                lane: 0,
+                val: Val8::imm(42),
+            }),
+            Inst8::with_dst(
+                r(30),
+                Inst8Kind::LoadMem {
+                    base: 0,
+                    addr,
+                    lane: 0,
+                },
+            ),
+        ],
+        terminator: Terminator8::Exit {
+            val: Some(Word::new(r(30), r(4), r(4), r(4))),
+        },
+    }]);
+
+    assert!(store_to_load_forwarding(&mut prog));
+    let insts = &prog.func_blocks[0][0].insts;
+    assert_eq!(insts[1].kind, Inst8Kind::Copy(Val8::imm(42)));
+}
+
+#[test]
+fn opt8_stlf_clears_on_store_to_different_addr() {
+    let addr1 = Addr::new(r(10), r(11));
+    let addr2 = Addr::new(r(12), r(13));
+    let mut prog = mk_prog(vec![BasicBlock8 {
+        id: Pc::new(0),
+        insts: vec![
+            Inst8::no_dst(Inst8Kind::StoreMem {
+                base: 0,
+                addr: addr1,
+                lane: 0,
+                val: r(20),
+            }),
+            Inst8::no_dst(Inst8Kind::StoreMem {
+                base: 0,
+                addr: addr2,
+                lane: 0,
+                val: r(21),
+            }),
+            Inst8::with_dst(
+                r(30),
+                Inst8Kind::LoadMem {
+                    base: 0,
+                    addr: addr1,
+                    lane: 0,
+                },
+            ),
+        ],
+        terminator: Terminator8::Exit {
+            val: Some(Word::new(r(30), r(4), r(4), r(4))),
+        },
+    }]);
+
+    assert!(!store_to_load_forwarding(&mut prog));
 }
