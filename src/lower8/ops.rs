@@ -154,7 +154,7 @@ fn lower_numeric_inst(
                         } else {
                             BuiltinId::RemS32
                         };
-                        lower_builtin_binop(b, builtin, lhs_word, rhs_word)
+                        lower_builtin_call(b, builtin, vec![lhs_word, rhs_word])
                     } else if let Some(denom_const) = word_const_u32(rhs_word) {
                         let lowered = match *op {
                             BinOp::DivU | BinOp::RemU => {

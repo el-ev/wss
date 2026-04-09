@@ -265,19 +265,17 @@ impl<'a> Emitter<'a> {
                     }
                     Inst8Kind::LoadMem { base, addr, lane } => {
                         if let Some(dst) = op.dst {
-                            let addr = format!(
-                                "--addr16({}, {}, {})",
-                                Self::val_expr(&reg_now, addr.lo),
-                                Self::val_expr(&reg_now, addr.hi),
-                                (*base as u32) + (*lane as u32)
+                            let (addr, in_bounds) = self.mem_addr_bounds(
+                                &reg_now,
+                                addr,
+                                *base,
+                                *lane,
+                                &mut trap_mem_parts,
                             );
-                            let in_bounds = format!("--lt({}, {})", addr, self.memory_end);
-                            trap_mem_parts.push(format!("calc(1 - ({}))", in_bounds));
                             mem_reads.push(MemRead {
                                 byte: addr.clone(),
                                 ok: in_bounds.clone(),
                             });
-
                             let e = Self::sel_expr(
                                 &in_bounds,
                                 &format!("--mload({})", addr),
@@ -292,14 +290,8 @@ impl<'a> Emitter<'a> {
                         lane,
                         val,
                     } => {
-                        let byte_addr = format!(
-                            "--addr16({}, {}, {})",
-                            Self::val_expr(&reg_now, addr.lo),
-                            Self::val_expr(&reg_now, addr.hi),
-                            (*base as u32) + (*lane as u32)
-                        );
-                        let in_bounds = format!("--lt({}, {})", byte_addr, self.memory_end);
-                        trap_mem_parts.push(format!("calc(1 - ({}))", in_bounds));
+                        let (byte_addr, in_bounds) =
+                            self.mem_addr_bounds(&reg_now, addr, *base, *lane, &mut trap_mem_parts);
                         mem_stores_raw.push(MemStoreByte {
                             cell: format!("--mhalf({})", byte_addr),
                             parity: format!("--mpar({})", byte_addr),
@@ -328,13 +320,7 @@ impl<'a> Emitter<'a> {
                         let slot_off = (*offset) / 2;
                         let parity = (*offset) % 2;
                         let idx = format!("calc(var(--_1cs_sp) + {})", slot_off);
-                        let ok = format!(
-                            "calc(--lt(-1, {}) * --lt({}, {}))",
-                            idx,
-                            idx,
-                            self.cs_names.len()
-                        );
-                        trap_cs_parts.push(format!("calc(1 - ({}))", ok));
+                        let ok = self.cs_bounds_check(&idx, false, &mut trap_cs_parts);
                         cs_stores.push(CsStore {
                             idx,
                             parity: format!("{}", parity),
@@ -347,13 +333,7 @@ impl<'a> Emitter<'a> {
                             let slot_off = (*offset) / 2;
                             let parity = (*offset) % 2;
                             let idx = format!("calc(var(--_1cs_sp) + {})", slot_off);
-                            let ok = format!(
-                                "calc(--lt(-1, {}) * --lt({}, {}))",
-                                idx,
-                                idx,
-                                self.cs_names.len()
-                            );
-                            trap_cs_parts.push(format!("calc(1 - ({}))", ok));
+                            let ok = self.cs_bounds_check(&idx, false, &mut trap_cs_parts);
                             cs_reads.push(CsRead {
                                 idx: idx.clone(),
                                 parity: format!("{}", parity),
@@ -377,13 +357,7 @@ impl<'a> Emitter<'a> {
                     }
                     Inst8Kind::CsStorePc { offset, val } => {
                         let idx = format!("calc(var(--_1cs_sp) + {})", offset);
-                        let ok = format!(
-                            "calc(--lt(-1, {}) * --lt({}, {}))",
-                            idx,
-                            idx,
-                            self.cs_names.len()
-                        );
-                        trap_cs_parts.push(format!("calc(1 - ({}))", ok));
+                        let ok = self.cs_bounds_check(&idx, false, &mut trap_cs_parts);
                         cs_stores.push(CsStore {
                             idx,
                             parity: "2".to_string(),
@@ -393,13 +367,7 @@ impl<'a> Emitter<'a> {
                     }
                     Inst8Kind::CsLoadPc { offset } => {
                         let idx = format!("calc(var(--_1cs_sp) + {})", offset);
-                        let ok = format!(
-                            "calc(--lt(-1, {}) * --lt({}, {}))",
-                            idx,
-                            idx,
-                            self.cs_names.len()
-                        );
-                        trap_cs_parts.push(format!("calc(1 - ({}))", ok));
+                        let ok = self.cs_bounds_check(&idx, false, &mut trap_cs_parts);
                         cs_reads.push(CsRead {
                             idx: idx.clone(),
                             parity: "2".to_string(),
@@ -413,24 +381,12 @@ impl<'a> Emitter<'a> {
                     }
                     Inst8Kind::CsAlloc(size) => {
                         let next_sp = format!("calc(var(--_1cs_sp) + {})", size);
-                        let ok = format!(
-                            "calc(--lt(-1, {}) * --lt({}, {}))",
-                            next_sp,
-                            next_sp,
-                            self.cs_names.len() + 1
-                        );
-                        trap_cs_parts.push(format!("calc(1 - ({}))", ok));
+                        let ok = self.cs_bounds_check(&next_sp, true, &mut trap_cs_parts);
                         cs_sp_expr = Some(Self::sel_expr(&ok, &next_sp, "var(--_1cs_sp)"));
                     }
                     Inst8Kind::CsFree(size) => {
                         let next_sp = format!("calc(var(--_1cs_sp) - {})", size);
-                        let ok = format!(
-                            "calc(--lt(-1, {}) * --lt({}, {}))",
-                            next_sp,
-                            next_sp,
-                            self.cs_names.len() + 1
-                        );
-                        trap_cs_parts.push(format!("calc(1 - ({}))", ok));
+                        let ok = self.cs_bounds_check(&next_sp, true, &mut trap_cs_parts);
                         cs_sp_expr = Some(Self::sel_expr(&ok, &next_sp, "var(--_1cs_sp)"));
                     }
                 }
@@ -979,6 +935,32 @@ impl<'a> Emitter<'a> {
             .collect::<Vec<_>>()
             .join(if and { " * " } else { " + " });
         format!("calc(min(1, {joined}))")
+    }
+
+    fn mem_addr_bounds(
+        &self,
+        reg_now: &HashMap<u16, String>,
+        addr: &crate::ir8::Addr,
+        base: u16,
+        lane: u8,
+        trap_parts: &mut Vec<String>,
+    ) -> (String, String) {
+        let byte_addr = format!(
+            "--addr16({}, {}, {})",
+            Self::val_expr(reg_now, addr.lo),
+            Self::val_expr(reg_now, addr.hi),
+            (base as u32) + (lane as u32)
+        );
+        let in_bounds = format!("--lt({}, {})", byte_addr, self.memory_end);
+        trap_parts.push(format!("calc(1 - ({}))", in_bounds));
+        (byte_addr, in_bounds)
+    }
+
+    fn cs_bounds_check(&self, idx: &str, extend: bool, trap_parts: &mut Vec<String>) -> String {
+        let limit = self.cs_names.len() + usize::from(extend);
+        let ok = format!("calc(--lt(-1, {}) * --lt({}, {}))", idx, idx, limit);
+        trap_parts.push(format!("calc(1 - ({}))", ok));
+        ok
     }
 
     pub(super) fn sel_expr(cond: &str, if_true: &str, if_false: &str) -> String {

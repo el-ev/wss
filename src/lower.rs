@@ -136,10 +136,12 @@ fn remove_dead_blocks(blocks: &mut Vec<BasicBlock>, entry: &mut BlockId) -> anyh
             continue;
         }
         visited.insert(id);
-        let block = blocks.get(id.index()).context(format!(
-            "invalid block id {} during dead block elimination",
-            id.index()
-        ))?;
+        let block = blocks.get(id.index()).with_context(|| {
+            format!(
+                "invalid block id {} during dead block elimination",
+                id.index()
+            )
+        })?;
         stack.extend(block.successors());
     }
 
@@ -174,7 +176,7 @@ fn remap_ref(r: &mut IrNode, remap: &HashMap<IrNode, IrNode>) -> anyhow::Result<
     let old = *r;
     *r = *remap
         .get(&old)
-        .context(format!("missing IrRef remap for {}", old))?;
+        .with_context(|| format!("missing IrRef remap for {}", old))?;
     Ok(())
 }
 
@@ -568,18 +570,16 @@ fn lower_node(
 }
 
 fn call_returns_void(module: &AstModule, func: u32) -> anyhow::Result<bool> {
-    let sig = module.func_type_at(func).context(format!(
-        "tail-call fusion: function index {} out of bounds",
-        func
-    ))?;
+    let sig = module
+        .func_type_at(func)
+        .with_context(|| format!("tail-call fusion: function index {} out of bounds", func))?;
     Ok(sig.results().is_empty())
 }
 
 fn call_indirect_returns_void(module: &AstModule, type_index: u32) -> anyhow::Result<bool> {
-    let sig = module.type_at(type_index).context(format!(
-        "tail-call fusion: type index {} out of bounds",
-        type_index
-    ))?;
+    let sig = module
+        .type_at(type_index)
+        .with_context(|| format!("tail-call fusion: type index {} out of bounds", type_index))?;
     Ok(sig.results().is_empty())
 }
 

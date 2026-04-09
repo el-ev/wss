@@ -65,9 +65,9 @@ fn combine_blocks(
             }
         }
 
-        let old_term = bb.terminator.clone();
-        bb.terminator = combine_term(old_term.clone(), facts, defs);
-        if bb.terminator != old_term {
+        let new_term = combine_term(bb.terminator.clone(), facts, defs);
+        if new_term != bb.terminator {
+            bb.terminator = new_term;
             changed = true;
         }
 

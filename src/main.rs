@@ -132,7 +132,7 @@ fn main() -> Result<()> {
         args.js_clock_debugger,
     )?;
 
-    let wasm_bytes = std::fs::read(&args.wasm_file).context({
+    let wasm_bytes = std::fs::read(&args.wasm_file).with_context(|| {
         format!(
             "failed to read WebAssembly file '{}'",
             args.wasm_file.display()
@@ -189,10 +189,8 @@ fn main() -> Result<()> {
     }
 
     let result = emit_program(&ir8, emit_config)?;
-    std::fs::write(&output_file, result).context(format!(
-        "failed to write output HTML '{}'",
-        output_file.display()
-    ))?;
+    std::fs::write(&output_file, result)
+        .with_context(|| format!("failed to write output HTML '{}'", output_file.display()))?;
 
     Ok(())
 }

@@ -173,7 +173,7 @@ fn collect_referenced_groups(
                 }
                 let func_id = owners
                     .owner_of(reg)
-                    .context(format!("missing owner for vreg r{}", reg.expect_vreg()))?;
+                    .with_context(|| format!("missing owner for vreg r{}", reg.expect_vreg()))?;
                 referenced[func_id].insert(group_of(reg));
             }
 
@@ -183,7 +183,7 @@ fn collect_referenced_groups(
                 }
                 let func_id = owners
                     .owner_of(reg)
-                    .context(format!("missing owner for vreg r{}", reg.expect_vreg()))?;
+                    .with_context(|| format!("missing owner for vreg r{}", reg.expect_vreg()))?;
                 referenced[func_id].insert(group_of(reg));
             }
         }
@@ -510,18 +510,9 @@ fn rewrite_vregs(
     allocations: &[HashMap<GroupId, u16>],
     func_group_offsets: &[u16],
 ) -> anyhow::Result<()> {
-    for blocks in &mut prog.func_blocks {
-        for bb in blocks {
-            for inst in &mut bb.insts {
-                if let Some(dst) = inst.dst {
-                    inst.dst = Some(map_vreg(dst, owners, allocations, func_group_offsets)?);
-                }
-                rewrite_inst_kind(&mut inst.kind, owners, allocations, func_group_offsets)?;
-            }
-            rewrite_terminator(&mut bb.terminator, owners, allocations, func_group_offsets)?;
-        }
-    }
-    Ok(())
+    remap_program_vregs(prog, &mut |v| {
+        map_vreg(v, owners, allocations, func_group_offsets)
+    })
 }
 
 fn map_vreg(
@@ -540,40 +531,35 @@ fn map_vreg(
 
     let owner = owners
         .owner_of(reg)
-        .context(format!("missing owner for vreg r{reg_idx}"))?;
+        .with_context(|| format!("missing owner for vreg r{reg_idx}"))?;
     // TODO(i64): group/lane decomposition assumes 4 lanes per logical value.
     let group = reg_idx / 4;
     let lane = reg_idx % 4;
 
-    let local_phys_group = allocations[owner].get(&group).copied().context(format!(
-        "missing allocation for group {} (vreg r{})",
-        group, reg_idx
-    ))?;
+    let local_phys_group = allocations[owner]
+        .get(&group)
+        .copied()
+        .with_context(|| format!("missing allocation for group {} (vreg r{})", group, reg_idx))?;
     let phys_group = func_group_offsets[owner].saturating_add(local_phys_group);
 
     Ok(Val8::reg(phys_group * 4 + lane))
 }
 
-fn rewrite_word(
+fn map_word_vals(
     w: &mut Word,
-    owners: &OwnerInfo,
-    allocations: &[HashMap<GroupId, u16>],
-    func_group_offsets: &[u16],
+    f: &mut impl FnMut(Val8) -> anyhow::Result<Val8>,
 ) -> anyhow::Result<()> {
-    // TODO(i64): word remapping currently rewrites exactly four lanes.
-    w.b0 = map_vreg(w.b0, owners, allocations, func_group_offsets)?;
-    w.b1 = map_vreg(w.b1, owners, allocations, func_group_offsets)?;
-    w.b2 = map_vreg(w.b2, owners, allocations, func_group_offsets)?;
-    w.b3 = map_vreg(w.b3, owners, allocations, func_group_offsets)?;
+    w.b0 = f(w.b0)?;
+    w.b1 = f(w.b1)?;
+    w.b2 = f(w.b2)?;
+    w.b3 = f(w.b3)?;
     Ok(())
 }
 
-fn rewrite_word_through_lane(
+fn map_word_vals_through_lane(
     w: &mut Word,
     lane: u8,
-    owners: &OwnerInfo,
-    allocations: &[HashMap<GroupId, u16>],
-    func_group_offsets: &[u16],
+    f: &mut impl FnMut(Val8) -> anyhow::Result<Val8>,
 ) -> anyhow::Result<()> {
     for idx in 0..=lane {
         let slot = match idx {
@@ -583,44 +569,34 @@ fn rewrite_word_through_lane(
             3 => &mut w.b3,
             _ => unreachable!("word lane must be in 0..=3"),
         };
-        *slot = map_vreg(*slot, owners, allocations, func_group_offsets)?;
+        *slot = f(*slot)?;
     }
     Ok(())
 }
 
-fn rewrite_inst_kind(
+fn map_inst_kind_vals(
     kind: &mut Inst8Kind,
-    owners: &OwnerInfo,
-    allocations: &[HashMap<GroupId, u16>],
-    func_group_offsets: &[u16],
+    f: &mut impl FnMut(Val8) -> anyhow::Result<Val8>,
 ) -> anyhow::Result<()> {
-    let map1 = |r: &mut Val8| -> anyhow::Result<()> {
-        *r = map_vreg(*r, owners, allocations, func_group_offsets)?;
-        Ok(())
-    };
-    let map_addr = |addr: &mut crate::ir8::Addr| -> anyhow::Result<()> {
-        addr.lo = map_vreg(addr.lo, owners, allocations, func_group_offsets)?;
-        addr.hi = map_vreg(addr.hi, owners, allocations, func_group_offsets)?;
-        Ok(())
-    };
-
     match kind {
         Inst8Kind::Getchar
         | Inst8Kind::CsStorePc { .. }
         | Inst8Kind::CsLoadPc { .. }
         | Inst8Kind::CsAlloc(_)
-        | Inst8Kind::CsFree(_) => {}
+        | Inst8Kind::CsFree(_)
+        | Inst8Kind::GlobalGetByte { .. }
+        | Inst8Kind::CsLoad { .. } => {}
 
         Inst8Kind::Copy(s) | Inst8Kind::BoolNot(s) | Inst8Kind::Putchar(s) => {
-            map1(s)?;
+            *s = f(*s)?;
         }
         Inst8Kind::Add32Byte { lhs, rhs, lane } | Inst8Kind::Sub32Byte { lhs, rhs, lane } => {
-            rewrite_word_through_lane(lhs, *lane, owners, allocations, func_group_offsets)?;
-            rewrite_word_through_lane(rhs, *lane, owners, allocations, func_group_offsets)?;
+            map_word_vals_through_lane(lhs, *lane, f)?;
+            map_word_vals_through_lane(rhs, *lane, f)?;
         }
         Inst8Kind::Sub32Borrow { lhs, rhs } => {
-            rewrite_word(lhs, owners, allocations, func_group_offsets)?;
-            rewrite_word(rhs, owners, allocations, func_group_offsets)?;
+            map_word_vals(lhs, f)?;
+            map_word_vals(rhs, f)?;
         }
 
         Inst8Kind::Add(l, r)
@@ -635,79 +611,84 @@ fn rewrite_inst_kind(
         | Inst8Kind::Ne(l, r)
         | Inst8Kind::LtU(l, r)
         | Inst8Kind::GeU(l, r) => {
-            map1(l)?;
-            map1(r)?;
+            *l = f(*l)?;
+            *r = f(*r)?;
         }
         Inst8Kind::BoolAnd(op) | Inst8Kind::BoolOr(op) => {
-            *op = op.try_map_vals(|val| map_vreg(val, owners, allocations, func_group_offsets))?;
+            *op = op.try_map_vals(&mut *f)?;
         }
         Inst8Kind::Sel(c, l, r) => {
-            map1(l)?;
-            map1(r)?;
-            map1(c)?;
+            *l = f(*l)?;
+            *r = f(*r)?;
+            *c = f(*c)?;
         }
-        Inst8Kind::GlobalGetByte { .. } => {}
-
         Inst8Kind::GlobalSetByte { val, .. } => {
-            map1(val)?;
+            *val = f(*val)?;
         }
-
         Inst8Kind::LoadMem { addr, .. } => {
-            map_addr(addr)?;
+            addr.lo = f(addr.lo)?;
+            addr.hi = f(addr.hi)?;
         }
-
         Inst8Kind::StoreMem { addr, val, .. } => {
-            map_addr(addr)?;
-            map1(val)?;
+            addr.lo = f(addr.lo)?;
+            addr.hi = f(addr.hi)?;
+            *val = f(*val)?;
         }
-
         Inst8Kind::CsStore { val, .. } => {
-            map1(val)?;
+            *val = f(*val)?;
         }
-
-        Inst8Kind::CsLoad { .. } => {}
     }
-
     Ok(())
 }
 
-fn rewrite_terminator(
+fn map_terminator_vals(
     term: &mut Terminator8,
-    owners: &OwnerInfo,
-    allocations: &[HashMap<GroupId, u16>],
-    func_group_offsets: &[u16],
+    f: &mut impl FnMut(Val8) -> anyhow::Result<Val8>,
 ) -> anyhow::Result<()> {
     match term {
         Terminator8::Goto(_) | Terminator8::Trap(_) => {}
-
         Terminator8::Branch { cond, .. } => {
-            *cond = map_vreg(*cond, owners, allocations, func_group_offsets)?;
+            *cond = f(*cond)?;
         }
-
         Terminator8::Switch { index, .. } => {
-            *index = map_vreg(*index, owners, allocations, func_group_offsets)?;
+            *index = f(*index)?;
         }
-
         Terminator8::CallSetup {
             args,
             callee_arg_vregs,
             ..
         } => {
             for w in args {
-                rewrite_word(w, owners, allocations, func_group_offsets)?;
+                map_word_vals(w, f)?;
             }
             for w in callee_arg_vregs {
-                rewrite_word(w, owners, allocations, func_group_offsets)?;
+                map_word_vals(w, f)?;
             }
         }
-
         Terminator8::Return { val } | Terminator8::Exit { val } => {
             if let Some(w) = val {
-                rewrite_word(w, owners, allocations, func_group_offsets)?;
+                map_word_vals(w, f)?;
             }
         }
     }
+    Ok(())
+}
 
+fn remap_program_vregs(
+    prog: &mut Ir8Program,
+    f: &mut impl FnMut(Val8) -> anyhow::Result<Val8>,
+) -> anyhow::Result<()> {
+    for blocks in &mut prog.func_blocks {
+        for bb in blocks {
+            for inst in &mut bb.insts {
+                if let Some(dst) = inst.dst {
+                    inst.dst = Some(f(dst)?);
+                }
+                map_inst_kind_vals(&mut inst.kind, f)?;
+            }
+            map_terminator_vals(&mut bb.terminator, f)?;
+        }
+    }
     Ok(())
 }
 
@@ -770,23 +751,8 @@ fn compact_physical_vregs(prog: &mut Ir8Program, max_phys_regs: u16) -> anyhow::
         dense_map.insert(Val8::reg(reg), Val8::reg(VREG_START + i as u16));
     }
 
-    remap_dense_vregs(prog, &dense_map)?;
+    remap_program_vregs(prog, &mut |v| remap_dense_reg(v, &dense_map))?;
     prog.num_vregs = num_vregs;
-    Ok(())
-}
-
-fn remap_dense_vregs(prog: &mut Ir8Program, dense_map: &HashMap<Val8, Val8>) -> anyhow::Result<()> {
-    for blocks in &mut prog.func_blocks {
-        for bb in blocks {
-            for inst in &mut bb.insts {
-                if let Some(dst) = inst.dst {
-                    inst.dst = Some(remap_dense_reg(dst, dense_map)?);
-                }
-                remap_dense_inst_kind(&mut inst.kind, dense_map)?;
-            }
-            remap_dense_terminator(&mut bb.terminator, dense_map)?;
-        }
-    }
     Ok(())
 }
 
@@ -801,151 +767,7 @@ fn remap_dense_reg(val: Val8, dense_map: &HashMap<Val8, Val8>) -> anyhow::Result
     dense_map
         .get(&val)
         .copied()
-        .context(format!("missing dense remap for physical vreg r{}", reg))
-}
-
-fn remap_dense_word(w: &mut Word, dense_map: &HashMap<Val8, Val8>) -> anyhow::Result<()> {
-    // TODO(i64): dense remap currently rewrites exactly four lanes.
-    w.b0 = remap_dense_reg(w.b0, dense_map)?;
-    w.b1 = remap_dense_reg(w.b1, dense_map)?;
-    w.b2 = remap_dense_reg(w.b2, dense_map)?;
-    w.b3 = remap_dense_reg(w.b3, dense_map)?;
-    Ok(())
-}
-
-fn remap_dense_word_through_lane(
-    w: &mut Word,
-    lane: u8,
-    dense_map: &HashMap<Val8, Val8>,
-) -> anyhow::Result<()> {
-    for idx in 0..=lane {
-        let slot = match idx {
-            0 => &mut w.b0,
-            1 => &mut w.b1,
-            2 => &mut w.b2,
-            3 => &mut w.b3,
-            _ => unreachable!("word lane must be in 0..=3"),
-        };
-        *slot = remap_dense_reg(*slot, dense_map)?;
-    }
-    Ok(())
-}
-
-fn remap_dense_inst_kind(
-    kind: &mut Inst8Kind,
-    dense_map: &HashMap<Val8, Val8>,
-) -> anyhow::Result<()> {
-    let map1 = |r: &mut Val8| -> anyhow::Result<()> {
-        *r = remap_dense_reg(*r, dense_map)?;
-        Ok(())
-    };
-    let map_addr = |addr: &mut crate::ir8::Addr| -> anyhow::Result<()> {
-        addr.lo = remap_dense_reg(addr.lo, dense_map)?;
-        addr.hi = remap_dense_reg(addr.hi, dense_map)?;
-        Ok(())
-    };
-
-    match kind {
-        Inst8Kind::Getchar
-        | Inst8Kind::CsStorePc { .. }
-        | Inst8Kind::CsLoadPc { .. }
-        | Inst8Kind::CsAlloc(_)
-        | Inst8Kind::CsFree(_)
-        | Inst8Kind::GlobalGetByte { .. } => {}
-
-        Inst8Kind::Copy(s) | Inst8Kind::BoolNot(s) | Inst8Kind::Putchar(s) => {
-            map1(s)?;
-        }
-        Inst8Kind::Add32Byte { lhs, rhs, lane } | Inst8Kind::Sub32Byte { lhs, rhs, lane } => {
-            remap_dense_word_through_lane(lhs, *lane, dense_map)?;
-            remap_dense_word_through_lane(rhs, *lane, dense_map)?;
-        }
-        Inst8Kind::Sub32Borrow { lhs, rhs } => {
-            remap_dense_word(lhs, dense_map)?;
-            remap_dense_word(rhs, dense_map)?;
-        }
-
-        Inst8Kind::Add(l, r)
-        | Inst8Kind::Carry(l, r)
-        | Inst8Kind::Sub(l, r)
-        | Inst8Kind::MulLo(l, r)
-        | Inst8Kind::MulHi(l, r)
-        | Inst8Kind::And8(l, r)
-        | Inst8Kind::Or8(l, r)
-        | Inst8Kind::Xor8(l, r)
-        | Inst8Kind::Eq(l, r)
-        | Inst8Kind::Ne(l, r)
-        | Inst8Kind::LtU(l, r)
-        | Inst8Kind::GeU(l, r) => {
-            map1(l)?;
-            map1(r)?;
-        }
-        Inst8Kind::BoolAnd(op) | Inst8Kind::BoolOr(op) => {
-            *op = op.try_map_vals(|val| remap_dense_reg(val, dense_map))?;
-        }
-        Inst8Kind::Sel(c, l, r) => {
-            map1(l)?;
-            map1(r)?;
-            map1(c)?;
-        }
-        Inst8Kind::GlobalSetByte { val, .. } => {
-            map1(val)?;
-        }
-
-        Inst8Kind::LoadMem { addr, .. } => {
-            map_addr(addr)?;
-        }
-
-        Inst8Kind::StoreMem { addr, val, .. } => {
-            map_addr(addr)?;
-            map1(val)?;
-        }
-
-        Inst8Kind::CsStore { val, .. } => {
-            map1(val)?;
-        }
-
-        Inst8Kind::CsLoad { .. } => {}
-    }
-
-    Ok(())
-}
-
-fn remap_dense_terminator(
-    term: &mut Terminator8,
-    dense_map: &HashMap<Val8, Val8>,
-) -> anyhow::Result<()> {
-    match term {
-        Terminator8::Goto(_) | Terminator8::Trap(_) => {}
-
-        Terminator8::Branch { cond, .. } => {
-            *cond = remap_dense_reg(*cond, dense_map)?;
-        }
-
-        Terminator8::Switch { index, .. } => {
-            *index = remap_dense_reg(*index, dense_map)?;
-        }
-
-        Terminator8::CallSetup {
-            args,
-            callee_arg_vregs,
-            ..
-        } => {
-            for w in args {
-                remap_dense_word(w, dense_map)?;
-            }
-            for w in callee_arg_vregs {
-                remap_dense_word(w, dense_map)?;
-            }
-        }
-
-        Terminator8::Return { val } | Terminator8::Exit { val } => {
-            if let Some(w) = val {
-                remap_dense_word(w, dense_map)?;
-            }
-        }
-    }
-    Ok(())
+        .with_context(|| format!("missing dense remap for physical vreg r{}", reg))
 }
 
 #[cfg(test)]

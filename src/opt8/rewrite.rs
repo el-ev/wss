@@ -16,7 +16,7 @@ pub(super) fn collect_def_counts(blocks: &[BasicBlock8]) -> HashMap<Val8, usize>
             .insts
             .iter()
             .filter_map(|inst| inst.dst)
-            .chain(bb.terminator.defs().into_iter())
+            .chain(bb.terminator.defs())
         {
             *counts.entry(dst).or_insert(0) += 1;
         }
@@ -31,7 +31,7 @@ pub(super) fn collect_use_counts(blocks: &[BasicBlock8]) -> HashMap<Val8, usize>
             .insts
             .iter()
             .flat_map(|inst| inst.uses().into_iter())
-            .chain(bb.terminator.uses().into_iter())
+            .chain(bb.terminator.uses())
         {
             *counts.entry(r).or_insert(0) += 1;
         }

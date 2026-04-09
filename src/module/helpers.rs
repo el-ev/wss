@@ -6,7 +6,7 @@ use super::{FuncType, ModuleInfo, TableInfo};
 pub(super) fn clone_func_type(module: &ModuleInfo, type_index: u32) -> anyhow::Result<FuncType> {
     module
         .type_at(type_index)
-        .context(format!("type index out of bounds: {}", type_index))
+        .with_context(|| format!("type index out of bounds: {}", type_index))
         .cloned()
 }
 

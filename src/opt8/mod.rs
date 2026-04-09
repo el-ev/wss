@@ -16,6 +16,15 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 
+fn filter_by_mask<T>(items: &mut Vec<T>, keep: &[bool]) {
+    let mut i = 0;
+    items.retain(|_| {
+        let k = keep[i];
+        i += 1;
+        k
+    });
+}
+
 use crate::ir8::{
     Addr, BasicBlock8, Inst8, Inst8Kind, Ir8Program, Pc, Terminator8, VREG_START, Val8, Word,
 };
@@ -220,12 +229,7 @@ fn dce_function(blocks: &mut [BasicBlock8]) -> bool {
         }
 
         any_removed = true;
-        let old = std::mem::take(&mut bb.insts);
-        bb.insts = old
-            .into_iter()
-            .enumerate()
-            .filter_map(|(j, inst)| keep[j].then_some(inst))
-            .collect();
+        filter_by_mask(&mut bb.insts, &keep);
     }
 
     any_removed
@@ -273,12 +277,7 @@ fn remove_unreachable_blocks(prog: &mut Ir8Program) -> bool {
         }
 
         let old_len = blocks.len();
-        let old_blocks = std::mem::take(blocks);
-        *blocks = old_blocks
-            .into_iter()
-            .enumerate()
-            .filter_map(|(i, bb)| visited[i].then_some(bb))
-            .collect();
+        filter_by_mask(blocks, &visited);
         changed |= blocks.len() != old_len;
     }
 
@@ -413,12 +412,7 @@ fn local_dead_mem_store_elim_block(bb: &mut BasicBlock8) -> bool {
         return false;
     }
 
-    let old = std::mem::take(&mut bb.insts);
-    bb.insts = old
-        .into_iter()
-        .enumerate()
-        .filter_map(|(i, inst)| keep[i].then_some(inst))
-        .collect();
+    filter_by_mask(&mut bb.insts, &keep);
     true
 }
 
@@ -437,9 +431,9 @@ fn local_copy_propagation_block(bb: &mut BasicBlock8) -> bool {
     let mut subst: HashMap<Val8, Val8> = HashMap::new();
 
     for inst in bb.insts.iter_mut() {
-        let old = inst.clone();
-        *inst = rewrite_inst(inst.clone(), &subst);
-        changed |= *inst != old;
+        let new = rewrite_inst(inst.clone(), &subst);
+        changed |= new != *inst;
+        *inst = new;
 
         if let Some(dst) = inst.dst {
             kill_aliases_for(&mut subst, dst);

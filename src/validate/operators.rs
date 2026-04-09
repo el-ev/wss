@@ -203,13 +203,11 @@ pub(super) fn validate_operator(
             type_index,
             table_index,
         } => validate_indirect_call(*type_index, *table_index, module, location)?,
-        MemorySize { mem } => {
-            if *mem != 0 {
-                bail!("multiple memories not supported at {}", location);
-            }
+        MemorySize { mem } if *mem != 0 => {
+            bail!("multiple memories not supported at {}", location);
         }
         TableSize { table } => {
-            module.table_at(*table).context({
+            module.table_at(*table).with_context(|| {
                 format!(
                     "table.size table index {} out of bounds at {}",
                     table, location
@@ -302,7 +300,7 @@ fn validate_indirect_call(
     module: &ModuleInfo,
     location: &str,
 ) -> anyhow::Result<()> {
-    let ty = module.type_at(type_index).context({
+    let ty = module.type_at(type_index).with_context(|| {
         format!(
             "call_indirect type index {} out of bounds at {}",
             type_index, location
@@ -323,7 +321,7 @@ fn validate_indirect_call(
         validate_valtype(ty, &format!("type[{}].{}[{}]", type_index, kind, i))?;
     }
 
-    let table = module.table_at(table_index).context({
+    let table = module.table_at(table_index).with_context(|| {
         format!(
             "call_indirect table index {} out of bounds at {}",
             table_index, location
