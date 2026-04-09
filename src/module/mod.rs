@@ -105,11 +105,7 @@ impl FuncType {
     }
 }
 
-fn parse_i32_const_offset(
-    init: ConstInit,
-    nonnegative_label: &str,
-    _unsupported_label: &str,
-) -> anyhow::Result<usize> {
+fn parse_i32_const_offset(init: ConstInit, nonnegative_label: &str) -> anyhow::Result<usize> {
     match init {
         // TODO(i64): element/data offsets are parsed from i32 consts only.
         ConstInit::I32(v) => {
@@ -190,7 +186,7 @@ impl ModuleInfo {
         self.types.get(type_index as usize)
     }
 
-    pub(crate) fn function_type_at(&self, func_index: u32) -> Option<&FuncType> {
+    pub(crate) fn func_type_at(&self, func_index: u32) -> Option<&FuncType> {
         self.functions.get(func_index as usize)
     }
 
@@ -203,7 +199,6 @@ impl ModuleInfo {
     }
 }
 
-#[allow(dead_code)]
 impl ModuleInfo {
     pub(crate) fn types_mut(&mut self) -> &mut Vec<FuncType> {
         &mut self.types
@@ -262,8 +257,7 @@ pub(crate) fn decode_module_info(wasm_bytes: &[u8]) -> anyhow::Result<ModuleInfo
                             }
                             num_imports += 1;
                         }
-                        TypeRef::Table(table_ty) => {
-                            let _ = table_ty;
+                        TypeRef::Table(_) => {
                             bail!("imported tables are not supported");
                         }
                         _ => {}
@@ -334,11 +328,8 @@ pub(crate) fn decode_module_info(wasm_bytes: &[u8]) -> anyhow::Result<ModuleInfo
                             }
                             let offset = parse_const_expr(offset_expr)
                                 .context("active data segment offset expr")?;
-                            let offset = parse_i32_const_offset(
-                                offset,
-                                "active data segment offset",
-                                "active data segment offset expr",
-                            )?;
+                            let offset =
+                                parse_i32_const_offset(offset, "active data segment offset")?;
                             module.preloaded_data.push((offset, bytes));
                         }
                         DataKind::Passive => {
@@ -371,11 +362,7 @@ pub(crate) fn decode_module_info(wasm_bytes: &[u8]) -> anyhow::Result<ModuleInfo
                         .len();
                     let offset =
                         parse_const_expr(offset_expr).context("element segment offset expr")?;
-                    let offset = parse_i32_const_offset(
-                        offset,
-                        "element segment offset",
-                        "element segment offset expr",
-                    )?;
+                    let offset = parse_i32_const_offset(offset, "element segment offset")?;
 
                     let mut updates = Vec::new();
                     match element.items {
@@ -480,8 +467,8 @@ impl AstModule {
         self.info.type_at(type_index)
     }
 
-    pub(crate) fn function_type_at(&self, func_index: u32) -> Option<&FuncType> {
-        self.info.function_type_at(func_index)
+    pub(crate) fn func_type_at(&self, func_index: u32) -> Option<&FuncType> {
+        self.info.func_type_at(func_index)
     }
 
     pub(crate) fn globals(&self) -> &[GlobalInfo] {
@@ -554,8 +541,8 @@ impl IrModule {
         self.info.type_at(type_index)
     }
 
-    pub(crate) fn function_type_at(&self, func_index: u32) -> Option<&FuncType> {
-        self.info.function_type_at(func_index)
+    pub(crate) fn func_type_at(&self, func_index: u32) -> Option<&FuncType> {
+        self.info.func_type_at(func_index)
     }
 
     pub(crate) fn globals(&self) -> &[GlobalInfo] {

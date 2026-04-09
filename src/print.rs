@@ -41,16 +41,8 @@ pub fn print_module_ast(module: &AstModule) -> String {
     }
     for (idx, body) in module.bodies().iter().enumerate() {
         if let Some(body) = body {
-            writeln!(
-                out,
-                "fn {} {}",
-                idx,
-                fmt_sig(
-                    module.function_type_at(idx as u32).unwrap().params(),
-                    module.function_type_at(idx as u32).unwrap().results()
-                )
-            )
-            .unwrap();
+            let sig = module.func_type_at(idx as u32).unwrap();
+            writeln!(out, "fn {} {}", idx, fmt_sig(sig.params(), sig.results())).unwrap();
             print_func_body(&mut out, body, 1);
             let more_functions_with_bodies =
                 module.bodies()[idx + 1..].iter().any(|body| body.is_some());
@@ -66,16 +58,8 @@ pub fn print_module_ir(module: &IrModule) -> String {
     let mut out = String::new();
     for (idx, body) in module.bodies().iter().enumerate() {
         if let Some(body) = body {
-            writeln!(
-                out,
-                "fn {} {}",
-                idx,
-                fmt_sig(
-                    module.function_type_at(idx as u32).unwrap().params(),
-                    module.function_type_at(idx as u32).unwrap().results()
-                )
-            )
-            .unwrap();
+            let sig = module.func_type_at(idx as u32).unwrap();
+            writeln!(out, "fn {} {}", idx, fmt_sig(sig.params(), sig.results())).unwrap();
             print_ir_func_body(&mut out, body, 1);
             let more_functions_with_bodies =
                 module.bodies()[idx + 1..].iter().any(|body| body.is_some());
