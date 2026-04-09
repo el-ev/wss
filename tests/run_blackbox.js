@@ -167,9 +167,10 @@ function runChecked(cmd, args, cwd, context, timeoutMs = 0) {
     killSignal: "SIGKILL",
   });
 
+  const stdout = (result.stdout || "").trim();
+  const stderr = (result.stderr || "").trim();
+
   if (result.error) {
-    const stdout = (result.stdout || "").trim();
-    const stderr = (result.stderr || "").trim();
     const timeout = timeoutMs > 0 && isSpawnTimeoutError(result.error);
     const detail = timeout
       ? `command timed out after ${timeoutMs}ms`
@@ -187,8 +188,6 @@ function runChecked(cmd, args, cwd, context, timeoutMs = 0) {
   }
 
   if (result.status !== 0) {
-    const stdout = (result.stdout || "").trim();
-    const stderr = (result.stderr || "").trim();
     const meta = [];
     if (typeof result.status === "number") meta.push(`status=${result.status}`);
     if (result.signal) meta.push(`signal=${result.signal}`);
@@ -554,8 +553,7 @@ function makeProbeScript(memoryKeys, maxFrames, inputBytes, getcharPcs) {
 </script>`;
 }
 
-function injectProbeHtml(htmlPath, outPath, memoryKeys, maxFrames, inputBytes) {
-  const html = fs.readFileSync(htmlPath, "utf8");
+function injectProbeHtml(html, htmlPath, outPath, memoryKeys, maxFrames, inputBytes) {
   const marker = "</body>";
   const idx = html.lastIndexOf(marker);
   if (idx === -1) {
@@ -806,6 +804,17 @@ function parseCliArgs(argv) {
   let dumpMemoryFirst = true;
   let dumpMemoryOnly = false;
 
+  function tryParseIntFlag(flag, arg, nextArg) {
+    if (arg === flag) {
+      if (nextArg === undefined) throw new Error(`${flag} requires a value`);
+      return { value: parseRequiredPositiveInt(nextArg, flag), consumed: 2 };
+    }
+    if (arg.startsWith(`${flag}=`)) {
+      return { value: parseRequiredPositiveInt(arg.slice(flag.length + 1), flag), consumed: 1 };
+    }
+    return null;
+  }
+
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--include-lengthy") {
@@ -826,47 +835,17 @@ function parseCliArgs(argv) {
       onlyBroken = true;
       continue;
     }
-    if (arg === "--retries") {
-      const value = argv[i + 1];
-      if (value === undefined) {
-        throw new Error("--retries requires a value");
-      }
-      retries = parseRequiredPositiveInt(value, "--retries");
-      i += 1;
-      continue;
+    {
+      const r = tryParseIntFlag("--retries", arg, argv[i + 1]);
+      if (r) { retries = r.value; i += r.consumed - 1; continue; }
     }
-    if (arg.startsWith("--retries=")) {
-      retries = parseRequiredPositiveInt(arg.slice("--retries=".length), "--retries");
-      continue;
+    {
+      const r = tryParseIntFlag("--jobs", arg, argv[i + 1]);
+      if (r) { jobs = r.value; i += r.consumed - 1; continue; }
     }
-    if (arg === "--jobs") {
-      const value = argv[i + 1];
-      if (value === undefined) {
-        throw new Error("--jobs requires a value");
-      }
-      jobs = parseRequiredPositiveInt(value, "--jobs");
-      i += 1;
-      continue;
-    }
-    if (arg.startsWith("--jobs=")) {
-      jobs = parseRequiredPositiveInt(arg.slice("--jobs=".length), "--jobs");
-      continue;
-    }
-    if (arg === "--case-node-heap-mb") {
-      const value = argv[i + 1];
-      if (value === undefined) {
-        throw new Error("--case-node-heap-mb requires a value");
-      }
-      caseNodeHeapMb = parseRequiredPositiveInt(value, "--case-node-heap-mb");
-      i += 1;
-      continue;
-    }
-    if (arg.startsWith("--case-node-heap-mb=")) {
-      caseNodeHeapMb = parseRequiredPositiveInt(
-        arg.slice("--case-node-heap-mb=".length),
-        "--case-node-heap-mb"
-      );
-      continue;
+    {
+      const r = tryParseIntFlag("--case-node-heap-mb", arg, argv[i + 1]);
+      if (r) { caseNodeHeapMb = r.value; i += r.consumed - 1; continue; }
     }
     if (arg === "--json-summary") {
       jsonSummary = true;
@@ -925,9 +904,6 @@ function ensureWssBinary() {
     "[setup] build wss",
     WSS_BUILD_TIMEOUT_MS
   );
-  if (!fs.existsSync(WSS_BIN)) {
-    throw new Error(`wss binary not found at ${WSS_BIN}`);
-  }
 }
 
 function buildCaseConfig(testCase) {
@@ -1160,7 +1136,7 @@ function runCase(testCase, options = {}) {
   const artifacts = getCaseArtifacts(testCase);
   ensureCaseSourceExists(artifacts);
   const caseConfig = buildCaseConfig(testCase);
-  if (!options.skipCompile) {
+  if (!options.useDump) {
     compileCaseToWasm(testCase, artifacts, caseConfig);
   }
   transpileCaseToHtml(testCase, artifacts, caseConfig);
@@ -1168,6 +1144,7 @@ function runCase(testCase, options = {}) {
   const materializedMemoryKeys = inferMaterializedMemoryKeys(html);
 
   injectProbeHtml(
+    html,
     artifacts.htmlPath,
     artifacts.probePath,
     materializedMemoryKeys,
@@ -1183,7 +1160,7 @@ function runCase(testCase, options = {}) {
   );
 
   const failures = validateCase(testCase, probeResult);
-  if (options.compareDumpBytes) {
+  if (options.useDump) {
     failures.push(
       ...compareDumpWithMaterializedRuntime(
         testCase,
@@ -1212,10 +1189,7 @@ function evaluateCaseWithRetries(testCase, retries, options = {}) {
   for (let attempt = 1; attempt <= retries; attempt += 1) {
     attemptsUsed = attempt;
     try {
-      const outcome = runCase(testCase, {
-        compareDumpBytes: options.compareDumpBytes,
-        skipCompile: options.skipCompile,
-      });
+      const outcome = runCase(testCase, { useDump: options.useDump });
       if (outcome.kind === "pass") {
         passed = true;
         break;
@@ -1347,16 +1321,15 @@ function runCaseInSubprocess(testCaseId, retries, caseNodeHeapMb) {
 
 async function runCasesInParallel(cases, retries, jobs, caseNodeHeapMb) {
   const outcomes = [];
-  const queue = cases.slice();
-  const totalCases = queue.length;
-  const maxJobs = Math.max(1, Math.min(jobs, queue.length));
+  const totalCases = cases.length;
+  const maxJobs = Math.max(1, Math.min(jobs, cases.length));
   const inflight = new Set();
   let completedCases = 0;
+  let nextIndex = 0;
 
   const scheduleNext = () => {
-    if (queue.length === 0) return;
-    const testCase = queue.shift();
-    if (!testCase) return;
+    if (nextIndex >= cases.length) return;
+    const testCase = cases[nextIndex++];
     const task = runCaseInSubprocess(testCase.id, retries, caseNodeHeapMb)
       .then((outcome) => {
         outcomes.push(outcome);
@@ -1458,26 +1431,25 @@ async function main() {
 
   const rawCases = validateCases(JSON.parse(fs.readFileSync(CASES_PATH, "utf8")));
   const cli = parseCliArgs(process.argv.slice(2));
-  let cases = resolveCases(rawCases, cli.ids);
+  const resolved = resolveCases(rawCases, cli.ids);
   let skippedLengthy = 0;
   let skippedBroken = 0;
   let skippedUnimplemented = 0;
-  if (cli.onlyLengthy) {
-    cases = cases.filter(isLengthyCase);
-  } else if (cli.ids.size === 0 && !cli.includeLengthy) {
-    skippedLengthy = cases.filter(isLengthyCase).length;
-    cases = cases.filter((testCase) => !isLengthyCase(testCase));
-  }
-  if (cli.onlyBroken) {
-    cases = cases.filter(isBrokenCase);
-  } else if (cli.ids.size === 0 && !cli.includeBroken) {
-    skippedBroken = cases.filter(isBrokenCase).length;
-    cases = cases.filter((testCase) => !isBrokenCase(testCase));
-  }
-  if (cli.ids.size === 0) {
-    skippedUnimplemented = cases.filter(isUnimplementedCase).length;
-    cases = cases.filter((testCase) => !isUnimplementedCase(testCase));
-  }
+  const cases = resolved.filter((testCase) => {
+    const lengthy = isLengthyCase(testCase);
+    const broken = isBrokenCase(testCase);
+    const unimplemented = isUnimplementedCase(testCase);
+
+    if (cli.onlyLengthy && !lengthy) return false;
+    if (cli.onlyBroken && !broken) return false;
+
+    if (cli.ids.size === 0) {
+      if (!cli.includeLengthy && lengthy) { skippedLengthy += 1; return false; }
+      if (!cli.includeBroken && broken) { skippedBroken += 1; return false; }
+      if (unimplemented) { skippedUnimplemented += 1; return false; }
+    }
+    return true;
+  });
   if (cases.length === 0) {
     throw new Error("no cases selected");
   }
@@ -1497,8 +1469,7 @@ async function main() {
       throw new Error("--json-summary requires exactly one selected case");
     }
     const outcome = evaluateCaseWithRetries(cases[0], cli.retries, {
-      compareDumpBytes: preDumpedCaseIds.has(cases[0].id),
-      skipCompile: preDumpedCaseIds.has(cases[0].id),
+      useDump: preDumpedCaseIds.has(cases[0].id),
     });
     console.log(JSON.stringify(outcome));
     if (outcome.kind !== "pass") {
@@ -1540,8 +1511,7 @@ async function main() {
     for (const [index, testCase] of cases.entries()) {
       writeCasePrefix(testCase.id, index + 1, cases.length);
       const outcome = evaluateCaseWithRetries(testCase, cli.retries, {
-        compareDumpBytes: preDumpedCaseIds.has(testCase.id),
-        skipCompile: preDumpedCaseIds.has(testCase.id),
+        useDump: preDumpedCaseIds.has(testCase.id),
       });
       console.log(renderOutcomeLabel(outcome));
       outcomes.push(outcome);
