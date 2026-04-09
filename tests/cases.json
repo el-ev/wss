@@ -692,8 +692,8 @@
     }
   },
   {
-    "id": "volatile_large_roundtrip_a",
-    "source": "tests/cases/volatile_large_roundtrip_a.c",
+    "id": "large_roundtrip_a",
+    "source": "tests/cases/large_roundtrip_a.c",
     "expect": {
       "pc": -1,
       "ra": "0xf1234567",
@@ -703,8 +703,8 @@
     }
   },
   {
-    "id": "volatile_large_roundtrip_b",
-    "source": "tests/cases/volatile_large_roundtrip_b.c",
+    "id": "large_roundtrip_b",
+    "source": "tests/cases/large_roundtrip_b.c",
     "expect": {
       "pc": -1,
       "ra": "0x00fedcba",
@@ -1120,8 +1120,8 @@
     }
   },
   {
-    "id": "builtin_clz_volatile_seed",
-    "source": "tests/cases/builtin_clz_volatile_seed.c",
+    "id": "builtin_clz_seed",
+    "source": "tests/cases/builtin_clz_seed.c",
     "expect": {
       "pc": -1,
       "ra": "0x00000003",
@@ -1131,8 +1131,8 @@
     }
   },
   {
-    "id": "builtin_ctz_volatile_seed",
-    "source": "tests/cases/builtin_ctz_volatile_seed.c",
+    "id": "builtin_ctz_seed",
+    "source": "tests/cases/builtin_ctz_seed.c",
     "expect": {
       "pc": -1,
       "ra": "0x00000003",
@@ -1142,8 +1142,8 @@
     }
   },
   {
-    "id": "builtin_popcount_volatile_seed",
-    "source": "tests/cases/builtin_popcount_volatile_seed.c",
+    "id": "builtin_popcount_seed",
+    "source": "tests/cases/builtin_popcount_seed.c",
     "expect": {
       "pc": -1,
       "ra": "0x0000000d",
@@ -1153,8 +1153,8 @@
     }
   },
   {
-    "id": "builtin_bitcount_sum_volatile_seed",
-    "source": "tests/cases/builtin_bitcount_sum_volatile_seed.c",
+    "id": "builtin_bitcount_sum_seed",
+    "source": "tests/cases/builtin_bitcount_sum_seed.c",
     "expect": {
       "pc": -1,
       "ra": "0x00000013",
@@ -1186,8 +1186,8 @@
     }
   },
   {
-    "id": "switch_br_table_optnone",
-    "source": "tests/cases/switch_br_table_optnone.c",
+    "id": "switch_br_table_walk",
+    "source": "tests/cases/switch_br_table_walk.c",
     "expect": {
       "pc": -1,
       "ra": "0x00000081",
@@ -1386,6 +1386,320 @@
       "rendered_includes": [
         "Program exited with code",
         "0x00000004"
+      ]
+    }
+  },
+  {
+    "id": "global_init_order",
+    "source": "tests/cases/global_init_order.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x000000a5",
+      "rendered_includes": [
+        "Program exited with code",
+        "0x000000a5"
+      ]
+    }
+  },
+  {
+    "id": "global_counter_mix",
+    "source": "tests/cases/global_counter_mix.c",
+    "tags": [
+      "lengthy"
+    ],
+    "virtual_time_budget_ms": 60000,
+    "expect": {
+      "pc": -1,
+      "ra": "0x00010a82",
+      "rendered_includes": [
+        "Program exited with code",
+        "0x00010a82"
+      ]
+    }
+  },
+  {
+    "id": "select_across_calls",
+    "source": "tests/cases/select_across_calls.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x000000e6",
+      "rendered_includes": [
+        "Program exited with code",
+        "0x000000e6"
+      ]
+    }
+  },
+  {
+    "id": "mixed_arith_bitwise",
+    "source": "tests/cases/mixed_arith_bitwise.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x0000015d",
+      "rendered_includes": [
+        "Program exited with code",
+        "0x0000015d"
+      ]
+    }
+  },
+  {
+    "id": "bitcount_chain",
+    "source": "tests/cases/bitcount_chain.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x000000e2",
+      "rendered_includes": [
+        "Program exited with code",
+        "0x000000e2"
+      ]
+    }
+  },
+  {
+    "id": "complex_nested_ternary",
+    "source": "tests/cases/complex_nested_ternary.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x0000000a",
+      "rendered_includes": [
+        "Program exited with code",
+        "0x0000000a"
+      ]
+    }
+  },
+  {
+    "id": "loop_continue_nested",
+    "source": "tests/cases/loop_continue_nested.c",
+    "tags": [
+      "lengthy"
+    ],
+    "virtual_time_budget_ms": 60000,
+    "expect": {
+      "pc": -1,
+      "ra": "0x0000003f",
+      "rendered_includes": [
+        "Program exited with code",
+        "0x0000003f"
+      ]
+    }
+  },
+  {
+    "id": "labeled_goto_exit",
+    "source": "tests/cases/labeled_goto_exit.c",
+    "tags": [
+      "lengthy"
+    ],
+    "virtual_time_budget_ms": 60000,
+    "expect": {
+      "pc": -1,
+      "ra": "0x000002bf",
+      "rendered_includes": [
+        "Program exited with code",
+        "0x000002bf"
+      ]
+    }
+  },
+  {
+    "id": "nested_loop_break",
+    "source": "tests/cases/nested_loop_break.c",
+    "tags": [
+      "lengthy"
+    ],
+    "virtual_time_budget_ms": 60000,
+    "expect": {
+      "pc": -1,
+      "ra": "0x00112509",
+      "rendered_includes": [
+        "Program exited with code",
+        "0x00112509"
+      ]
+    }
+  },
+  {
+    "id": "recursion_fact",
+    "source": "tests/cases/recursion_fact.c",
+    "tags": [
+      "lengthy"
+    ],
+    "virtual_time_budget_ms": 60000,
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000355",
+      "rendered_includes": [
+        "Program exited with code",
+        "0x00000355"
+      ]
+    }
+  },
+  {
+    "id": "memory_byte_patterns",
+    "source": "tests/cases/memory_byte_patterns.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x7856efbc",
+      "rendered_includes": [
+        "Program exited with code",
+        "0x7856efbc"
+      ]
+    }
+  },
+  {
+    "id": "memory_halfword_extract",
+    "source": "tests/cases/memory_halfword_extract.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0xabcd3412",
+      "rendered_includes": [
+        "Program exited with code",
+        "0xabcd3412"
+      ]
+    }
+  },
+  {
+    "id": "memory_mixed_sizes",
+    "source": "tests/cases/memory_mixed_sizes.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x99ffddcb",
+      "rendered_includes": [
+        "Program exited with code",
+        "0x99ffddcb"
+      ]
+    }
+  },
+  {
+    "id": "array_memory_interop",
+    "source": "tests/cases/array_memory_interop.c",
+    "tags": [
+      "lengthy"
+    ],
+    "virtual_time_budget_ms": 60000,
+    "expect": {
+      "pc": -1,
+      "ra": "0xfce0c4a8",
+      "rendered_includes": [
+        "Program exited with code",
+        "0xfce0c4a8"
+      ]
+    }
+  },
+  {
+    "id": "indirect_memory_rotmix",
+    "source": "tests/cases/indirect_memory_rotmix.c",
+    "tags": [
+      "lengthy"
+    ],
+    "virtual_time_budget_ms": 60000,
+    "expect": {
+      "pc": -1,
+      "ra": "0x468a5ec3",
+      "rendered_includes": [
+        "Program exited with code",
+        "0x468a5ec3"
+      ]
+    }
+  },
+  {
+    "id": "switch_loop_bitcount_mix",
+    "source": "tests/cases/switch_loop_bitcount_mix.c",
+    "tags": [
+      "lengthy"
+    ],
+    "virtual_time_budget_ms": 60000,
+    "expect": {
+      "pc": -1,
+      "ra": "0xc43434bd",
+      "rendered_includes": [
+        "Program exited with code",
+        "0xc43434bd"
+      ]
+    }
+  },
+  {
+    "id": "global_memory_select_chain",
+    "source": "tests/cases/global_memory_select_chain.c",
+    "tags": [
+      "lengthy"
+    ],
+    "virtual_time_budget_ms": 60000,
+    "expect": {
+      "pc": -1,
+      "ra": "0xffff9502",
+      "rendered_includes": [
+        "Program exited with code",
+        "0xffff9502"
+      ]
+    }
+  },
+  {
+    "id": "bitcount_rotate_eqz_chain",
+    "source": "tests/cases/bitcount_rotate_eqz_chain.c",
+    "tags": [
+      "lengthy"
+    ],
+    "virtual_time_budget_ms": 60000,
+    "expect": {
+      "pc": -1,
+      "ra": "0x419d7c2d",
+      "rendered_includes": [
+        "Program exited with code",
+        "0x419d7c2d"
+      ]
+    }
+  },
+  {
+    "id": "io_triplet_transform",
+    "source": "tests/cases/io_triplet_transform.c",
+    "console_input": "aB3",
+    "tags": [
+      "lengthy"
+    ],
+    "virtual_time_budget_ms": 60000,
+    "expect": {
+      "pc": -1,
+      "ra": "0x000008fc",
+      "rendered_includes": [
+        "Ab3",
+        "Program exited with code",
+        "0x000008fc"
+      ]
+    }
+  },
+  {
+    "id": "indirect_halfword_guard",
+    "source": "tests/cases/indirect_halfword_guard.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x55aa14e5",
+      "rendered_includes": [
+        "Program exited with code",
+        "0x55aa14e5"
+      ]
+    }
+  },
+  {
+    "id": "memory_select_crosscheck",
+    "source": "tests/cases/memory_select_crosscheck.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x3c05d3b1",
+      "rendered_includes": [
+        "Program exited with code",
+        "0x3c05d3b1"
+      ]
+    }
+  },
+  {
+    "id": "indirect_switch_stride_long",
+    "source": "tests/cases/indirect_switch_stride_long.c",
+    "tags": [
+      "lengthy"
+    ],
+    "virtual_time_budget_ms": 60000,
+    "expect": {
+      "pc": -1,
+      "ra": "0xb0d027cc",
+      "rendered_includes": [
+        "Program exited with code",
+        "0xb0d027cc"
       ]
     }
   },
