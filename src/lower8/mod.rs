@@ -407,6 +407,174 @@ fn word_const_u32(w: Word) -> Option<u32> {
     Some(b0 | (b1 << 8) | (b2 << 16) | (b3 << 24))
 }
 
+fn shift_left_byte_const(b: &mut FuncBuilder, src: Val8, shift: u8) -> Val8 {
+    debug_assert!(shift <= 7);
+    if shift == 0 {
+        return src;
+    }
+    if let Some(imm) = src.imm_value() {
+        return Val8::imm(imm.wrapping_shl(u32::from(shift)));
+    }
+
+    let dst = b.alloc_reg();
+    b.emit(Inst8::with_dst(
+        dst,
+        Inst8Kind::MulLo(src, Val8::imm(1u8 << shift)),
+    ));
+    dst
+}
+
+fn shift_right_u_byte_const(b: &mut FuncBuilder, src: Val8, shift: u8) -> Val8 {
+    debug_assert!(shift <= 7);
+    if shift == 0 {
+        return src;
+    }
+    if let Some(imm) = src.imm_value() {
+        return Val8::imm(imm >> shift);
+    }
+
+    let dst = b.alloc_reg();
+    b.emit(Inst8::with_dst(
+        dst,
+        Inst8Kind::MulHi(src, Val8::imm(1u8 << (8 - shift))),
+    ));
+    dst
+}
+
+fn or_bytes_const_fold(b: &mut FuncBuilder, lhs: Val8, rhs: Val8) -> Val8 {
+    if let (Some(l), Some(r)) = (lhs.imm_value(), rhs.imm_value()) {
+        return Val8::imm(l | r);
+    }
+    if let Val8::Imm(0) = lhs {
+        return rhs;
+    }
+    if let Val8::Imm(0) = rhs {
+        return lhs;
+    }
+
+    let dst = b.alloc_reg();
+    b.emit(Inst8::with_dst(dst, Inst8Kind::Or8(lhs, rhs)));
+    dst
+}
+
+fn word_byte_or_fill(src: [Val8; 4], idx: usize, fill: Val8) -> Val8 {
+    src.get(idx).copied().unwrap_or(fill)
+}
+
+fn lower_shl_const_u32(b: &mut FuncBuilder, lhs: Word, rhs_const: u32) -> Word {
+    let shift = (rhs_const & 31) as u8;
+    if shift == 0 {
+        return lhs;
+    }
+
+    let src = lhs.bytes();
+    let dst = b.alloc_word();
+    let byte_shift = usize::from(shift / 8);
+    let bit_shift = shift % 8;
+    for (lane, dst_lane) in dst.bytes().into_iter().enumerate() {
+        let low_src = lane
+            .checked_sub(byte_shift)
+            .map_or(Val8::imm(0), |idx| src[idx]);
+        let out = if bit_shift == 0 {
+            low_src
+        } else {
+            let shifted = shift_left_byte_const(b, low_src, bit_shift);
+            let carry_src = lane
+                .checked_sub(byte_shift + 1)
+                .map_or(Val8::imm(0), |idx| src[idx]);
+            let carry = shift_right_u_byte_const(b, carry_src, 8 - bit_shift);
+            or_bytes_const_fold(b, shifted, carry)
+        };
+        b.emit(Inst8::with_dst(dst_lane, Inst8Kind::Copy(out)));
+    }
+    dst
+}
+
+fn lower_shr_const_u32_with_fill(
+    b: &mut FuncBuilder,
+    lhs: Word,
+    shift: u8,
+    high_fill: Val8,
+) -> Word {
+    debug_assert!(shift <= 31);
+    if shift == 0 {
+        return lhs;
+    }
+
+    let src = lhs.bytes();
+    let dst = b.alloc_word();
+    let byte_shift = usize::from(shift / 8);
+    let bit_shift = shift % 8;
+    for (lane, dst_lane) in dst.bytes().into_iter().enumerate() {
+        let low_src = word_byte_or_fill(src, lane + byte_shift, high_fill);
+        let out = if bit_shift == 0 {
+            low_src
+        } else {
+            let shifted = shift_right_u_byte_const(b, low_src, bit_shift);
+            let carry_src = word_byte_or_fill(src, lane + byte_shift + 1, high_fill);
+            let carry = shift_left_byte_const(b, carry_src, 8 - bit_shift);
+            or_bytes_const_fold(b, shifted, carry)
+        };
+        b.emit(Inst8::with_dst(dst_lane, Inst8Kind::Copy(out)));
+    }
+    dst
+}
+
+fn lower_shr_u_const_u32(b: &mut FuncBuilder, lhs: Word, rhs_const: u32) -> Word {
+    let shift = (rhs_const & 31) as u8;
+    lower_shr_const_u32_with_fill(b, lhs, shift, Val8::imm(0))
+}
+
+fn lower_shr_s_const_u32(b: &mut FuncBuilder, lhs: Word, rhs_const: u32) -> Word {
+    let shift = (rhs_const & 31) as u8;
+    if shift == 0 {
+        return lhs;
+    }
+
+    let is_neg = b.alloc_reg();
+    b.emit(Inst8::with_dst(
+        is_neg,
+        Inst8Kind::GeU(lhs.b3, Val8::imm(0x80)),
+    ));
+    let high_fill = b.alloc_reg();
+    b.emit(Inst8::with_dst(
+        high_fill,
+        Inst8Kind::Sub(Val8::imm(0), is_neg),
+    ));
+    lower_shr_const_u32_with_fill(b, lhs, shift, high_fill)
+}
+
+fn lower_rotl_const_u32(b: &mut FuncBuilder, lhs: Word, rhs_const: u32) -> Word {
+    let shift = (rhs_const & 31) as u8;
+    if shift == 0 {
+        return lhs;
+    }
+    let left = lower_shl_const_u32(b, lhs, u32::from(shift));
+    let right = lower_shr_u_const_u32(b, lhs, u32::from(32 - shift));
+    lower_word_bytewise_op(b, left, right, Inst8Kind::Or8)
+}
+
+fn lower_rotr_const_u32(b: &mut FuncBuilder, lhs: Word, rhs_const: u32) -> Word {
+    let shift = (rhs_const & 31) as u8;
+    if shift == 0 {
+        return lhs;
+    }
+    let right = lower_shr_u_const_u32(b, lhs, u32::from(shift));
+    let left = lower_shl_const_u32(b, lhs, u32::from(32 - shift));
+    lower_word_bytewise_op(b, left, right, Inst8Kind::Or8)
+}
+
+fn lower_const_shift_or_rotate(b: &mut FuncBuilder, op: BinOp, lhs: Word, rhs_const: u32) -> Word {
+    match op {
+        BinOp::Shl => lower_shl_const_u32(b, lhs, rhs_const),
+        BinOp::ShrU => lower_shr_u_const_u32(b, lhs, rhs_const),
+        BinOp::ShrS => lower_shr_s_const_u32(b, lhs, rhs_const),
+        BinOp::Rotl => lower_rotl_const_u32(b, lhs, rhs_const),
+        BinOp::Rotr => lower_rotr_const_u32(b, lhs, rhs_const),
+        _ => unreachable!("expected shift/rotate op, got {op:?}"),
+    }
+}
+
 fn lower_divrem_const_u32(
     b: &mut FuncBuilder,
     op: BinOp,
@@ -432,8 +600,7 @@ fn lower_divrem_const_u32(
             let mask = Word::from_u32_imm(denom_u32 - 1);
             return Some(lower_word_bytewise_op(b, numer, mask, Inst8Kind::And8));
         }
-        let sh = Word::from_u32_imm(denom_u32.trailing_zeros());
-        return Some(lower_builtin_call(b, BuiltinId::ShrU32, vec![numer, sh]));
+        return Some(lower_shr_u_const_u32(b, numer, denom_u32.trailing_zeros()));
     }
 
     // For non-trivial constants we prefer the shared helper to avoid
@@ -553,11 +720,21 @@ fn lower_binary(b: &mut FuncBuilder, op: BinOp, lhs: Word, rhs: Word) -> anyhow:
         BinOp::RemU => lower_divrem_u32(b, lhs, rhs, true),
         BinOp::DivS => lower_divrem_s32(b, lhs, rhs, false),
         BinOp::RemS => lower_divrem_s32(b, lhs, rhs, true),
-        BinOp::Shl => lower_builtin_call(b, BuiltinId::Shl32, vec![lhs, rhs]),
-        BinOp::ShrU => lower_builtin_call(b, BuiltinId::ShrU32, vec![lhs, rhs]),
-        BinOp::ShrS => lower_builtin_call(b, BuiltinId::ShrS32, vec![lhs, rhs]),
-        BinOp::Rotl => lower_builtin_call(b, BuiltinId::Rotl32, vec![lhs, rhs]),
-        BinOp::Rotr => lower_builtin_call(b, BuiltinId::Rotr32, vec![lhs, rhs]),
+        BinOp::Shl | BinOp::ShrU | BinOp::ShrS | BinOp::Rotl | BinOp::Rotr => {
+            if let Some(rhs_const) = word_const_u32(rhs) {
+                lower_const_shift_or_rotate(b, op, lhs, rhs_const)
+            } else {
+                let builtin = match op {
+                    BinOp::Shl => BuiltinId::Shl32,
+                    BinOp::ShrU => BuiltinId::ShrU32,
+                    BinOp::ShrS => BuiltinId::ShrS32,
+                    BinOp::Rotl => BuiltinId::Rotl32,
+                    BinOp::Rotr => BuiltinId::Rotr32,
+                    _ => unreachable!("expected shift/rotate op, got {op:?}"),
+                };
+                lower_builtin_call(b, builtin, vec![lhs, rhs])
+            }
+        }
     })
 }
 
@@ -1096,6 +1273,21 @@ mod tests {
             .unwrap_or_else(|| panic!("missing definition for v{}", reg.expect_vreg()))
     }
 
+    fn count_builtin_calls(blocks: &[BasicBlock8], builtin: BuiltinId) -> usize {
+        blocks
+            .iter()
+            .filter(|bb| {
+                matches!(
+                    bb.terminator,
+                    Terminator8::CallSetup {
+                        callee_entry: CallTarget::Builtin(id),
+                        ..
+                    } if id == builtin
+                )
+            })
+            .count()
+    }
+
     fn mk_trivial_main_block() -> BasicBlock {
         BasicBlock {
             id: bid(0),
@@ -1582,6 +1774,90 @@ mod tests {
                     matches!(defs.get(&src), Some(Inst8Kind::Sub32Borrow { rhs, .. }) if *rhs == helper_denom_word)
                 }),
             "div_u helper should negate the final high-byte subtract borrow to form the quotient bit"
+        );
+    }
+
+    #[test]
+    fn lower8_const_shift_rotate_inlines_without_builtin_calls() {
+        let module = mk_single_main_module(BasicBlock {
+            id: bid(0),
+            insts: vec![
+                Inst::Getchar,
+                Inst::I32Const(5),
+                Inst::Binary(BinOp::Shl, r(0), r(1)),
+                Inst::Binary(BinOp::ShrU, r(0), r(1)),
+                Inst::Binary(BinOp::ShrS, r(0), r(1)),
+                Inst::Binary(BinOp::Rotl, r(0), r(1)),
+                Inst::Binary(BinOp::Rotr, r(0), r(1)),
+            ],
+            terminator: Terminator::Return(Some(r(6))),
+        });
+
+        let program = lower8_module(&module, 65536).expect("lower8_module should succeed");
+        let main_blocks = &program.func_blocks[0];
+
+        for builtin in [
+            BuiltinId::Shl32,
+            BuiltinId::ShrU32,
+            BuiltinId::ShrS32,
+            BuiltinId::Rotl32,
+            BuiltinId::Rotr32,
+        ] {
+            assert_eq!(
+                count_builtin_calls(main_blocks, builtin),
+                0,
+                "constant shifts/rotates should not call {}",
+                builtin.name()
+            );
+        }
+    }
+
+    #[test]
+    fn lower8_variable_shift_rotate_still_calls_builtins() {
+        let module = mk_single_main_module(BasicBlock {
+            id: bid(0),
+            insts: vec![
+                Inst::Getchar,
+                Inst::Getchar,
+                Inst::Binary(BinOp::Shl, r(0), r(1)),
+                Inst::Binary(BinOp::ShrU, r(0), r(1)),
+                Inst::Binary(BinOp::ShrS, r(0), r(1)),
+                Inst::Binary(BinOp::Rotl, r(0), r(1)),
+                Inst::Binary(BinOp::Rotr, r(0), r(1)),
+            ],
+            terminator: Terminator::Return(Some(r(6))),
+        });
+
+        let program = lower8_module(&module, 65536).expect("lower8_module should succeed");
+        let main_blocks = &program.func_blocks[0];
+
+        assert_eq!(count_builtin_calls(main_blocks, BuiltinId::Shl32), 1);
+        assert_eq!(count_builtin_calls(main_blocks, BuiltinId::ShrU32), 1);
+        assert_eq!(count_builtin_calls(main_blocks, BuiltinId::ShrS32), 1);
+        assert_eq!(count_builtin_calls(main_blocks, BuiltinId::Rotl32), 1);
+        assert_eq!(count_builtin_calls(main_blocks, BuiltinId::Rotr32), 1);
+    }
+
+    #[test]
+    fn lower8_pow2_divu_constant_uses_inline_shift_path() {
+        let module = mk_single_main_module(BasicBlock {
+            id: bid(0),
+            insts: vec![
+                Inst::Getchar,
+                Inst::I32Const(8),
+                Inst::Binary(BinOp::DivU, r(0), r(1)),
+            ],
+            terminator: Terminator::Return(Some(r(2))),
+        });
+
+        let program = lower8_module(&module, 65536).expect("lower8_module should succeed");
+        let main_blocks = &program.func_blocks[0];
+
+        assert!(
+            !main_blocks
+                .iter()
+                .any(|bb| matches!(bb.terminator, Terminator8::CallSetup { .. })),
+            "div_u by a power-of-two constant should inline without call_setup"
         );
     }
 
