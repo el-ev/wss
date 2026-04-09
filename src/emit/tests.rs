@@ -1,12 +1,6 @@
 use super::test_consts::{CALLSTACK_SLOTS_CAP, MEMORY_BYTES_CAP};
 use super::*;
 
-const TEST_MEMORY_BYTES: u32 = 0;
-
-fn empty_init_bytes() -> Vec<u8> {
-    Vec::new()
-}
-
 fn minimal_program_with_cycle(cycle: crate::ir8::Cycle) -> Ir8Program {
     Ir8Program {
         entry_func: 0,
@@ -15,8 +9,8 @@ fn minimal_program_with_cycle(cycle: crate::ir8::Cycle) -> Ir8Program {
         cycles: vec![cycle],
         func_entries: Vec::new(),
         func_num_locals: Vec::new(),
-        memory_end: TEST_MEMORY_BYTES,
-        init_bytes: empty_init_bytes(),
+        memory_end: 0,
+        init_bytes: Vec::new(),
         global_init: Vec::new(),
     }
 }
@@ -37,10 +31,6 @@ fn emit_program_with_config(program: &Ir8Program, config: EmitConfig) -> anyhow:
     super::emit_program(program, config)
 }
 
-fn test_config() -> EmitConfig {
-    EmitConfig::default()
-}
-
 fn register_exprs(count: u16) -> HashMap<u16, String> {
     (0..count)
         .map(|idx| (idx, format!("var(--r{})", idx)))
@@ -54,7 +44,7 @@ fn emitter_new_uses_program_memory_end_when_memory_cap_is_zero() {
 
     let emitter = Emitter::new(
         &program,
-        test_config()
+        EmitConfig::default()
             .with_memory_bytes_cap(0)
             .expect("test config should be valid"),
     )
@@ -185,7 +175,7 @@ fn eval_builtin_division_uses_js_coprocessor_channel_when_enabled() {
     let program = minimal_exit_program();
     let emitter = Emitter::new(
         &program,
-        test_config()
+        EmitConfig::default()
             .with_js_coprocessor(true)
             .expect("test config should be valid"),
     )
@@ -233,7 +223,7 @@ fn emit_html_includes_js_coprocessor_runtime_when_enabled() {
     let program = minimal_exit_program();
     let html = emit_program_with_config(
         &program,
-        test_config()
+        EmitConfig::default()
             .with_js_coprocessor(true)
             .expect("test config should be valid"),
     )
@@ -251,7 +241,7 @@ fn emit_html_omits_js_clock_runtime_when_disabled() {
     let program = minimal_exit_program();
     let html = emit_program_with_config(
         &program,
-        test_config()
+        EmitConfig::default()
             .with_js_clock(false)
             .expect("test config should be valid"),
     )
@@ -267,7 +257,7 @@ fn emit_html_includes_js_clock_debugger_when_enabled() {
     let program = minimal_exit_program();
     let html = emit_program_with_config(
         &program,
-        test_config()
+        EmitConfig::default()
             .with_js_clock_debugger(true)
             .expect("test config should be valid"),
     )
@@ -287,7 +277,7 @@ fn emit_html_omits_js_clock_debugger_css_when_disabled() {
     let program = minimal_exit_program();
     let html = emit_program_with_config(
         &program,
-        test_config()
+        EmitConfig::default()
             .with_js_clock_debugger(false)
             .expect("test config should be valid"),
     )
@@ -301,7 +291,7 @@ fn emit_html_omits_js_clock_debugger_css_when_disabled() {
 
 #[test]
 fn emit_html_rejects_js_clock_debugger_without_js_clock() {
-    let err = test_config()
+    let err = EmitConfig::default()
         .with_js_clock(false)
         .and_then(|config| config.with_js_clock_debugger(true))
         .expect_err("config construction should fail without js_clock");
@@ -316,7 +306,7 @@ fn emit_html_omits_js_coprocessor_runtime_when_disabled() {
     let program = minimal_exit_program();
     let html = emit_program_with_config(
         &program,
-        test_config()
+        EmitConfig::default()
             .with_js_coprocessor(false)
             .expect("test config should be valid"),
     )
@@ -421,8 +411,8 @@ fn emit_html_memory_visualizer_tracks_read_and_write_slots() {
         }],
         func_entries: Vec::new(),
         func_num_locals: Vec::new(),
-        memory_end: TEST_MEMORY_BYTES,
-        init_bytes: empty_init_bytes(),
+        memory_end: 0,
+        init_bytes: Vec::new(),
         global_init: Vec::new(),
     };
 
@@ -454,8 +444,8 @@ fn emit_html_callstack_visualizer_tracks_read_and_write_slots() {
         }],
         func_entries: Vec::new(),
         func_num_locals: Vec::new(),
-        memory_end: TEST_MEMORY_BYTES,
-        init_bytes: empty_init_bytes(),
+        memory_end: 0,
+        init_bytes: Vec::new(),
         global_init: Vec::new(),
     };
 
@@ -516,8 +506,8 @@ fn emit_html_partitions_active_flags_when_many_writer_pcs() {
         cycles,
         func_entries: Vec::new(),
         func_num_locals: Vec::new(),
-        memory_end: TEST_MEMORY_BYTES,
-        init_bytes: empty_init_bytes(),
+        memory_end: 0,
+        init_bytes: Vec::new(),
         global_init: Vec::new(),
     };
 
@@ -551,8 +541,8 @@ fn emit_html_mload_helper_avoids_local_aliasing() {
         }],
         func_entries: Vec::new(),
         func_num_locals: Vec::new(),
-        memory_end: TEST_MEMORY_BYTES,
-        init_bytes: empty_init_bytes(),
+        memory_end: 0,
+        init_bytes: Vec::new(),
         global_init: Vec::new(),
     };
     let html = emit_program(&program).expect("emit should succeed");
@@ -591,8 +581,8 @@ fn emit_html_includes_keyboard_ui_when_getchar_is_used() {
         }],
         func_entries: Vec::new(),
         func_num_locals: Vec::new(),
-        memory_end: TEST_MEMORY_BYTES,
-        init_bytes: empty_init_bytes(),
+        memory_end: 0,
+        init_bytes: Vec::new(),
         global_init: Vec::new(),
     };
     let html = emit_program(&program).expect("emit should succeed");
@@ -633,8 +623,8 @@ fn emit_html_includes_ne_helper_when_clz_builtin_is_used() {
         ],
         func_entries: Vec::new(),
         func_num_locals: Vec::new(),
-        memory_end: TEST_MEMORY_BYTES,
-        init_bytes: empty_init_bytes(),
+        memory_end: 0,
+        init_bytes: Vec::new(),
         global_init: Vec::new(),
     };
 
@@ -655,8 +645,8 @@ fn emit_html_untouched_registers_use_direct_fallback_without_empty_if() {
         }],
         func_entries: Vec::new(),
         func_num_locals: Vec::new(),
-        memory_end: TEST_MEMORY_BYTES,
-        init_bytes: empty_init_bytes(),
+        memory_end: 0,
+        init_bytes: Vec::new(),
         global_init: Vec::new(),
     };
     let html = emit_program(&program).expect("emit should succeed");
@@ -684,8 +674,8 @@ fn emit_html_pc_fallback_increments_for_trivial_fallthrough() {
         ],
         func_entries: Vec::new(),
         func_num_locals: Vec::new(),
-        memory_end: TEST_MEMORY_BYTES,
-        init_bytes: empty_init_bytes(),
+        memory_end: 0,
+        init_bytes: Vec::new(),
         global_init: Vec::new(),
     };
 
@@ -720,8 +710,8 @@ fn emit_html_pc_keeps_explicit_arm_when_cycle_has_trap_guard() {
         ],
         func_entries: Vec::new(),
         func_num_locals: Vec::new(),
-        memory_end: TEST_MEMORY_BYTES,
-        init_bytes: empty_init_bytes(),
+        memory_end: 0,
+        init_bytes: Vec::new(),
         global_init: Vec::new(),
     };
 
@@ -742,8 +732,8 @@ fn emit_html_globals_emit_all_lanes_on_single_line_per_global() {
         }],
         func_entries: Vec::new(),
         func_num_locals: Vec::new(),
-        memory_end: TEST_MEMORY_BYTES,
-        init_bytes: empty_init_bytes(),
+        memory_end: 0,
+        init_bytes: Vec::new(),
         global_init: vec![0x1122_3344],
     };
     let html = emit_program(&program).expect("emit should succeed");
@@ -854,8 +844,8 @@ fn emit_html_memory_store_merge_expr_stays_compact() {
         }],
         func_entries: Vec::new(),
         func_num_locals: Vec::new(),
-        memory_end: TEST_MEMORY_BYTES,
-        init_bytes: empty_init_bytes(),
+        memory_end: 0,
+        init_bytes: Vec::new(),
         global_init: Vec::new(),
     };
 
@@ -915,8 +905,8 @@ fn emit_html_memory_store_merge_expr_flattens_slot_conditions() {
         }],
         func_entries: Vec::new(),
         func_num_locals: Vec::new(),
-        memory_end: TEST_MEMORY_BYTES,
-        init_bytes: empty_init_bytes(),
+        memory_end: 0,
+        init_bytes: Vec::new(),
         global_init: Vec::new(),
     };
 
@@ -992,8 +982,8 @@ fn emit_html_return_falls_back_to_callstack_top_when_cs_load_pc_is_in_prior_cycl
         ],
         func_entries: Vec::new(),
         func_num_locals: Vec::new(),
-        memory_end: TEST_MEMORY_BYTES,
-        init_bytes: empty_init_bytes(),
+        memory_end: 0,
+        init_bytes: Vec::new(),
         global_init: Vec::new(),
     };
 

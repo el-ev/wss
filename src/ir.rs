@@ -6,10 +6,6 @@ pub struct IrNode(pub usize);
 impl IrNode {
     pub const IMM_TAG: usize = 1usize << (usize::BITS as usize - 1);
 
-    pub const fn new(value: usize) -> Self {
-        Self(value)
-    }
-
     pub const fn index(self) -> usize {
         self.0
     }
@@ -73,18 +69,8 @@ impl std::ops::AddAssign<usize> for IrNode {
 pub struct BlockId(pub usize);
 
 impl BlockId {
-    pub const fn new(value: usize) -> Self {
-        Self(value)
-    }
-
     pub const fn index(self) -> usize {
         self.0
-    }
-}
-
-impl std::fmt::Display for BlockId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
     }
 }
 

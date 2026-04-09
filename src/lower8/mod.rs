@@ -1078,11 +1078,11 @@ mod tests {
     use wasmparser::{RefType, ValType};
 
     const fn bid(value: usize) -> BlockId {
-        BlockId::new(value)
+        BlockId(value)
     }
 
     const fn r(value: usize) -> IrNode {
-        IrNode::new(value)
+        IrNode(value)
     }
 
     fn mk_sig(params: &[ValType], results: &[ValType]) -> crate::module::FuncType {

@@ -29,7 +29,7 @@ fn lower_function(
             ctx.builder.finish_block(Terminator::Return(None));
         }
         let mut blocks = ctx.builder.blocks;
-        let mut entry = BlockId::new(0);
+        let mut entry = BlockId(0);
 
         remove_empty_blocks(&mut blocks, &mut entry);
         renumber_blocks(&mut blocks, &mut entry);
@@ -117,7 +117,7 @@ fn renumber_blocks(blocks: &mut [BasicBlock], entry: &mut BlockId) {
     let old_to_new: HashMap<BlockId, BlockId> = blocks
         .iter()
         .enumerate()
-        .map(|(i, b)| (b.id, BlockId::new(i)))
+        .map(|(i, b)| (b.id, BlockId(i)))
         .collect();
     let new_entry = *old_to_new.get(entry).unwrap_or(entry);
     for block in blocks.iter_mut() {
@@ -138,14 +138,14 @@ fn remove_dead_blocks(blocks: &mut Vec<BasicBlock>, entry: &mut BlockId) -> anyh
         visited.insert(id);
         let block = blocks.get(id.index()).context(format!(
             "invalid block id {} during dead block elimination",
-            id
+            id.index()
         ))?;
         stack.extend(block.successors());
     }
 
     let mut ref_remap = HashMap::new();
-    let mut old_ref_base = IrNode::new(0);
-    let mut new_ref_base = IrNode::new(0);
+    let mut old_ref_base = IrNode(0);
+    let mut new_ref_base = IrNode(0);
     for block in blocks.iter() {
         let inst_count = block.insts.len();
         if visited.contains(&block.id) {
@@ -283,14 +283,14 @@ pub struct IrBuilder {
 impl IrBuilder {
     pub fn new() -> Self {
         Self {
-            next_blk_id: BlockId::new(1),
+            next_blk_id: BlockId(1),
             ..Default::default()
         }
     }
 
     pub fn alloc_block(&mut self) -> BlockId {
         let id = self.next_blk_id;
-        self.next_blk_id = BlockId::new(self.next_blk_id.index() + 1);
+        self.next_blk_id = BlockId(self.next_blk_id.index() + 1);
         id
     }
 
@@ -673,31 +673,31 @@ mod tests {
     fn lower_remove_dead_blocks_remaps_ir_refs() {
         let mut blocks = vec![
             BasicBlock {
-                id: BlockId::new(0),
+                id: BlockId(0),
                 insts: vec![Inst::I32Const(1)],
-                terminator: Terminator::Goto(BlockId::new(2)),
+                terminator: Terminator::Goto(BlockId(2)),
             },
             BasicBlock {
-                id: BlockId::new(1),
+                id: BlockId(1),
                 insts: vec![Inst::I32Const(99)],
-                terminator: Terminator::Goto(BlockId::new(2)),
+                terminator: Terminator::Goto(BlockId(2)),
             },
             BasicBlock {
-                id: BlockId::new(2),
+                id: BlockId(2),
                 insts: vec![
                     Inst::LocalGet(0),
-                    Inst::Binary(BinOp::Add, IrNode::new(0), IrNode::new(2)),
+                    Inst::Binary(BinOp::Add, IrNode(0), IrNode(2)),
                 ],
-                terminator: Terminator::Return(Some(IrNode::new(3))),
+                terminator: Terminator::Return(Some(IrNode(3))),
             },
         ];
-        let mut entry = BlockId::new(0);
+        let mut entry = BlockId(0);
 
         remove_dead_blocks(&mut blocks, &mut entry).expect("dead block elimination should succeed");
 
         assert_eq!(blocks.len(), 2);
-        assert_eq!(blocks[0].id, BlockId::new(0));
-        assert_eq!(blocks[1].id, BlockId::new(2));
+        assert_eq!(blocks[0].id, BlockId(0));
+        assert_eq!(blocks[1].id, BlockId(2));
         assert!(matches!(blocks[1].insts[0], Inst::LocalGet(0)));
         assert!(matches!(
             blocks[1].insts[1],
@@ -742,7 +742,7 @@ mod tests {
         assert!(matches!(block.insts[0], Inst::I32Const(7)));
         assert!(matches!(
             &block.terminator,
-            Terminator::TailCall { func: 0, args } if args.as_slice() == [IrNode::new(0)]
+            Terminator::TailCall { func: 0, args } if args.as_slice() == [IrNode(0)]
         ));
     }
 
@@ -789,7 +789,7 @@ mod tests {
                 table_index: 0,
                 index,
                 args
-            } if *index == IrNode::new(1) && args.as_slice() == [IrNode::new(0)]
+            } if *index == IrNode(1) && args.as_slice() == [IrNode(0)]
         ));
     }
 
