@@ -6,6 +6,7 @@
 !tests/cases/
 !tests/cases/*.c
 tests/out/
+tests/blackbox-runner/target/
 
 *.log
 .gitignore
