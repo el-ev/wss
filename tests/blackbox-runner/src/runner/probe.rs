@@ -16,7 +16,9 @@ pub(super) fn parse_probe_result(dom_text: &str) -> std::result::Result<ProbeRes
         .captures(dom_text)
         .and_then(|caps| caps.get(1).map(|m| m.as_str().to_string()))
         .ok_or_else(|| RunError::error("probe result not found in dumped DOM"))?;
-    let encoded = decode_html_entities(&encoded).trim().to_string();
+    let encoded = html_escape::decode_html_entities(&encoded)
+        .trim()
+        .to_string();
     let bytes = BASE64_STD
         .decode(encoded.as_bytes())
         .map_err(|err| RunError::error(format!("failed to decode probe payload: {}", err)))?;
@@ -115,12 +117,4 @@ fn infer_getchar_pcs(html: &str) -> Vec<i64> {
         }
     }
     pcs
-}
-
-fn decode_html_entities(text: &str) -> String {
-    text.replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
 }
