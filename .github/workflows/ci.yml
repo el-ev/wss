@@ -71,7 +71,7 @@ jobs:
         with:
           chrome-version: stable
 
-      - name: Create CI Chrome wrapper (no sandbox)
+      - name: Create Chrome wrapper
         id: chrome_wrapper
         shell: bash
         env:
@@ -92,11 +92,11 @@ jobs:
           WSS_DUMP_TIMEOUT_BUFFER_MS: "60000"
         run: |
           set -euo pipefail
-          cargo run --release --manifest-path tests/blackbox-runner/Cargo.toml -- --retries=3 --jobs=2
+          cargo run --release --manifest-path tests/blackbox-runner/Cargo.toml -- --retries=3 --jobs=4
 
   blackbox-lengthy:
     name: Blackbox (Lengthy)
-    needs: blackbox
+    needs: rust
     runs-on: ubuntu-latest
     timeout-minutes: 40
 
@@ -130,7 +130,7 @@ jobs:
         with:
           chrome-version: stable
 
-      - name: Create CI Chrome wrapper (no sandbox)
+      - name: Create Chrome wrapper
         id: chrome_wrapper
         shell: bash
         env:
@@ -151,4 +151,4 @@ jobs:
           WSS_DUMP_TIMEOUT_BUFFER_MS: "60000"
         run: |
           set -euo pipefail
-          cargo run --release --manifest-path tests/blackbox-runner/Cargo.toml -- --only-lengthy --retries=3 --jobs=2
+          cargo run --release --manifest-path tests/blackbox-runner/Cargo.toml -- --only-lengthy --retries=3 --jobs=4
