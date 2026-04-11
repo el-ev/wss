@@ -40,6 +40,8 @@ jobs:
     needs: rust
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    env:
+      CARGO_TARGET_DIR: target
 
     steps:
       - name: Checkout
@@ -50,6 +52,8 @@ jobs:
 
       - name: Cache Cargo artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: blackbox
 
       - name: Install LLVM/Clang 22
         shell: bash
@@ -92,13 +96,15 @@ jobs:
           WSS_DUMP_TIMEOUT_BUFFER_MS: "60000"
         run: |
           set -euo pipefail
-          cargo run --release --manifest-path tests/blackbox-runner/Cargo.toml -- --retries=3 --jobs=4
+          cargo run --release --manifest-path tests/blackbox-runner/Cargo.toml --target-dir target -- --retries=3 --jobs=3
 
   blackbox-lengthy:
     name: Blackbox (Lengthy)
-    needs: rust
+    needs: blackbox
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    env:
+      CARGO_TARGET_DIR: target
 
     steps:
       - name: Checkout
@@ -109,6 +115,8 @@ jobs:
 
       - name: Cache Cargo artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: blackbox
 
       - name: Install LLVM/Clang 22
         shell: bash
@@ -151,4 +159,4 @@ jobs:
           WSS_DUMP_TIMEOUT_BUFFER_MS: "60000"
         run: |
           set -euo pipefail
-          cargo run --release --manifest-path tests/blackbox-runner/Cargo.toml -- --only-lengthy --retries=3 --jobs=4
+          cargo run --release --manifest-path tests/blackbox-runner/Cargo.toml --target-dir target -- --only-lengthy --retries=3 --jobs=3
