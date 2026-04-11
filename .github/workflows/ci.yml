@@ -51,11 +51,6 @@ jobs:
       - name: Cache Cargo artifacts
         uses: Swatinem/rust-cache@v2
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
       - name: Install LLVM/Clang 22
         shell: bash
         run: |
@@ -95,10 +90,9 @@ jobs:
         env:
           WSS_CHROME: ${{ steps.chrome_wrapper.outputs.path }}
           WSS_DUMP_TIMEOUT_BUFFER_MS: "60000"
-          WSS_CASE_NODE_HEAP_MB: "3072"
         run: |
           set -euo pipefail
-          node tests/run_blackbox.js --retries=3 --jobs=2
+          cargo run --release --manifest-path tests/blackbox-runner/Cargo.toml -- --retries=3 --jobs=2
 
   blackbox-lengthy:
     name: Blackbox (Lengthy)
@@ -115,11 +109,6 @@ jobs:
 
       - name: Cache Cargo artifacts
         uses: Swatinem/rust-cache@v2
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
 
       - name: Install LLVM/Clang 22
         shell: bash
@@ -160,7 +149,6 @@ jobs:
         env:
           WSS_CHROME: ${{ steps.chrome_wrapper.outputs.path }}
           WSS_DUMP_TIMEOUT_BUFFER_MS: "60000"
-          WSS_CASE_NODE_HEAP_MB: "3072"
         run: |
           set -euo pipefail
-          node tests/run_blackbox.js --only-lengthy --retries=3 --jobs=2
+          cargo run --release --manifest-path tests/blackbox-runner/Cargo.toml -- --only-lengthy --retries=3 --jobs=2
