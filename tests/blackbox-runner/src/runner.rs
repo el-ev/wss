@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, bail};
+use clap::{ArgAction, Parser};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -79,6 +80,39 @@ struct CliArgs {
     case_node_heap_mb: u64,
     json_summary: bool,
     dump_memory_first: bool,
+    dump_memory_only: bool,
+}
+
+#[derive(Debug, Parser)]
+#[command(name = "wss-blackbox-runner")]
+struct RawCliArgs {
+    #[arg(value_name = "CASE_ID")]
+    ids: Vec<String>,
+    #[arg(long, action = ArgAction::SetTrue)]
+    include_lengthy: bool,
+    #[arg(long, action = ArgAction::SetTrue)]
+    only_lengthy: bool,
+    #[arg(long, action = ArgAction::SetTrue)]
+    include_broken: bool,
+    #[arg(long, action = ArgAction::SetTrue)]
+    only_broken: bool,
+    #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
+    retries: Option<u64>,
+    #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
+    jobs: Option<u64>,
+    #[arg(long = "case-node-heap-mb", value_parser = clap::value_parser!(u64).range(1..))]
+    case_node_heap_mb: Option<u64>,
+    #[arg(long, action = ArgAction::SetTrue)]
+    json_summary: bool,
+    #[arg(long = "dump-memory-first", action = ArgAction::SetTrue, conflicts_with = "no_dump_memory")]
+    dump_memory_first: bool,
+    #[arg(
+        long = "no-dump-memory",
+        action = ArgAction::SetTrue,
+        conflicts_with_all = ["dump_memory_first", "dump_memory_only"]
+    )]
+    no_dump_memory: bool,
+    #[arg(long = "dump-memory-only", action = ArgAction::SetTrue, conflicts_with = "no_dump_memory")]
     dump_memory_only: bool,
 }
 
@@ -456,90 +490,44 @@ impl EnvConfig {
 }
 
 fn parse_cli_args(argv: Vec<String>, env_cfg: &EnvConfig) -> Result<CliArgs> {
+    let raw = RawCliArgs::try_parse_from(
+        std::iter::once("wss-blackbox-runner").chain(argv.iter().map(String::as_str)),
+    )
+    .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+
     let mut ids = Vec::new();
     let mut id_set = HashSet::new();
-    let mut include_lengthy = env_cfg.include_lengthy_by_default;
-    let mut only_lengthy = false;
-    let mut include_broken = env_cfg.include_broken_by_default;
-    let mut only_broken = false;
-    let mut retries = env_cfg.case_retries_by_default;
-    let mut jobs = env_cfg.case_jobs_by_default;
-    let mut case_node_heap_mb = env_cfg.case_node_heap_mb_by_default;
-    let mut json_summary = false;
+    for id in raw.ids {
+        if id_set.insert(id.clone()) {
+            ids.push(id);
+        }
+    }
+
+    let include_lengthy =
+        env_cfg.include_lengthy_by_default || raw.include_lengthy || raw.only_lengthy;
+    let only_lengthy = raw.only_lengthy;
+    let include_broken = env_cfg.include_broken_by_default || raw.include_broken || raw.only_broken;
+    let only_broken = raw.only_broken;
+    let retries = raw
+        .retries
+        .unwrap_or(env_cfg.case_retries_by_default as u64) as u32;
+    let jobs = raw.jobs.unwrap_or(env_cfg.case_jobs_by_default as u64) as usize;
+    let case_node_heap_mb = raw
+        .case_node_heap_mb
+        .unwrap_or(env_cfg.case_node_heap_mb_by_default);
+    let json_summary = raw.json_summary;
     let mut dump_memory_first = true;
     let mut dump_memory_only = false;
 
-    let mut i = 0usize;
-    while i < argv.len() {
-        let arg = &argv[i];
-        if arg == "--include-lengthy" {
-            include_lengthy = true;
-            i += 1;
-            continue;
-        }
-        if arg == "--only-lengthy" {
-            include_lengthy = true;
-            only_lengthy = true;
-            i += 1;
-            continue;
-        }
-        if arg == "--include-broken" {
-            include_broken = true;
-            i += 1;
-            continue;
-        }
-        if arg == "--only-broken" {
-            include_broken = true;
-            only_broken = true;
-            i += 1;
-            continue;
-        }
-        if let Some((value, consumed)) = try_parse_int_flag("--retries", arg, argv.get(i + 1))? {
-            retries = value as u32;
-            i += consumed;
-            continue;
-        }
-        if let Some((value, consumed)) = try_parse_int_flag("--jobs", arg, argv.get(i + 1))? {
-            jobs = value as usize;
-            i += consumed;
-            continue;
-        }
-        if let Some((value, consumed)) =
-            try_parse_int_flag("--case-node-heap-mb", arg, argv.get(i + 1))?
-        {
-            case_node_heap_mb = value;
-            i += consumed;
-            continue;
-        }
-        if arg == "--json-summary" {
-            json_summary = true;
-            i += 1;
-            continue;
-        }
-        if arg == "--dump-memory-first" {
-            dump_memory_first = true;
-            i += 1;
-            continue;
-        }
-        if arg == "--no-dump-memory" {
-            dump_memory_first = false;
-            dump_memory_only = false;
-            i += 1;
-            continue;
-        }
-        if arg == "--dump-memory-only" {
-            dump_memory_first = true;
-            dump_memory_only = true;
-            i += 1;
-            continue;
-        }
-        if arg.starts_with("--") {
-            bail!("unknown flag: {}", arg);
-        }
-        if id_set.insert(arg.clone()) {
-            ids.push(arg.clone());
-        }
-        i += 1;
+    if raw.no_dump_memory {
+        dump_memory_first = false;
+        dump_memory_only = false;
+    }
+    if raw.dump_memory_only {
+        dump_memory_first = true;
+        dump_memory_only = true;
+    } else if raw.dump_memory_first {
+        dump_memory_first = true;
     }
 
     Ok(CliArgs {
@@ -555,23 +543,6 @@ fn parse_cli_args(argv: Vec<String>, env_cfg: &EnvConfig) -> Result<CliArgs> {
         dump_memory_first,
         dump_memory_only,
     })
-}
-
-fn try_parse_int_flag(
-    flag: &str,
-    arg: &str,
-    next_arg: Option<&String>,
-) -> Result<Option<(u64, usize)>> {
-    if arg == flag {
-        let value = next_arg
-            .ok_or_else(|| anyhow::anyhow!("{} requires a value", flag))
-            .and_then(|v| parse_required_positive_int(v, flag))?;
-        return Ok(Some((value, 2)));
-    }
-    if let Some(value) = arg.strip_prefix(&format!("{}=", flag)) {
-        return Ok(Some((parse_required_positive_int(value, flag)?, 1)));
-    }
-    Ok(None)
 }
 
 fn load_cases(cases_path: &Path) -> Result<Vec<TestCase>> {
@@ -1874,18 +1845,6 @@ fn parse_bool_env(name: &str, fallback: bool) -> bool {
 fn parse_positive_int_text(raw: &str) -> Option<u64> {
     let parsed = raw.trim().parse::<u64>().ok()?;
     if parsed == 0 { None } else { Some(parsed) }
-}
-
-fn parse_required_positive_int(raw: &str, context: &str) -> Result<u64> {
-    let text = raw.trim();
-    if !text.chars().all(|ch| ch.is_ascii_digit()) || text.is_empty() {
-        bail!("{} must be a positive integer", context);
-    }
-    let parsed = text.parse::<u64>().context("integer parsing failure")?;
-    if parsed == 0 {
-        bail!("{} must be a positive integer", context);
-    }
-    Ok(parsed)
 }
 
 fn parse_bool_text(raw: &str, fallback: bool) -> bool {
