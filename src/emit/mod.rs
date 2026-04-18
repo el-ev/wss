@@ -13,6 +13,7 @@ mod test_consts {
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write;
 
+use anyhow::Context;
 use bitflags::bitflags;
 use paste::paste;
 
@@ -326,11 +327,21 @@ pub fn emit_program(program: &Ir8Program, config: EmitConfig) -> anyhow::Result<
     emitter.emit_logic(&mut logic_css);
     emitter.emit_support(&mut support_css);
 
-    let html = BASE_HTML
-        .replace(PROPS_PLACEHOLDER, &props_css)
-        .replace(LOGIC_PLACEHOLDER, &logic_css)
-        .replace(SUPPORT_PLACEHOLDER, &support_css);
-    Ok(emitter.apply_template_features(html))
+    let html = replace_placeholder_once(BASE_HTML, PROPS_PLACEHOLDER, &props_css)?;
+    let html = replace_placeholder_once(&html, LOGIC_PLACEHOLDER, &logic_css)?;
+    let html = replace_placeholder_once(&html, SUPPORT_PLACEHOLDER, &support_css)?;
+    emitter.apply_template_features(html)
+}
+
+fn replace_placeholder_once(template: &str, placeholder: &str, replacement: &str) -> anyhow::Result<String> {
+    let matches = template.match_indices(placeholder).count();
+    anyhow::ensure!(
+        matches == 1,
+        "template placeholder {} must appear exactly once (found {})",
+        placeholder,
+        matches
+    );
+    Ok(template.replacen(placeholder, replacement, 1))
 }
 
 impl<'a> Emitter<'a> {
@@ -606,7 +617,7 @@ impl<'a> Emitter<'a> {
         features
     }
 
-    fn apply_marked_section(out: &mut String, start: &str, end: &str, keep: bool) {
+    fn apply_marked_section(out: &mut String, start: &str, end: &str, keep: bool) -> anyhow::Result<()> {
         fn marker_line_bounds(s: &str, marker_idx: usize) -> (usize, usize) {
             let line_start = s[..marker_idx].rfind('\n').map(|i| i + 1).unwrap_or(0);
             let line_end = s[marker_idx..]
@@ -616,11 +627,22 @@ impl<'a> Emitter<'a> {
             (line_start, line_end)
         }
 
+        let start_count = out.match_indices(start).count();
+        let end_count = out.match_indices(end).count();
+        anyhow::ensure!(
+            start_count == end_count,
+            "template marker counts differ for {} and {} ({} vs {})",
+            start,
+            end,
+            start_count,
+            end_count
+        );
+
         while let Some(start_idx) = out.find(start) {
             let after_start = start_idx + start.len();
-            let Some(rel_end_idx) = out[after_start..].find(end) else {
-                break;
-            };
+            let rel_end_idx = out[after_start..].find(end).with_context(|| {
+                format!("template marker {} is missing matching {}", start, end)
+            })?;
             let end_idx = after_start + rel_end_idx;
             let (start_line_start, start_line_end) = marker_line_bounds(out, start_idx);
             let (end_line_start, end_line_end) = marker_line_bounds(out, end_idx);
@@ -631,9 +653,10 @@ impl<'a> Emitter<'a> {
                 out.replace_range(start_line_start..end_line_end, "");
             }
         }
+        Ok(())
     }
 
-    fn apply_template_features(&self, mut html: String) -> String {
+    fn apply_template_features(&self, mut html: String) -> anyhow::Result<String> {
         macro_rules! section {
             ($keep:expr, $stem:ident) => {
                 paste! {
@@ -642,7 +665,7 @@ impl<'a> Emitter<'a> {
                         [<KEEP_ $stem _START>],
                         [<KEEP_ $stem _END>],
                         $keep,
-                    );
+                    )?;
                 }
             };
         }
@@ -678,6 +701,6 @@ impl<'a> Emitter<'a> {
         section!(self.js_clock, JS_CLOCK_RUNTIME);
         section!(self.js_clock_debugger, JS_CLOCK_DEBUGGER_CSS);
         section!(self.js_clock_debugger, JS_CLOCK_DEBUGGER_RUNTIME);
-        html
+        Ok(html)
     }
 }
