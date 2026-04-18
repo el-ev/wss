@@ -195,6 +195,14 @@ pub(super) fn validate_operator(
                 validate_valtype(*t, location)?;
             }
         }
+        I32Load { memarg }
+        | I32Load8S { memarg }
+        | I32Load8U { memarg }
+        | I32Load16S { memarg }
+        | I32Load16U { memarg }
+        | I32Store { memarg }
+        | I32Store8 { memarg }
+        | I32Store16 { memarg } => validate_memory_index(memarg.memory, location)?,
         CallIndirect {
             type_index,
             table_index,
@@ -337,6 +345,13 @@ fn validate_indirect_call(
     Ok(())
 }
 
+fn validate_memory_index(memory_index: u32, location: &str) -> anyhow::Result<()> {
+    if memory_index != 0 {
+        bail!("multiple memories not supported at {}", location);
+    }
+    Ok(())
+}
+
 fn validate_tag_payload(
     tag_index: u32,
     module: &ModuleInfo,
@@ -384,7 +399,7 @@ fn validate_tag_payload(
 mod tests {
     use super::*;
     use crate::module::{FuncType, TagInfo};
-    use wasmparser::BlockType;
+    use wasmparser::{BlockType, MemArg};
 
     fn module_with_tag(params: &[ValType], results: &[ValType]) -> ModuleInfo {
         let mut module = ModuleInfo::default();
@@ -469,5 +484,24 @@ mod tests {
         let throw_ref_err = validate_operator(&Operator::ThrowRef, &module, "loc")
             .expect_err("throw_ref should be rejected");
         assert!(format!("{throw_ref_err:#}").contains("throw_ref"));
+    }
+
+    #[test]
+    fn validator_rejects_nonzero_memory_index_for_supported_load_store_ops() {
+        let module = ModuleInfo::default();
+        let memarg = MemArg {
+            align: 0,
+            max_align: 2,
+            offset: 0,
+            memory: 1,
+        };
+
+        let load_err = validate_operator(&Operator::I32Load { memarg }, &module, "loc")
+            .expect_err("nonzero load memory index should fail");
+        assert!(format!("{load_err:#}").contains("multiple memories"));
+
+        let store_err = validate_operator(&Operator::I32Store { memarg }, &module, "loc")
+            .expect_err("nonzero store memory index should fail");
+        assert!(format!("{store_err:#}").contains("multiple memories"));
     }
 }
