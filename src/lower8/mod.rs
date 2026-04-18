@@ -1045,6 +1045,17 @@ pub fn lower8_module_with_config(
     memory_bytes_cap: u32,
     config: Lower8Config,
 ) -> anyhow::Result<Ir8Program> {
+    let builtin_slots = if config.js_coprocessor { 0usize } else { 4usize };
+    let total_func_slots = module.bodies().len() + builtin_slots;
+    let max_func_slots = usize::from(u16::MAX / PC_STRIDE) + 1;
+    anyhow::ensure!(
+        total_func_slots <= max_func_slots,
+        "module needs {} function PC slot(s), but only {} fit in the u16 PC space with PC_STRIDE {}",
+        total_func_slots,
+        max_func_slots,
+        PC_STRIDE
+    );
+
     let entry_func_id = module.entry_export().context("no '_start' export")? as usize;
     let global_init = build_global_init(module)?;
     let stack_pointer = global_init.first().copied();
@@ -1312,6 +1323,27 @@ mod tests {
             msg.contains(expected),
             "expected error containing {expected:?}, got: {msg}"
         );
+    }
+
+    #[test]
+    fn lower8_rejects_modules_that_exceed_function_pc_space() {
+        let sig = mk_sig(&[], &[ValType::I32]);
+        let body = crate::module::IrFuncBody::new(vec![], bid(0), vec![mk_trivial_main_block()]);
+        let mut module = mk_module_with(|module| {
+            module.set_num_pages(1);
+            module.set_entry_export(Some(0));
+            set_ir_functions(
+                module,
+                (0..63)
+                    .map(|_| (sig.clone(), Some(body.clone())))
+                    .collect::<Vec<_>>(),
+            );
+        });
+
+        assert_lower8_error_contains(&module, 65536, "function PC slot");
+
+        module.set_entry_export(Some(62));
+        assert_lower8_error_contains(&module, 65536, "function PC slot");
     }
 
     #[test]
