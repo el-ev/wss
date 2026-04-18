@@ -937,7 +937,11 @@ impl<'a> Emitter<'a> {
                         reg_now.insert(i as u16, gated);
                     }
                     TermResult {
-                        pc_expr: Self::sel_expr(&trap, "-4", &format!("{}", cont.index())),
+                        pc_expr: Self::sel_expr(
+                            &trap,
+                            &TrapCode::DivisionByZero.pc().to_string(),
+                            &format!("{}", cont.index()),
+                        ),
                         trap_expr: trap,
                         exit_code_expr: None,
                     }
@@ -993,7 +997,7 @@ impl<'a> Emitter<'a> {
                     reg_now.insert(3, Self::val_expr(reg_now, w.b3));
                 }
                 TermResult {
-                    pc_expr: "-1".to_string(),
+                    pc_expr: TrapCode::Exited.pc().to_string(),
                     trap_expr: "0".to_string(),
                     exit_code_expr,
                 }

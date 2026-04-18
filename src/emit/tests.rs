@@ -345,6 +345,7 @@ fn emit_html_screen_after_uses_pc_status_fallback() {
             ".screen::after { white-space: pre-wrap; word-break: break-all; content: if("
         )
     );
+    assert!(html.contains("new Set([-1, -2, -3, -4, -5, -6])"));
     assert!(html.contains("style(--pc: -4): var(--fb, \"\") \"\\a[Trap: division by zero]\";"));
     assert!(html.contains("color: if(style(--pc: -2): #d00; style(--pc: -3): #d00; style(--pc: -4): #d00; style(--pc: -6): #d00; else: #222);"));
 }

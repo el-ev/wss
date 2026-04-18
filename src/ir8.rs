@@ -594,6 +594,32 @@ pub enum TrapCode {
     DivisionByZero = -4,
 }
 
+impl TrapCode {
+    pub const TERMINAL: [Self; 6] = [
+        Self::Exited,
+        Self::Unreachable,
+        Self::InvalidMemoryAccess,
+        Self::DivisionByZero,
+        Self::CallstackOverflow,
+        Self::UncaughtException,
+    ];
+
+    pub const fn pc(self) -> i32 {
+        self as i32
+    }
+
+    pub const fn screen_label(self) -> Option<&'static str> {
+        match self {
+            Self::Exited => None,
+            Self::Unreachable => Some("Trap: unreachable"),
+            Self::InvalidMemoryAccess => Some("Trap: invalid memory access"),
+            Self::DivisionByZero => Some("Trap: division by zero"),
+            Self::CallstackOverflow => Some("Trap: callstack overflow"),
+            Self::UncaughtException => Some("Trap: uncaught exception"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct BasicBlock8 {
     pub id: Pc,
