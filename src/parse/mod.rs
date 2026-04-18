@@ -1,7 +1,7 @@
 use anyhow::{Context, bail};
 use wasmparser::{BlockType, FunctionBody, Operator, Parser, Payload::*};
 
-use crate::ast::{AstRef, BinOp, Node, RelOp, UnOp};
+use crate::ast::{AstRef, BinOp, Catch, Node, RelOp, UnOp};
 use crate::module::{AstFuncBody, AstModule, ModuleInfo};
 
 mod frame;
@@ -65,6 +65,21 @@ fn call_shape_from_type(
         .type_at(type_index)
         .with_context(|| format!("{}: type index {} out of bounds", op_name, type_index))?;
     Ok((sig.params().len(), !sig.results().is_empty()))
+}
+
+fn tag_has_i32_payload(module: &AstModule, tag_index: u32) -> anyhow::Result<bool> {
+    let tag = module
+        .info()
+        .tag_at(tag_index)
+        .with_context(|| format!("throw/catch: tag index {} out of bounds", tag_index))?;
+    let ty = module.type_at(tag.type_index()).with_context(|| {
+        format!(
+            "tag {} references missing type {}",
+            tag_index,
+            tag.type_index()
+        )
+    })?;
+    Ok(!ty.params().is_empty())
 }
 
 fn emit_call(frame: &mut BlockFrame, ref_stack: &mut Vec<AstRef>, call: Node, has_result: bool) {
@@ -302,7 +317,10 @@ fn parse_function(
                 });
                 ref_stack.push(r);
             }
-            Operator::Block { blockty } | Operator::Loop { blockty } | Operator::If { blockty } => {
+            Operator::Block { blockty }
+            | Operator::Loop { blockty }
+            | Operator::If { blockty }
+            | Operator::Try { blockty } => {
                 let block_kind = match op {
                     Operator::Block { .. } => BlockKind::Block,
                     Operator::Loop { .. } => BlockKind::Loop,
@@ -313,6 +331,7 @@ fn parse_function(
                             .context("If: missing condition on stack")?;
                         BlockKind::If { cond_ref }
                     }
+                    Operator::Try { .. } => BlockKind::Try,
                     _ => bail!("ice: unexpected block operator {:?}", op),
                 };
                 let return_type = match blockty {
@@ -406,6 +425,40 @@ fn parse_function(
                                 then_body: then_insts,
                                 else_body: frame.insts,
                             },
+                            BlockKind::Try => Node::Try {
+                                body: frame.insts,
+                                catches: Vec::new(),
+                                catch_all: None,
+                                delegate: None,
+                            },
+                            BlockKind::TryCatch {
+                                try_insts,
+                                mut prior_catches,
+                                catch_all_seen,
+                                current_tag,
+                            } => {
+                                let mut catch_all_insts = None;
+                                match current_tag {
+                                    Some(tag_index) => {
+                                        prior_catches.push(Catch {
+                                            tag_index,
+                                            body: frame.insts,
+                                        });
+                                    }
+                                    None => {
+                                        catch_all_insts = Some(frame.insts);
+                                    }
+                                }
+                                // `catch_all_seen` is true exactly when we're ending on a catch_all body.
+                                debug_assert_eq!(catch_all_seen, catch_all_insts.is_some());
+                                let _ = catch_all_seen;
+                                Node::Try {
+                                    body: try_insts,
+                                    catches: prior_catches,
+                                    catch_all: catch_all_insts,
+                                    delegate: None,
+                                }
+                            }
                         };
                         let parent = current_frame_mut(&mut block_stack)?;
                         parent.emit(result_inst);
@@ -613,6 +666,160 @@ fn parse_function(
                     },
                     has_result,
                 );
+            }
+            Operator::Catch { tag_index } => {
+                let mut frame = block_stack.pop().context("Catch without matching Try")?;
+                for temp_index in frame.temp_locals.clone().into_iter().rev() {
+                    let last_ref = frame
+                        .pop_ref(&mut ref_stack)
+                        .context("Catch: stack underflow at segment end")?;
+                    frame.emit(Node::LocalSet(temp_index, last_ref));
+                }
+                ref_stack.clear();
+                let return_types = frame.return_types;
+                let temp_locals = frame.temp_locals;
+                let segment_insts = frame.insts;
+                let (try_insts, prior_catches) = match frame.kind {
+                    BlockKind::Try => (segment_insts, Vec::new()),
+                    BlockKind::TryCatch {
+                        try_insts,
+                        mut prior_catches,
+                        catch_all_seen,
+                        current_tag,
+                    } => {
+                        if catch_all_seen {
+                            bail!("Catch after catch_all is not allowed");
+                        }
+                        let prev_tag = current_tag.context(
+                            "ice: TryCatch expected current_tag before another Catch",
+                        )?;
+                        prior_catches.push(Catch {
+                            tag_index: prev_tag,
+                            body: segment_insts,
+                        });
+                        (try_insts, prior_catches)
+                    }
+                    _ => bail!("Catch without matching Try"),
+                };
+                block_stack.push(BlockFrame {
+                    kind: BlockKind::TryCatch {
+                        try_insts,
+                        prior_catches,
+                        catch_all_seen: false,
+                        current_tag: Some(tag_index),
+                    },
+                    return_types,
+                    temp_locals,
+                    insts: Vec::new(),
+                    unreachable: false,
+                    dummy_ref: None,
+                });
+                if tag_has_i32_payload(module, tag_index)? {
+                    let frame = current_frame_mut(&mut block_stack)?;
+                    let r = frame.emit(Node::ExcPayloadGet);
+                    ref_stack.push(r);
+                }
+            }
+            Operator::CatchAll => {
+                let mut frame = block_stack
+                    .pop()
+                    .context("CatchAll without matching Try")?;
+                for temp_index in frame.temp_locals.clone().into_iter().rev() {
+                    let last_ref = frame
+                        .pop_ref(&mut ref_stack)
+                        .context("CatchAll: stack underflow at segment end")?;
+                    frame.emit(Node::LocalSet(temp_index, last_ref));
+                }
+                ref_stack.clear();
+                let return_types = frame.return_types;
+                let temp_locals = frame.temp_locals;
+                let segment_insts = frame.insts;
+                let (try_insts, prior_catches) = match frame.kind {
+                    BlockKind::Try => (segment_insts, Vec::new()),
+                    BlockKind::TryCatch {
+                        try_insts,
+                        mut prior_catches,
+                        catch_all_seen,
+                        current_tag,
+                    } => {
+                        if catch_all_seen {
+                            bail!("Multiple catch_all clauses in the same try");
+                        }
+                        let prev_tag = current_tag.context(
+                            "ice: TryCatch expected current_tag before CatchAll",
+                        )?;
+                        prior_catches.push(Catch {
+                            tag_index: prev_tag,
+                            body: segment_insts,
+                        });
+                        (try_insts, prior_catches)
+                    }
+                    _ => bail!("CatchAll without matching Try"),
+                };
+                block_stack.push(BlockFrame {
+                    kind: BlockKind::TryCatch {
+                        try_insts,
+                        prior_catches,
+                        catch_all_seen: true,
+                        current_tag: None,
+                    },
+                    return_types,
+                    temp_locals,
+                    insts: Vec::new(),
+                    unreachable: false,
+                    dummy_ref: None,
+                });
+            }
+            Operator::Delegate { relative_depth } => {
+                let mut frame = block_stack
+                    .pop()
+                    .context("Delegate without matching Try")?;
+                for temp_index in frame.temp_locals.clone().into_iter().rev() {
+                    let last_ref = frame
+                        .pop_ref(&mut ref_stack)
+                        .context("Delegate: stack underflow at try body end")?;
+                    frame.emit(Node::LocalSet(temp_index, last_ref));
+                }
+                match frame.kind {
+                    BlockKind::Try => {
+                        let temp_locals = frame.temp_locals.clone();
+                        let result_inst = Node::Try {
+                            body: frame.insts,
+                            catches: Vec::new(),
+                            catch_all: None,
+                            delegate: Some(relative_depth),
+                        };
+                        let parent = current_frame_mut(&mut block_stack)?;
+                        parent.emit(result_inst);
+                        for &temp_index in temp_locals.iter() {
+                            let r = parent.emit(Node::LocalGet(temp_index));
+                            ref_stack.push(r);
+                        }
+                    }
+                    _ => bail!("Delegate is only valid inside a try block (not after catch)"),
+                }
+            }
+            Operator::Throw { tag_index } => {
+                let has_payload = tag_has_i32_payload(module, tag_index)?;
+                let arg = if has_payload {
+                    let frame = current_frame_mut(&mut block_stack)?;
+                    Some(frame.pop_ref(&mut ref_stack)?)
+                } else {
+                    None
+                };
+                let frame = current_frame_mut(&mut block_stack)?;
+                frame.ensure_dummy();
+                frame.unreachable = true;
+                frame.emit(Node::Throw {
+                    tag: tag_index,
+                    arg,
+                });
+            }
+            Operator::Rethrow { relative_depth } => {
+                let frame = current_frame_mut(&mut block_stack)?;
+                frame.ensure_dummy();
+                frame.unreachable = true;
+                frame.emit(Node::Rethrow(relative_depth));
             }
             // TODO(i64): parser fallback still rejects unhandled i64 operators.
             _ => bail!("Unsupported operator: {:?}", op),

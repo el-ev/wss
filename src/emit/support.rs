@@ -61,12 +61,14 @@ impl<'a> Emitter<'a> {
         if self.uses_callstack {
             out.push_str("style(--pc: -5): var(--fb, \"\") \"\\a[Trap: callstack overflow]\"; ");
         }
+        out.push_str("style(--pc: -6): var(--fb, \"\") \"\\a[Trap: uncaught exception]\"; ");
         out.push_str("else: var(--fb, \"\")); ");
         out.push_str("color: if(");
         out.push_str("style(--pc: -2): #d00; style(--pc: -3): #d00; style(--pc: -4): #d00; ");
         if self.uses_callstack {
             out.push_str("style(--pc: -5): #d00; ");
         }
+        out.push_str("style(--pc: -6): #d00; ");
         out.push_str("else: #222); display: block; flex: 0 0 auto; }\n");
 
         out.push_str("@container style(--pc: -1) { .screen::after { content: var(--fb, \"\") \"\\a[Program exited with code \" var(--ra, \"0x00000000\") \"]\"; } }\n");
@@ -84,6 +86,11 @@ impl<'a> Emitter<'a> {
                 TrapCode::CallstackOverflow as i32
             );
         }
+        let _ = writeln!(
+            out,
+            "@container style(--pc: {}) {{ .screen::after {{ content: var(--fb, \"\") \"\\a[Trap: uncaught exception]\"; color: #d00; }} }}",
+            TrapCode::UncaughtException as i32
+        );
 
         let pause_start = if self.uses_callstack {
             TrapCode::CallstackOverflow as i32
@@ -97,6 +104,11 @@ impl<'a> Emitter<'a> {
                 code
             );
         }
+        let _ = writeln!(
+            out,
+            ".clk:has(.terminal) {{ @container style(--pc: {}) {{ .terminal {{ animation-play-state: paused, paused !important; }} }} }}",
+            TrapCode::UncaughtException as i32
+        );
     }
 
     pub(super) fn emit_i2char(&self, out: &mut String) {
@@ -625,6 +637,25 @@ impl<'a> Emitter<'a> {
                 }),
             );
         }
+        if self.uses_exceptions {
+            let _ = writeln!(out, "    --_2exc_flag: var(--_0exc_flag, 0);");
+            for lane in 0..4u8 {
+                let _ = writeln!(
+                    out,
+                    "    --_2exc_tag_{}: var(--_0exc_tag_{}, 0);",
+                    lane, lane
+                );
+            }
+        }
+        if self.uses_exc_payload {
+            for lane in 0..4u8 {
+                let _ = writeln!(
+                    out,
+                    "    --_2exc_payload_{}: var(--_0exc_payload_{}, 0);",
+                    lane, lane
+                );
+            }
+        }
         let _ = writeln!(out, "    --_2fb: var(--_0fb, \"\");");
         let _ = writeln!(out, "    --_2ra: var(--_0ra, \"0x00000000\");");
         let _ = writeln!(out, "  }}");
@@ -670,6 +701,25 @@ impl<'a> Emitter<'a> {
                     .iter()
                     .map(|name| format!(" {}: var({});", Self::shadow_name(0, name), name)),
             );
+        }
+        if self.uses_exceptions {
+            let _ = writeln!(out, "    --_0exc_flag: var(--exc_flag);");
+            for lane in 0..4u8 {
+                let _ = writeln!(
+                    out,
+                    "    --_0exc_tag_{}: var(--exc_tag_{});",
+                    lane, lane
+                );
+            }
+        }
+        if self.uses_exc_payload {
+            for lane in 0..4u8 {
+                let _ = writeln!(
+                    out,
+                    "    --_0exc_payload_{}: var(--exc_payload_{});",
+                    lane, lane
+                );
+            }
         }
         let _ = writeln!(out, "    --_0fb: var(--fb);");
         let _ = writeln!(out, "    --_0ra: var(--ra);");

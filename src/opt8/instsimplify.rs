@@ -257,6 +257,13 @@ fn simplify_kind(kind: Inst8Kind, facts: &HashMap<Val8, RegFact>) -> Inst8Kind {
         Inst8Kind::CsLoadPc { offset } => Inst8Kind::CsLoadPc { offset },
         Inst8Kind::CsAlloc(n) => Inst8Kind::CsAlloc(n),
         Inst8Kind::CsFree(n) => Inst8Kind::CsFree(n),
+
+        Inst8Kind::ExcFlagSet { val } => Inst8Kind::ExcFlagSet { val },
+        Inst8Kind::ExcFlagGet => Inst8Kind::ExcFlagGet,
+        Inst8Kind::ExcTagSet { lane, val } => Inst8Kind::ExcTagSet { lane, val },
+        Inst8Kind::ExcTagGet { lane } => Inst8Kind::ExcTagGet { lane },
+        Inst8Kind::ExcPayloadSet { lane, val } => Inst8Kind::ExcPayloadSet { lane, val },
+        Inst8Kind::ExcPayloadGet { lane } => Inst8Kind::ExcPayloadGet { lane },
     }
 }
 

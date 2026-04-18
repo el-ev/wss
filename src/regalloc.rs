@@ -637,6 +637,15 @@ fn map_inst_kind_vals(
         Inst8Kind::CsStore { val, .. } => {
             *val = f(*val)?;
         }
+
+        Inst8Kind::ExcFlagSet { val }
+        | Inst8Kind::ExcTagSet { val, .. }
+        | Inst8Kind::ExcPayloadSet { val, .. } => {
+            *val = f(*val)?;
+        }
+        Inst8Kind::ExcFlagGet
+        | Inst8Kind::ExcTagGet { .. }
+        | Inst8Kind::ExcPayloadGet { .. } => {}
     }
     Ok(())
 }

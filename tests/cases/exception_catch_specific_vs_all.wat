@@ -1,0 +1,12 @@
+(module
+  (tag $a (param))
+  (tag $b (param))
+  (func $_start (export "_start") (result i32)
+    (try (result i32)
+      (do
+        (throw $b)
+        (i32.const 1))
+      (catch $a
+        (i32.const 2))
+      (catch_all
+        (i32.const 99)))))

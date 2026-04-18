@@ -281,14 +281,14 @@ pub(super) fn validate_operator(
         | MemoryAtomicWait32 { .. }
         | MemoryAtomicWait64 { .. }
         | AtomicFence => bail!("atomics not supported at {}", location),
-        TryTable { .. }
-        | Throw { .. }
-        | ThrowRef
-        | Try { .. }
-        | Catch { .. }
-        | Rethrow { .. }
-        | Delegate { .. }
-        | CatchAll => bail!("exceptions not supported at {}", location),
+        TryTable { .. } => {
+            bail!("try_table not supported at {}", location);
+        }
+        ThrowRef => bail!("throw_ref not supported at {}", location),
+        Try { blockty } => validate_block_type(*blockty, module, location)?,
+        Throw { tag_index } => validate_tag_payload(*tag_index, module, location)?,
+        Catch { tag_index } => validate_tag_payload(*tag_index, module, location)?,
+        CatchAll | Rethrow { .. } | Delegate { .. } => {}
         _ => {}
     }
     Ok(())
@@ -335,4 +335,139 @@ fn validate_indirect_call(
         );
     }
     Ok(())
+}
+
+fn validate_tag_payload(
+    tag_index: u32,
+    module: &ModuleInfo,
+    location: &str,
+) -> anyhow::Result<()> {
+    let tag = module.tag_at(tag_index).with_context(|| {
+        format!("tag index {} out of bounds at {}", tag_index, location)
+    })?;
+    let ty = module.type_at(tag.type_index()).with_context(|| {
+        format!(
+            "tag {} references missing type {} at {}",
+            tag_index,
+            tag.type_index(),
+            location
+        )
+    })?;
+    if !ty.results().is_empty() {
+        bail!(
+            "tag {} must not produce results at {} (exception tag results must be empty)",
+            tag_index,
+            location
+        );
+    }
+    let params = ty.params();
+    if params.len() > 1 {
+        bail!(
+            "tag {} has {} payload value(s); only zero- or single-i32-payload exception tags are supported at {}",
+            tag_index,
+            params.len(),
+            location
+        );
+    }
+    if params.len() == 1 && params[0] != ValType::I32 {
+        bail!(
+            "tag {} has non-i32 payload {:?}; only zero- or single-i32-payload exception tags are supported at {}",
+            tag_index,
+            params[0],
+            location
+        );
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::module::{FuncType, TagInfo};
+    use wasmparser::BlockType;
+
+    fn module_with_tag(params: &[ValType], results: &[ValType]) -> ModuleInfo {
+        let mut module = ModuleInfo::default();
+        module.types_mut().push(FuncType::new(
+            params.to_vec().into_boxed_slice(),
+            results.to_vec().into_boxed_slice(),
+        ));
+        module.tags_mut().push(TagInfo::new(0));
+        module
+    }
+
+    #[test]
+    fn validator_accepts_throw_with_zero_payload_tag() {
+        let module = module_with_tag(&[], &[]);
+        validate_operator(&Operator::Throw { tag_index: 0 }, &module, "loc").unwrap();
+    }
+
+    #[test]
+    fn validator_accepts_catch_and_catch_all() {
+        let module = module_with_tag(&[], &[]);
+        validate_operator(&Operator::Catch { tag_index: 0 }, &module, "loc").unwrap();
+        validate_operator(&Operator::CatchAll, &module, "loc").unwrap();
+    }
+
+    #[test]
+    fn validator_accepts_try_rethrow_delegate() {
+        let module = ModuleInfo::default();
+        validate_operator(
+            &Operator::Try {
+                blockty: BlockType::Empty,
+            },
+            &module,
+            "loc",
+        )
+        .unwrap();
+        validate_operator(&Operator::Rethrow { relative_depth: 0 }, &module, "loc").unwrap();
+        validate_operator(&Operator::Delegate { relative_depth: 0 }, &module, "loc").unwrap();
+    }
+
+    #[test]
+    fn validator_accepts_throw_with_i32_payload_tag() {
+        let module = module_with_tag(&[ValType::I32], &[]);
+        validate_operator(&Operator::Throw { tag_index: 0 }, &module, "loc").unwrap();
+    }
+
+    #[test]
+    fn validator_rejects_throw_with_multi_payload_tag() {
+        let module = module_with_tag(&[ValType::I32, ValType::I32], &[]);
+        let err = validate_operator(&Operator::Throw { tag_index: 0 }, &module, "loc")
+            .expect_err("tag with multi-value payload should be rejected");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("only zero- or single-i32-payload"),
+            "expected i32-payload rejection, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn validator_rejects_throw_with_missing_tag_index() {
+        let module = ModuleInfo::default();
+        let err = validate_operator(&Operator::Throw { tag_index: 0 }, &module, "loc")
+            .expect_err("missing tag should be rejected");
+        assert!(format!("{err:#}").contains("tag index 0 out of bounds"));
+    }
+
+    #[test]
+    fn validator_rejects_try_table_and_throw_ref() {
+        let module = ModuleInfo::default();
+        let try_table_err = validate_operator(
+            &Operator::TryTable {
+                try_table: wasmparser::TryTable {
+                    ty: BlockType::Empty,
+                    catches: Vec::new(),
+                },
+            },
+            &module,
+            "loc",
+        )
+        .expect_err("try_table should be rejected");
+        assert!(format!("{try_table_err:#}").contains("try_table"));
+
+        let throw_ref_err = validate_operator(&Operator::ThrowRef, &module, "loc")
+            .expect_err("throw_ref should be rejected");
+        assert!(format!("{throw_ref_err:#}").contains("throw_ref"));
+    }
 }

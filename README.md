@@ -87,11 +87,11 @@ Options:
 - **Function calls with TCO** — call, call_indirect, return_call, return_call_indirect
 - **Locals and globals** — get, set, tee
 - **Select** — typed and untyped select
+- **Exception handling** — `try`, `catch`, `catch_all`, `delegate`, `throw`, `rethrow` on exception tags with either no payload or a single `i32` payload. Dedicated `exc_flag` / `exc_tag` / `exc_payload` state channels propagate through calls and returns; an uncaught exception in `_start` traps with code `-6` (`uncaught exception`). Current gaps: multi-value or non-`i32` tag payloads, `try_table`, `throw_ref`, `delegate` depth > `0`, `rethrow` depth > `0`, and `rethrow` from `catch_all`.
 
 ## What is under development
 
 - **i64 arithmetic**
-- **Exception handling** — try/catch and related ops
 
 ## What will not be supported
 

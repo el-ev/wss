@@ -73,6 +73,22 @@ impl<'a> Emitter<'a> {
                 );
             }
         }
+
+        if self.uses_exceptions {
+            let _ = writeln!(out, "{}", Self::prop("--exc_flag", 0));
+            for lane in 0..4u8 {
+                let _ = writeln!(out, "{}", Self::prop(&format!("--exc_tag_{}", lane), 0));
+            }
+        }
+        if self.uses_exc_payload {
+            for lane in 0..4u8 {
+                let _ = writeln!(
+                    out,
+                    "{}",
+                    Self::prop(&format!("--exc_payload_{}", lane), 0)
+                );
+            }
+        }
     }
 
     fn emit_chunked_entries(

@@ -13,6 +13,9 @@ impl<'a> Emitter<'a> {
         let mut cop_a_arms = vec![String::new(); 4];
         let mut cop_b_arms = vec![String::new(); 4];
         let mut cs_sp_arms = String::new();
+        let mut exc_flag_arms = String::new();
+        let mut exc_tag_arms: [String; 4] = Default::default();
+        let mut exc_payload_arms: [String; 4] = Default::default();
         let mut mw_active_pcs = Vec::new();
         let mut csw_active_pcs = Vec::new();
 
@@ -44,6 +47,9 @@ impl<'a> Emitter<'a> {
             let mut cs_stores = Vec::new();
             let mut cs_reads = Vec::new();
             let mut cs_sp_expr: Option<String> = None;
+            let mut exc_flag_set_expr: Option<String> = None;
+            let mut exc_tag_set_exprs: [Option<String>; 4] = Default::default();
+            let mut exc_payload_set_exprs: [Option<String>; 4] = Default::default();
             let mut loaded_pc_expr: Option<String> = None;
             let mut trap_mem_parts = Vec::new();
             let mut trap_cs_parts = Vec::new();
@@ -389,6 +395,38 @@ impl<'a> Emitter<'a> {
                         let ok = self.cs_bounds_check(&next_sp, true, &mut trap_cs_parts);
                         cs_sp_expr = Some(Self::sel_expr(&ok, &next_sp, "var(--_1cs_sp)"));
                     }
+                    Inst8Kind::ExcFlagSet { val } => {
+                        exc_flag_set_expr = Some(Self::val_expr(&reg_now, *val));
+                    }
+                    Inst8Kind::ExcFlagGet => {
+                        if let Some(dst) = op.dst {
+                            reg_now.insert(dst.expect_vreg(), "var(--_1exc_flag)".to_string());
+                        }
+                    }
+                    Inst8Kind::ExcTagSet { lane, val } => {
+                        exc_tag_set_exprs[*lane as usize] =
+                            Some(Self::val_expr(&reg_now, *val));
+                    }
+                    Inst8Kind::ExcTagGet { lane } => {
+                        if let Some(dst) = op.dst {
+                            reg_now.insert(
+                                dst.expect_vreg(),
+                                format!("var(--_1exc_tag_{})", lane),
+                            );
+                        }
+                    }
+                    Inst8Kind::ExcPayloadSet { lane, val } => {
+                        exc_payload_set_exprs[*lane as usize] =
+                            Some(Self::val_expr(&reg_now, *val));
+                    }
+                    Inst8Kind::ExcPayloadGet { lane } => {
+                        if let Some(dst) = op.dst {
+                            reg_now.insert(
+                                dst.expect_vreg(),
+                                format!("var(--_1exc_payload_{})", lane),
+                            );
+                        }
+                    }
                 }
             }
 
@@ -569,6 +607,32 @@ impl<'a> Emitter<'a> {
             {
                 let _ = write!(cs_sp_arms, "style(--_1pc: {}): {}; ", pc, e);
             }
+
+            if self.uses_exceptions {
+                if let Some(e) = exc_flag_set_expr {
+                    let _ = write!(exc_flag_arms, "style(--_1pc: {}): {}; ", pc, e);
+                }
+                for (lane, slot) in exc_tag_set_exprs.iter().enumerate() {
+                    if let Some(e) = slot {
+                        let _ = write!(
+                            exc_tag_arms[lane],
+                            "style(--_1pc: {}): {}; ",
+                            pc, e
+                        );
+                    }
+                }
+            }
+            if self.uses_exc_payload {
+                for (lane, slot) in exc_payload_set_exprs.iter().enumerate() {
+                    if let Some(e) = slot {
+                        let _ = write!(
+                            exc_payload_arms[lane],
+                            "style(--_1pc: {}): {}; ",
+                            pc, e
+                        );
+                    }
+                }
+            }
         }
 
         let _ = writeln!(out, " --_1pc: var(--_2pc, {});", self.entry_pc);
@@ -616,6 +680,25 @@ impl<'a> Emitter<'a> {
         }
         if !mem_shadow_line.is_empty() {
             let _ = writeln!(out, "{}", mem_shadow_line);
+        }
+        if self.uses_exc_payload {
+            for lane in 0..4u8 {
+                let _ = writeln!(
+                    out,
+                    " --_1exc_payload_{}: var(--_2exc_payload_{}, 0);",
+                    lane, lane
+                );
+            }
+        }
+        if self.uses_exceptions {
+            let _ = writeln!(out, " --_1exc_flag: var(--_2exc_flag, 0);");
+            for lane in 0..4u8 {
+                let _ = writeln!(
+                    out,
+                    " --_1exc_tag_{}: var(--_2exc_tag_{}, 0);",
+                    lane, lane
+                );
+            }
         }
         if self.uses_callstack {
             let _ = writeln!(out, " --_1cs_sp: var(--_2cs_sp, 0);");
@@ -698,6 +781,29 @@ impl<'a> Emitter<'a> {
         Self::emit_if_or_fallback(out, "--wait_input", &wait_input_arms, "0");
         if self.uses_callstack {
             Self::emit_if_or_fallback(out, "--cs_sp", &cs_sp_arms, "var(--_1cs_sp)");
+        }
+        if self.uses_exceptions {
+            Self::emit_if_or_fallback(out, "--exc_flag", &exc_flag_arms, "var(--_1exc_flag)");
+            for lane in 0..4u8 {
+                let fallback = format!("var(--_1exc_tag_{})", lane);
+                Self::emit_if_or_fallback(
+                    out,
+                    &format!("--exc_tag_{}", lane),
+                    &exc_tag_arms[lane as usize],
+                    &fallback,
+                );
+            }
+        }
+        if self.uses_exc_payload {
+            for lane in 0..4u8 {
+                let fallback = format!("var(--_1exc_payload_{})", lane);
+                Self::emit_if_or_fallback(
+                    out,
+                    &format!("--exc_payload_{}", lane),
+                    &exc_payload_arms[lane as usize],
+                    &fallback,
+                );
+            }
         }
 
         for (r, arms) in r_arms.iter().enumerate() {

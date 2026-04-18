@@ -1,6 +1,6 @@
 <script id="wss-test-probe">
 (() => {
-  const terminalPcs = new Set([-1, -2, -3, -4, -5]);
+  const terminalPcs = new Set([-1, -2, -3, -4, -5, -6]);
   const maxFrames = __WSS_MAX_FRAMES__;
   const memoryKeys = __WSS_MEMORY_KEYS__;
   const inputQueue = __WSS_INPUT_BYTES__;
