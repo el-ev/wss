@@ -48,6 +48,7 @@ struct EnvConfig {
     cases_path: PathBuf,
     out_dir: PathBuf,
     chrome_bin: String,
+    default_wss_bin: PathBuf,
     wss_bin: String,
     normal_timeout_ms: u64,
     max_frames: u64,
@@ -466,6 +467,7 @@ impl EnvConfig {
             cases_path,
             out_dir,
             chrome_bin: env::var("WSS_CHROME").unwrap_or_else(|_| DEFAULT_CHROME.to_string()),
+            default_wss_bin: default_wss_bin.clone(),
             wss_bin: env::var("WSS_BIN")
                 .unwrap_or_else(|_| default_wss_bin.to_string_lossy().into_owned()),
             normal_timeout_ms: parse_positive_int_env("WSS_NORMAL_TIMEOUT_MS", 15_000),
@@ -650,8 +652,14 @@ fn ensure_chrome_path(chrome_bin: &str) -> Result<()> {
 }
 
 fn ensure_wss_binary(env_cfg: &EnvConfig) -> Result<()> {
-    if Path::new(&env_cfg.wss_bin).exists() {
-        return Ok(());
+    if Path::new(&env_cfg.wss_bin) != env_cfg.default_wss_bin.as_path() {
+        if Path::new(&env_cfg.wss_bin).exists() {
+            return Ok(());
+        }
+        bail!(
+            "configured WSS binary not found at {}. Set WSS_BIN to an existing binary or unset it to auto-build target/release/wss.",
+            env_cfg.wss_bin
+        );
     }
     run_checked(
         "cargo",
