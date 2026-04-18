@@ -596,7 +596,7 @@ impl<'a> Emitter<'a> {
             features |= TemplateFeatures::FN_EQ | TemplateFeatures::FN_EQZ;
         }
         if usage.uses_ne {
-            features |= TemplateFeatures::FN_NE | TemplateFeatures::FN_NEZ;
+            features |= TemplateFeatures::FN_NE | TemplateFeatures::FN_NEZ | TemplateFeatures::FN_EQZ;
         }
         if uses_callstack {
             features |= TemplateFeatures::SP_INDICATOR;
