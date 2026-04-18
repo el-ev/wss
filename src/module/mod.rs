@@ -250,6 +250,7 @@ pub(crate) fn decode_module_info(wasm_bytes: &[u8]) -> anyhow::Result<ModuleInfo
     let parser = Parser::new(0);
     let mut module = ModuleInfo::default();
     let mut num_imports = 0usize;
+    let mut seen_memory = false;
 
     for payload in parser.parse_all(wasm_bytes) {
         let payload = payload.context("WASM parse")?;
@@ -351,6 +352,10 @@ pub(crate) fn decode_module_info(wasm_bytes: &[u8]) -> anyhow::Result<ModuleInfo
             MemorySection(s) => {
                 for memory in s {
                     let memory = memory.context("memory")?;
+                    if seen_memory {
+                        bail!("multiple memories are not supported");
+                    }
+                    seen_memory = true;
                     module.set_num_pages(memory.initial);
                 }
             }
@@ -457,6 +462,24 @@ pub(crate) fn decode_module_info(wasm_bytes: &[u8]) -> anyhow::Result<ModuleInfo
 
     module.set_num_imported_funcs(num_imports);
     Ok(module)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decode_module_info;
+
+    #[test]
+    fn decode_module_info_rejects_multiple_memories() {
+        let wasm_bytes = [
+            0x00, 0x61, 0x73, 0x6d, // magic
+            0x01, 0x00, 0x00, 0x00, // version
+            0x05, 0x05, 0x02, 0x00, 0x00, 0x00, 0x00, // two memories with min=0
+        ];
+
+        let err =
+            decode_module_info(&wasm_bytes).expect_err("multiple memories should be rejected");
+        assert!(format!("{err:#}").contains("multiple memories"));
+    }
 }
 
 macro_rules! delegate_info {
