@@ -79,7 +79,27 @@ fn tag_has_i32_payload(module: &AstModule, tag_index: u32) -> anyhow::Result<boo
             tag.type_index()
         )
     })?;
-    Ok(!ty.params().is_empty())
+    if !ty.results().is_empty() {
+        bail!(
+            "tag {} must not produce results (exception tag results must be empty)",
+            tag_index
+        );
+    }
+    let params = ty.params();
+    match params {
+        [] => Ok(false),
+        [wasmparser::ValType::I32] => Ok(true),
+        [other] => bail!(
+            "tag {} has non-i32 payload {:?}; only zero- or single-i32-payload exception tags are supported",
+            tag_index,
+            other
+        ),
+        _ => bail!(
+            "tag {} has {} payload value(s); only zero- or single-i32-payload exception tags are supported",
+            tag_index,
+            params.len()
+        ),
+    }
 }
 
 fn emit_call(frame: &mut BlockFrame, ref_stack: &mut Vec<AstRef>, call: Node, has_result: bool) {
@@ -827,4 +847,41 @@ fn parse_function(
     }
 
     bail!("function body ended without End")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tag_has_i32_payload;
+    use crate::module::{AstModule, FuncType, ModuleInfo, TagInfo};
+    use wasmparser::ValType;
+
+    fn module_with_tag(params: &[ValType], results: &[ValType]) -> AstModule {
+        let mut info = ModuleInfo::default();
+        info.types_mut().push(FuncType::new(
+            params.to_vec().into_boxed_slice(),
+            results.to_vec().into_boxed_slice(),
+        ));
+        info.tags_mut().push(TagInfo::new(0));
+        AstModule::new(info, vec![])
+    }
+
+    #[test]
+    fn tag_payload_helper_accepts_zero_or_single_i32_payload() {
+        let no_payload = module_with_tag(&[], &[]);
+        assert!(!tag_has_i32_payload(&no_payload, 0).expect("zero-payload tag should work"));
+
+        let i32_payload = module_with_tag(&[ValType::I32], &[]);
+        assert!(tag_has_i32_payload(&i32_payload, 0).expect("i32-payload tag should work"));
+    }
+
+    #[test]
+    fn tag_payload_helper_rejects_unsupported_payload_shapes() {
+        let non_i32 = module_with_tag(&[ValType::F32], &[]);
+        let err = tag_has_i32_payload(&non_i32, 0).expect_err("non-i32 payload should fail");
+        assert!(format!("{err:#}").contains("non-i32 payload"));
+
+        let multi = module_with_tag(&[ValType::I32, ValType::I32], &[]);
+        let err = tag_has_i32_payload(&multi, 0).expect_err("multi-payload tag should fail");
+        assert!(format!("{err:#}").contains("payload value(s)"));
+    }
 }
