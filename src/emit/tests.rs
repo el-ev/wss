@@ -367,6 +367,26 @@ fn emit_html_chunks_large_generated_css_sections() {
 }
 
 #[test]
+fn emit_rejects_missing_template_placeholder() {
+    let err = super::replace_placeholder_once("no placeholder here", super::PROPS_PLACEHOLDER, "x")
+        .expect_err("missing placeholder should fail");
+    assert!(format!("{err:#}").contains("must appear exactly once"));
+}
+
+#[test]
+fn emit_rejects_unbalanced_keep_markers() {
+    let mut html = format!("{}\ncontent\n", super::KEEP_FN_SEL_START);
+    let err = super::Emitter::apply_marked_section(
+        &mut html,
+        super::KEEP_FN_SEL_START,
+        super::KEEP_FN_SEL_END,
+        true,
+    )
+    .expect_err("unbalanced keep markers should fail");
+    assert!(format!("{err:#}").contains("marker counts differ"));
+}
+
+#[test]
 fn emit_html_omits_callstack_state_when_unused() {
     let program = minimal_exit_program();
     let html = emit_program(&program).expect("emit should succeed");
