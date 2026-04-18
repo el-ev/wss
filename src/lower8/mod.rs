@@ -979,6 +979,13 @@ fn lower_terminator(
         Terminator::Unreachable => {
             b.finish(Terminator8::Trap(TrapCode::Unreachable));
         }
+        Terminator::UncaughtExit => {
+            if b.is_entry {
+                b.finish(Terminator8::Trap(TrapCode::UncaughtException));
+            } else {
+                calls::emit_non_main_return_sequence(b, None);
+            }
+        }
     };
     Ok(())
 }

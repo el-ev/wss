@@ -138,6 +138,22 @@ pub enum Inst {
         addr: IrNode,
         val: IrNode,
     },
+
+    // Exception state ops. Pseudo-instructions that lower8 (PR 5) will
+    // materialize into real state reads/writes (via hidden globals or
+    // callstack slots). `ExcSet`/`ExcClear` mutate state and do not produce
+    // a value. `ExcFlagGet`/`ExcTagGet` read the current state.
+    ExcSet {
+        tag_index: u32,
+    },
+    ExcClear,
+    ExcFlagGet,
+    ExcTagGet,
+    /// Store the current exception payload (single i32). Mutating,
+    /// no value produced.
+    ExcPayloadSet(IrNode),
+    /// Read the current exception payload (single i32).
+    ExcPayloadGet,
 }
 
 #[derive(Debug, Clone)]
@@ -170,6 +186,13 @@ pub enum Terminator {
     Return(Option<IrNode>),
 
     Unreachable,
+
+    /// Uncaught-exception exit for a function: when no handler matched,
+    /// control flows here. The entry function (`_start`) traps with
+    /// `TrapCode::UncaughtException`; non-entry functions return to the
+    /// caller with the current exception state still set so the caller's
+    /// post-call check re-propagates.
+    UncaughtExit,
 }
 
 #[derive(Debug, Clone)]
@@ -196,7 +219,8 @@ impl BasicBlock {
             Terminator::TailCall { .. }
             | Terminator::TailCallIndirect { .. }
             | Terminator::Return(_)
-            | Terminator::Unreachable => vec![],
+            | Terminator::Unreachable
+            | Terminator::UncaughtExit => vec![],
         }
     }
 

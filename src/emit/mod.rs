@@ -307,6 +307,8 @@ struct Emitter<'a> {
     cs_names: Vec<String>,
     global_count: u32,
     global_init: Vec<u32>,
+    uses_exceptions: bool,
+    uses_exc_payload: bool,
     max_mem_store_slots: usize,
     max_mem_read_slots: usize,
     max_cs_store_slots: usize,
@@ -355,6 +357,8 @@ impl<'a> Emitter<'a> {
             .collect::<Vec<_>>();
 
         let uses_callstack = Self::scan_uses_callstack(program);
+        let uses_exceptions = Self::scan_uses_exceptions(program);
+        let uses_exc_payload = Self::scan_uses_exc_payload(program);
         let cs_names = if uses_callstack {
             let cs_slots = config.callstack_slots_cap();
             let cs_hex_width = Self::cell_offset_hex_width(cs_slots);
@@ -416,6 +420,8 @@ impl<'a> Emitter<'a> {
             cs_names,
             global_count,
             global_init,
+            uses_exceptions,
+            uses_exc_payload,
             max_mem_store_slots,
             max_mem_read_slots,
             max_cs_store_slots,
@@ -484,6 +490,33 @@ impl<'a> Emitter<'a> {
                         | Inst8Kind::CsLoadPc { .. }
                         | Inst8Kind::CsAlloc(_)
                         | Inst8Kind::CsFree(_)
+                )
+            })
+        })
+    }
+
+    fn scan_uses_exceptions(program: &Ir8Program) -> bool {
+        program.cycles.iter().any(|cycle| {
+            cycle.ops.iter().any(|op| {
+                matches!(
+                    op.kind,
+                    Inst8Kind::ExcFlagSet { .. }
+                        | Inst8Kind::ExcFlagGet
+                        | Inst8Kind::ExcTagSet { .. }
+                        | Inst8Kind::ExcTagGet { .. }
+                        | Inst8Kind::ExcPayloadSet { .. }
+                        | Inst8Kind::ExcPayloadGet { .. }
+                )
+            })
+        })
+    }
+
+    fn scan_uses_exc_payload(program: &Ir8Program) -> bool {
+        program.cycles.iter().any(|cycle| {
+            cycle.ops.iter().any(|op| {
+                matches!(
+                    op.kind,
+                    Inst8Kind::ExcPayloadSet { .. } | Inst8Kind::ExcPayloadGet { .. }
                 )
             })
         })

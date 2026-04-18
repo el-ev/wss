@@ -181,6 +181,19 @@ pub(super) fn rewrite_inst(mut inst: Inst8, subst: &HashMap<Val8, Val8>) -> Inst
         | Inst8Kind::CsLoadPc { .. }
         | Inst8Kind::CsAlloc(_)
         | Inst8Kind::CsFree(_) => inst.kind,
+
+        Inst8Kind::ExcFlagSet { val } => Inst8Kind::ExcFlagSet { val: rw(subst, val) },
+        Inst8Kind::ExcTagSet { lane, val } => Inst8Kind::ExcTagSet {
+            lane,
+            val: rw(subst, val),
+        },
+        Inst8Kind::ExcPayloadSet { lane, val } => Inst8Kind::ExcPayloadSet {
+            lane,
+            val: rw(subst, val),
+        },
+        Inst8Kind::ExcFlagGet
+        | Inst8Kind::ExcTagGet { .. }
+        | Inst8Kind::ExcPayloadGet { .. } => inst.kind,
     };
     inst
 }
@@ -220,6 +233,9 @@ pub(super) fn has_side_effect(kind: &Inst8Kind) -> bool {
             | Inst8Kind::CsLoadPc { .. }
             | Inst8Kind::CsAlloc(_)
             | Inst8Kind::CsFree(_)
+            | Inst8Kind::ExcFlagSet { .. }
+            | Inst8Kind::ExcTagSet { .. }
+            | Inst8Kind::ExcPayloadSet { .. }
     )
 }
 
@@ -301,6 +317,15 @@ pub(super) fn inst_uses(kind: &Inst8Kind, live: &mut HashSet<Val8>) {
         | Inst8Kind::CsLoadPc { .. }
         | Inst8Kind::CsAlloc(_)
         | Inst8Kind::CsFree(_) => {}
+
+        Inst8Kind::ExcFlagSet { val }
+        | Inst8Kind::ExcTagSet { val, .. }
+        | Inst8Kind::ExcPayloadSet { val, .. } => {
+            add_use(live, *val);
+        }
+        Inst8Kind::ExcFlagGet
+        | Inst8Kind::ExcTagGet { .. }
+        | Inst8Kind::ExcPayloadGet { .. } => {}
     }
 }
 

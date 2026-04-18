@@ -1030,6 +1030,16 @@ fn prepare_dump_for_case(
     ensure_case_source_exists(&artifacts)?;
     let case_config = build_case_config(test_case, env_cfg)?;
     compile_case_to_wasm(test_case, &artifacts, &case_config, env_cfg)?;
+    // wasmtime's release does not execute the WebAssembly exceptions proposal,
+    // so .wat sources bypass the pre-run memory dump and rely on the browser
+    // harness for all validation.
+    if artifacts
+        .source_path
+        .extension()
+        .is_some_and(|ext| ext == "wat")
+    {
+        return Ok(());
+    }
     dump_case_memory(test_case, &artifacts, &case_config)
 }
 
@@ -1401,6 +1411,26 @@ fn compile_case_to_wasm(
     case_config: &CaseConfig,
     env_cfg: &EnvConfig,
 ) -> std::result::Result<(), RunError> {
+    let is_wat = artifacts
+        .source_path
+        .extension()
+        .is_some_and(|ext| ext == "wat");
+    if is_wat {
+        let args = vec![
+            "--enable-exceptions".to_string(),
+            path_arg_from_root(&artifacts.source_path, &env_cfg.root),
+            "-o".to_string(),
+            path_arg_from_root(&artifacts.wasm_path, &env_cfg.root),
+        ];
+        return run_checked(
+            "wat2wasm",
+            &args,
+            &env_cfg.root,
+            &format!("[{}] wat2wasm compile", test_case.id),
+            env_cfg.clang_timeout_ms,
+        )
+        .map(|_| ());
+    }
     let args = build_clang_args(
         &artifacts.source_path,
         &artifacts.wasm_path,
@@ -1453,7 +1483,14 @@ fn dump_case_memory(
         ))
     })?;
 
-    let engine = Engine::default();
+    let mut config = wasmtime::Config::new();
+    config.wasm_exceptions(true);
+    let engine = Engine::new(&config).map_err(|err| {
+        RunError::error(format!(
+            "[{}] failed to build wasmtime engine: {}",
+            test_case.id, err
+        ))
+    })?;
     let module = Module::new(&engine, &wasm_bytes).map_err(|err| {
         RunError::error(format!(
             "[{}] failed to load wasm module: {}",

@@ -316,6 +316,16 @@ impl Inst8 {
             | Inst8Kind::CsLoadPc { .. }
             | Inst8Kind::CsAlloc(_)
             | Inst8Kind::CsFree(_) => vec![],
+            Inst8Kind::ExcFlagSet { val }
+            | Inst8Kind::ExcTagSet { val, .. }
+            | Inst8Kind::ExcPayloadSet { val, .. } => {
+                let mut out = Vec::new();
+                push_vreg(&mut out, *val);
+                out
+            }
+            Inst8Kind::ExcFlagGet
+            | Inst8Kind::ExcTagGet { .. }
+            | Inst8Kind::ExcPayloadGet { .. } => vec![],
         }
     }
     pub fn defs(&self) -> Vec<Val8> {
@@ -434,6 +444,27 @@ pub enum Inst8Kind {
     CsAlloc(u16),
     /// Retreat cs_sp by `size` slots (before loading a frame).
     CsFree(u16),
+
+    // ─── Exception handling state ───────────────────────────────────────
+    //
+    // Exception state uses dedicated channels:
+    //   - a single-byte flag (0 = clear, 1 = pending)
+    //   - a four-byte tag index (lanes 0..=3)
+    //   - an optional four-byte payload word (lanes 0..=3) for single-i32 tags
+    // These live in dedicated CSS properties that are independent of user
+    // globals, so they do not collide with module global indices.
+    /// Write the exception flag byte.
+    ExcFlagSet { val: Val8 },
+    /// Read the exception flag byte.
+    ExcFlagGet,
+    /// Write one byte lane of the exception tag index.
+    ExcTagSet { lane: u8, val: Val8 },
+    /// Read one byte lane of the exception tag index.
+    ExcTagGet { lane: u8 },
+    /// Write one byte lane of the exception payload word.
+    ExcPayloadSet { lane: u8, val: Val8 },
+    /// Read one byte lane of the exception payload word.
+    ExcPayloadGet { lane: u8 },
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -555,6 +586,7 @@ impl Terminator8 {
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub enum TrapCode {
+    UncaughtException = -6,
     CallstackOverflow = -5,
     Exited = -1,
     Unreachable = -2,

@@ -137,4 +137,26 @@ pub enum Node {
     Return(Option<AstRef>),
 
     Unreachable,
+
+    Try {
+        body: Vec<Node>,
+        catches: Vec<Catch>,
+        catch_all: Option<Vec<Node>>,
+        delegate: Option<u32>,
+    },
+    /// Throw a tag. `arg` is `Some` when the tag carries a single i32 payload.
+    Throw {
+        tag: u32,
+        arg: Option<AstRef>,
+    },
+    Rethrow(u32),
+    /// Read the current exception payload (i32). Pushed synthetically onto
+    /// the operand stack at catch entry when the tag has an i32 payload.
+    ExcPayloadGet,
+}
+
+#[derive(Debug, Clone)]
+pub struct Catch {
+    pub tag_index: u32,
+    pub body: Vec<Node>,
 }

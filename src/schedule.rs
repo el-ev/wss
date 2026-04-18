@@ -198,6 +198,12 @@ fn inst_complexity(kind: &Inst8Kind) -> usize {
         | Inst8Kind::CsAlloc(_)
         | Inst8Kind::CsFree(_) => 2,
         Inst8Kind::Getchar | Inst8Kind::Putchar(_) => 2,
+        Inst8Kind::ExcFlagSet { .. }
+        | Inst8Kind::ExcFlagGet
+        | Inst8Kind::ExcTagSet { .. }
+        | Inst8Kind::ExcTagGet { .. }
+        | Inst8Kind::ExcPayloadSet { .. }
+        | Inst8Kind::ExcPayloadGet { .. } => 2,
         _ => 1,
     }
 }
@@ -320,6 +326,13 @@ fn effect_order_dependent(a: &Inst8Kind, b: &Inst8Kind) -> bool {
         return lhs.key() == rhs.key();
     }
 
+    if let (Some(lhs), Some(rhs)) = (eh_access(a), eh_access(b)) {
+        if !(lhs.is_write() || rhs.is_write()) {
+            return false;
+        }
+        return lhs.channel() == rhs.channel();
+    }
+
     false
 }
 
@@ -384,6 +397,45 @@ fn cs_access(kind: &Inst8Kind) -> Option<CsAccess> {
 
 fn is_io_op(kind: &Inst8Kind) -> bool {
     matches!(kind, Inst8Kind::Getchar | Inst8Kind::Putchar(_))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EhChannel {
+    Flag,
+    Tag { lane: u8 },
+    Payload { lane: u8 },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EhAccess {
+    Read(EhChannel),
+    Write(EhChannel),
+}
+
+impl EhAccess {
+    fn is_write(self) -> bool {
+        matches!(self, Self::Write(_))
+    }
+
+    fn channel(self) -> EhChannel {
+        match self {
+            Self::Read(c) | Self::Write(c) => c,
+        }
+    }
+}
+
+fn eh_access(kind: &Inst8Kind) -> Option<EhAccess> {
+    Some(match kind {
+        Inst8Kind::ExcFlagGet => EhAccess::Read(EhChannel::Flag),
+        Inst8Kind::ExcFlagSet { .. } => EhAccess::Write(EhChannel::Flag),
+        Inst8Kind::ExcTagGet { lane } => EhAccess::Read(EhChannel::Tag { lane: *lane }),
+        Inst8Kind::ExcTagSet { lane, .. } => EhAccess::Write(EhChannel::Tag { lane: *lane }),
+        Inst8Kind::ExcPayloadGet { lane } => EhAccess::Read(EhChannel::Payload { lane: *lane }),
+        Inst8Kind::ExcPayloadSet { lane, .. } => {
+            EhAccess::Write(EhChannel::Payload { lane: *lane })
+        }
+        _ => return None,
+    })
 }
 
 fn rewrite_term_pcs(

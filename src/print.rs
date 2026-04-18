@@ -120,6 +120,9 @@ fn ir_produces_value(inst: &Inst) -> bool {
             | Inst::Store { .. }
             | Inst::Putchar(_)
             | Inst::Getchar
+            | Inst::ExcSet { .. }
+            | Inst::ExcClear
+            | Inst::ExcPayloadSet(_)
     )
 }
 
@@ -227,6 +230,15 @@ fn print_ir_inst(out: &mut String, r: IrNode, inst: &Inst) {
             write!(out, " ").unwrap();
             write_ir_operand(out, *val);
         }
+        Inst::ExcSet { tag_index } => write!(out, "exc.set tag={}", tag_index).unwrap(),
+        Inst::ExcClear => write!(out, "exc.clear").unwrap(),
+        Inst::ExcFlagGet => write!(out, "exc.flag").unwrap(),
+        Inst::ExcTagGet => write!(out, "exc.tag").unwrap(),
+        Inst::ExcPayloadSet(v) => {
+            write!(out, "exc.payload.set ").unwrap();
+            write_ir_operand(out, *v);
+        }
+        Inst::ExcPayloadGet => write!(out, "exc.payload").unwrap(),
     }
 }
 
@@ -285,6 +297,7 @@ fn print_terminator(out: &mut String, term: &Terminator) {
         }
         Terminator::Return(None) => write!(out, "return").unwrap(),
         Terminator::Unreachable => write!(out, "unreachable").unwrap(),
+        Terminator::UncaughtExit => write!(out, "uncaught_exit").unwrap(),
     }
 }
 
@@ -422,6 +435,34 @@ fn print_inst(out: &mut String, idx: AstRef, inst: &Node, indent: usize) {
         Node::Return(Some(r)) => write!(out, "return %{}", r).unwrap(),
         Node::Return(None) => write!(out, "return").unwrap(),
         Node::Unreachable => write!(out, "unreachable").unwrap(),
+        Node::Try {
+            body,
+            catches,
+            catch_all,
+            delegate,
+        } => {
+            writeln!(out, "try").unwrap();
+            print_insts(out, body, indent + 1);
+            if let Some(depth) = delegate {
+                write!(out, "{}delegate {}", "  ".repeat(indent), depth).unwrap();
+            } else {
+                for catch in catches {
+                    writeln!(out, "{}catch {}", "  ".repeat(indent), catch.tag_index).unwrap();
+                    print_insts(out, &catch.body, indent + 1);
+                }
+                if let Some(catch_all_body) = catch_all {
+                    writeln!(out, "{}catch_all", "  ".repeat(indent)).unwrap();
+                    print_insts(out, catch_all_body, indent + 1);
+                }
+                write!(out, "{}end try", "  ".repeat(indent)).unwrap();
+            }
+        }
+        Node::Throw { tag, arg } => match arg {
+            Some(r) => write!(out, "throw {} ({})", tag, r).unwrap(),
+            None => write!(out, "throw {}", tag).unwrap(),
+        },
+        Node::Rethrow(depth) => write!(out, "rethrow {}", depth).unwrap(),
+        Node::ExcPayloadGet => write!(out, "exc.payload").unwrap(),
     }
 }
 
@@ -658,6 +699,19 @@ fn print_inst8(out: &mut String, inst: &crate::ir8::Inst8) {
         Inst8Kind::CsLoadPc { offset } => write!(out, "cs.load_pc [cs_sp+{}]", offset).unwrap(),
         Inst8Kind::CsAlloc(size) => write!(out, "cs.alloc {}", size).unwrap(),
         Inst8Kind::CsFree(size) => write!(out, "cs.free {}", size).unwrap(),
+
+        Inst8Kind::ExcFlagSet { val } => write!(out, "exc.flag.set {}", fmt_val8(*val)).unwrap(),
+        Inst8Kind::ExcFlagGet => write!(out, "exc.flag.get").unwrap(),
+        Inst8Kind::ExcTagSet { lane, val } => {
+            write!(out, "exc.tag.set lane={} {}", lane, fmt_val8(*val)).unwrap()
+        }
+        Inst8Kind::ExcTagGet { lane } => write!(out, "exc.tag.get lane={}", lane).unwrap(),
+        Inst8Kind::ExcPayloadSet { lane, val } => {
+            write!(out, "exc.payload.set lane={} {}", lane, fmt_val8(*val)).unwrap()
+        }
+        Inst8Kind::ExcPayloadGet { lane } => {
+            write!(out, "exc.payload.get lane={}", lane).unwrap()
+        }
     }
 }
 
@@ -727,6 +781,7 @@ fn print_term8(out: &mut String, term: &Terminator8) {
                 TrapCode::Unreachable => "trap unreachable",
                 TrapCode::InvalidMemoryAccess => "trap invalid_memory_access",
                 TrapCode::DivisionByZero => "trap division_by_zero",
+                TrapCode::UncaughtException => "trap uncaught_exception",
             };
             write!(out, "trap {}", name).unwrap();
         }

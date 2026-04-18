@@ -31,7 +31,12 @@ pub(super) fn inst_uses(inst: &Inst) -> Vec<IrNode> {
         | Inst::MemorySize
         | Inst::TableSize(_)
         | Inst::Getchar
-        | Inst::Drop => Vec::new(),
+        | Inst::Drop
+        | Inst::ExcSet { .. }
+        | Inst::ExcClear
+        | Inst::ExcFlagGet
+        | Inst::ExcTagGet
+        | Inst::ExcPayloadGet => Vec::new(),
         Inst::LocalSet(_, value_ref)
         | Inst::LocalTee(_, value_ref)
         | Inst::GlobalSet(_, value_ref)
@@ -39,7 +44,8 @@ pub(super) fn inst_uses(inst: &Inst) -> Vec<IrNode> {
         | Inst::Putchar(value_ref)
         | Inst::Load {
             addr: value_ref, ..
-        } => use_if_non_imm(*value_ref),
+        }
+        | Inst::ExcPayloadSet(value_ref) => use_if_non_imm(*value_ref),
         Inst::Binary(_, lhs, rhs)
         | Inst::Compare(_, lhs, rhs)
         | Inst::Store {
@@ -69,7 +75,7 @@ pub(super) fn inst_uses(inst: &Inst) -> Vec<IrNode> {
 
 pub(super) fn term_uses(term: &Terminator) -> Vec<IrNode> {
     match term {
-        Terminator::Goto(_) | Terminator::Unreachable => Vec::new(),
+        Terminator::Goto(_) | Terminator::Unreachable | Terminator::UncaughtExit => Vec::new(),
         Terminator::Branch { cond, .. } => use_if_non_imm(*cond),
         Terminator::Switch { index, .. } => use_if_non_imm(*index),
         Terminator::TailCall { args, .. } => collect_non_imm_uses(args.iter().copied()),

@@ -1809,5 +1809,465 @@
         "0x00000328"
       ]
     }
+  },
+  {
+    "id": "exception_local_try_catch",
+    "source": "tests/cases/exception_local_try_catch.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0x0000002a",
+      "rendered_includes": [
+        "0x0000002a"
+      ]
+    }
+  },
+  {
+    "id": "exception_catch_all",
+    "source": "tests/cases/exception_catch_all.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000007",
+      "rendered_includes": [
+        "0x00000007"
+      ]
+    }
+  },
+  {
+    "id": "exception_no_throw_try_returns",
+    "source": "tests/cases/exception_no_throw_try_returns.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000005",
+      "rendered_includes": [
+        "0x00000005"
+      ]
+    }
+  },
+  {
+    "id": "exception_uncaught_trap",
+    "source": "tests/cases/exception_uncaught_trap.wat",
+    "expect": {
+      "pc": -6,
+      "rendered_includes": [
+        "Trap: uncaught exception"
+      ]
+    }
+  },
+  {
+    "id": "exception_cross_function_catch",
+    "source": "tests/cases/exception_cross_function_catch.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000011",
+      "rendered_includes": [
+        "0x00000011"
+      ]
+    }
+  },
+  {
+    "id": "exception_nested_inner_catch",
+    "source": "tests/cases/exception_nested_inner_catch.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000002",
+      "rendered_includes": [
+        "0x00000002"
+      ]
+    }
+  },
+  {
+    "id": "exception_nested_outer_catch",
+    "source": "tests/cases/exception_nested_outer_catch.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000008",
+      "rendered_includes": [
+        "0x00000008"
+      ]
+    }
+  },
+  {
+    "id": "exception_rethrow_outer_catch",
+    "source": "tests/cases/exception_rethrow_outer_catch.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0x0000000d",
+      "rendered_includes": [
+        "0x0000000d"
+      ]
+    }
+  },
+  {
+    "id": "exception_delegate_to_outer",
+    "source": "tests/cases/exception_delegate_to_outer.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000015",
+      "rendered_includes": [
+        "0x00000015"
+      ]
+    }
+  },
+  {
+    "id": "exception_uncaught_cross_function",
+    "source": "tests/cases/exception_uncaught_cross_function.wat",
+    "expect": {
+      "pc": -6,
+      "rendered_includes": [
+        "Trap: uncaught exception"
+      ]
+    }
+  },
+  {
+    "id": "exception_catch_specific_vs_all",
+    "source": "tests/cases/exception_catch_specific_vs_all.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000063",
+      "rendered_includes": [
+        "0x00000063"
+      ]
+    }
+  },
+  {
+    "id": "exception_catch_second_of_two",
+    "source": "tests/cases/exception_catch_second_of_two.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0x0000002c",
+      "rendered_includes": [
+        "0x0000002c"
+      ]
+    }
+  },
+  {
+    "id": "exception_call_chain_propagates",
+    "source": "tests/cases/exception_call_chain_propagates.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0x0000004d",
+      "rendered_includes": [
+        "0x0000004d"
+      ]
+    }
+  },
+  {
+    "id": "exception_after_catch_continues",
+    "source": "tests/cases/exception_after_catch_continues.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0x000000fa",
+      "rendered_includes": [
+        "0x000000fa"
+      ]
+    }
+  },
+  {
+    "id": "exception_loop_throw_break",
+    "source": "tests/cases/exception_loop_throw_break.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0x0000000a",
+      "rendered_includes": [
+        "0x0000000a"
+      ]
+    }
+  },
+  {
+    "id": "exception_delegate_cross_function",
+    "source": "tests/cases/exception_delegate_cross_function.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000041",
+      "rendered_includes": [
+        "0x00000041"
+      ]
+    }
+  },
+  {
+    "id": "exception_catch_all_then_return",
+    "source": "tests/cases/exception_catch_all_then_return.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000017",
+      "rendered_includes": [
+        "0x00000017"
+      ]
+    }
+  },
+  {
+    "id": "exception_rethrow_escapes_function",
+    "source": "tests/cases/exception_rethrow_escapes_function.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000058",
+      "rendered_includes": [
+        "0x00000058"
+      ]
+    }
+  },
+  {
+    "id": "exception_recursive_throw",
+    "source": "tests/cases/exception_recursive_throw.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000013",
+      "rendered_includes": [
+        "0x00000013"
+      ]
+    }
+  },
+  {
+    "id": "exception_throw_skips_code",
+    "source": "tests/cases/exception_throw_skips_code.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0x0000000d",
+      "rendered_includes": [
+        "0x0000000d"
+      ]
+    }
+  },
+  {
+    "id": "exception_nested_catch_all",
+    "source": "tests/cases/exception_nested_catch_all.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000024",
+      "rendered_includes": [
+        "0x00000024"
+      ]
+    }
+  },
+  {
+    "id": "exception_indirect_call_catch",
+    "source": "tests/cases/exception_indirect_call_catch.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0x0000005b",
+      "rendered_includes": [
+        "0x0000005b"
+      ]
+    }
+  },
+  {
+    "id": "exception_outer_catches_inner_rethrow",
+    "source": "tests/cases/exception_outer_catches_inner_rethrow.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0x0000002f",
+      "rendered_includes": [
+        "0x0000002f"
+      ]
+    }
+  },
+  {
+    "id": "exception_counter_before_throw",
+    "source": "tests/cases/exception_counter_before_throw.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000007",
+      "rendered_includes": [
+        "0x00000007"
+      ]
+    }
+  },
+  {
+    "id": "exception_payload_simple",
+    "source": "tests/cases/exception_payload_simple.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0x0000002a",
+      "rendered_includes": [
+        "0x0000002a"
+      ]
+    }
+  },
+  {
+    "id": "exception_payload_call_chain",
+    "source": "tests/cases/exception_payload_call_chain.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000064",
+      "rendered_includes": [
+        "0x00000064"
+      ]
+    }
+  },
+  {
+    "id": "exception_payload_rethrow",
+    "source": "tests/cases/exception_payload_rethrow.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000007",
+      "rendered_includes": [
+        "0x00000007"
+      ]
+    }
+  },
+  {
+    "id": "exception_payload_arithmetic",
+    "source": "tests/cases/exception_payload_arithmetic.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0x0000000f",
+      "rendered_includes": [
+        "0x0000000f"
+      ]
+    }
+  },
+  {
+    "id": "exception_payload_zero",
+    "source": "tests/cases/exception_payload_zero.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000003",
+      "rendered_includes": [
+        "0x00000003"
+      ]
+    }
+  },
+  {
+    "id": "exception_payload_negative",
+    "source": "tests/cases/exception_payload_negative.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0xffffffff",
+      "rendered_includes": [
+        "0xffffffff"
+      ]
+    }
+  },
+  {
+    "id": "exception_payload_cross_function",
+    "source": "tests/cases/exception_payload_cross_function.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0x000000c8",
+      "rendered_includes": [
+        "0x000000c8"
+      ]
+    }
+  },
+  {
+    "id": "exception_payload_counter_mix",
+    "source": "tests/cases/exception_payload_counter_mix.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000010",
+      "rendered_includes": [
+        "0x00000010"
+      ]
+    }
+  },
+  {
+    "id": "exception_payload_loop",
+    "source": "tests/cases/exception_payload_loop.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000035",
+      "rendered_includes": [
+        "0x00000035"
+      ]
+    }
+  },
+  {
+    "id": "exception_payload_indirect_call",
+    "source": "tests/cases/exception_payload_indirect_call.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0x0000004d",
+      "rendered_includes": [
+        "0x0000004d"
+      ]
+    }
+  },
+  {
+    "id": "exception_payload_nested_inner",
+    "source": "tests/cases/exception_payload_nested_inner.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000021",
+      "rendered_includes": [
+        "0x00000021"
+      ]
+    }
+  },
+  {
+    "id": "exception_payload_nested_outer_rethrow",
+    "source": "tests/cases/exception_payload_nested_outer_rethrow.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000058",
+      "rendered_includes": [
+        "0x00000058"
+      ]
+    }
+  },
+  {
+    "id": "exception_payload_two_tags",
+    "source": "tests/cases/exception_payload_two_tags.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000042",
+      "rendered_includes": [
+        "0x00000042"
+      ]
+    }
+  },
+  {
+    "id": "exception_payload_catch_all",
+    "source": "tests/cases/exception_payload_catch_all.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000037",
+      "rendered_includes": [
+        "0x00000037"
+      ]
+    }
+  },
+  {
+    "id": "exception_payload_mixed_tags",
+    "source": "tests/cases/exception_payload_mixed_tags.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0x0000002a",
+      "rendered_includes": [
+        "0x0000002a"
+      ]
+    }
+  },
+  {
+    "id": "exception_payload_recursive",
+    "source": "tests/cases/exception_payload_recursive.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0x0000002a",
+      "rendered_includes": [
+        "0x0000002a"
+      ]
+    }
+  },
+  {
+    "id": "exception_payload_delegate",
+    "source": "tests/cases/exception_payload_delegate.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000051",
+      "rendered_includes": [
+        "0x00000051"
+      ]
+    }
+  },
+  {
+    "id": "exception_payload_no_throw",
+    "source": "tests/cases/exception_payload_no_throw.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000011",
+      "rendered_includes": [
+        "0x00000011"
+      ]
+    }
   }
 ]

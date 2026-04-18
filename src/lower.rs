@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::Context;
 
-use crate::ast::Node;
+use crate::ast::{Node, RelOp};
 use crate::ir::{BasicBlock, BlockId, Inst, IrNode, Terminator};
 use crate::module::{AstModule, IrFuncBody, IrModule};
 
@@ -23,10 +23,33 @@ fn lower_function(
 ) -> anyhow::Result<Option<IrFuncBody>> {
     let ir_body = if let Some(body) = body {
         let is_entry = module.entry_export() == Some(func_index);
-        let mut ctx = LowerCtx::new(module, is_entry);
+        let uses_eh = module_uses_exceptions(module);
+        let mut ctx = LowerCtx::new(module, is_entry, uses_eh);
+        let uncaught_exit = if uses_eh {
+            let uncaught = ctx.builder.alloc_block();
+            ctx.builder.eh_stack.push(uncaught);
+            Some(uncaught)
+        } else {
+            None
+        };
         lower_block_nodes(body.insts(), &mut ctx)?;
-        if !ctx.builder.curr_blk_insts.is_empty() || ctx.builder.blocks.is_empty() {
-            ctx.builder.finish_block(Terminator::Return(None));
+        // Always close the current block. Ending instructions like Return,
+        // Br, Throw, or the tail of a Try leave `curr_blk` switched to a
+        // fresh block that may or may not be targeted. If it's dead the
+        // pass below prunes it; if a Try's merge target is still current
+        // and reachable, this gives it a valid terminator.
+        ctx.builder.finish_block(Terminator::Return(None));
+        if let Some(uncaught) = uncaught_exit {
+            // Close the function-level uncaught-exit block. Control reaches
+            // here when no handler matched. The lower8 layer translates
+            // `UncaughtExit` based on `is_entry`: the entry function traps
+            // with `TrapCode::UncaughtException`; all other functions return
+            // to the caller with the current exception state still set so
+            // the caller's post-call check re-propagates.
+            let popped = ctx.builder.eh_stack.pop();
+            debug_assert_eq!(popped, Some(uncaught));
+            ctx.builder.switch_to_block(uncaught);
+            ctx.builder.finish_block(Terminator::UncaughtExit);
         }
         let mut blocks = ctx.builder.blocks;
         let mut entry = BlockId(0);
@@ -69,7 +92,8 @@ fn remap_terminator_block_targets(term: &mut Terminator, remap: &HashMap<BlockId
         Terminator::TailCall { .. }
         | Terminator::TailCallIndirect { .. }
         | Terminator::Return(_)
-        | Terminator::Unreachable => {}
+        | Terminator::Unreachable
+        | Terminator::UncaughtExit => {}
     }
 }
 
@@ -195,13 +219,19 @@ fn remap_inst_refs(inst: &mut Inst, remap: &HashMap<IrNode, IrNode>) -> anyhow::
         | Inst::MemorySize
         | Inst::TableSize(_)
         | Inst::Getchar
-        | Inst::Drop => {}
+        | Inst::Drop
+        | Inst::ExcSet { .. }
+        | Inst::ExcClear
+        | Inst::ExcFlagGet
+        | Inst::ExcTagGet
+        | Inst::ExcPayloadGet => {}
         Inst::LocalSet(_, v)
         | Inst::LocalTee(_, v)
         | Inst::GlobalSet(_, v)
         | Inst::Unary(_, v)
         | Inst::Putchar(v)
-        | Inst::Load { addr: v, .. } => remap_ref(v, remap)?,
+        | Inst::Load { addr: v, .. }
+        | Inst::ExcPayloadSet(v) => remap_ref(v, remap)?,
         Inst::Binary(_, l, r)
         | Inst::Compare(_, l, r)
         | Inst::Store {
@@ -231,7 +261,7 @@ fn remap_terminator_refs(
     remap: &HashMap<IrNode, IrNode>,
 ) -> anyhow::Result<()> {
     match term {
-        Terminator::Goto(_) | Terminator::Unreachable => {}
+        Terminator::Goto(_) | Terminator::Unreachable | Terminator::UncaughtExit => {}
         Terminator::Branch { cond, .. } | Terminator::Switch { index: cond, .. } => {
             remap_ref(cond, remap)?;
         }
@@ -250,14 +280,23 @@ struct LowerCtx<'a> {
     module: &'a AstModule,
     is_entry: bool,
     builder: IrBuilder,
+    /// When `Some`, overrides the default `ref_map` entry for the current
+    /// AST node (used when an arm emits extra instructions after its
+    /// value-producing one, e.g. post-call exception checks).
+    last_ref_override: Option<IrNode>,
+    /// Whether this function is lowered in exception-handling mode. True
+    /// iff the module declares any exception tags.
+    uses_eh: bool,
 }
 
 impl<'a> LowerCtx<'a> {
-    fn new(module: &'a AstModule, is_entry: bool) -> Self {
+    fn new(module: &'a AstModule, is_entry: bool, uses_eh: bool) -> Self {
         Self {
             module,
             is_entry,
             builder: IrBuilder::new(),
+            last_ref_override: None,
+            uses_eh,
         }
     }
 
@@ -280,6 +319,15 @@ pub struct IrBuilder {
     pub next_blk_id: BlockId,
     pub label_stack: Vec<BlockId>,
     pub next_ref: IrNode,
+    /// Stack of exception handler dispatch blocks. The top is the target
+    /// for `throw`, `rethrow`, and post-call exception checks active in the
+    /// current scope. The bottom (if EH is active) is the function-level
+    /// uncaught-exit block, which returns control to the caller with the
+    /// current exception state still set so propagation continues.
+    pub eh_stack: Vec<BlockId>,
+    /// Tracks the tag captured by each enclosing catch body, innermost
+    /// last. `Some(idx)` for typed catches; `None` for `catch_all`.
+    pub catch_tag_stack: Vec<Option<u32>>,
 }
 
 impl IrBuilder {
@@ -324,10 +372,19 @@ impl IrBuilder {
 fn lower_block_nodes(block: &[Node], ctx: &mut LowerCtx) -> anyhow::Result<()> {
     let mut ref_map: Vec<IrNode> = Vec::with_capacity(block.len());
     for node in block.iter() {
+        ctx.last_ref_override = None;
         lower_node(node, block, ctx, &ref_map)?;
-        ref_map.push(ctx.builder.next_ref.saturating_sub(1));
+        let result_ref = ctx
+            .last_ref_override
+            .take()
+            .unwrap_or_else(|| ctx.builder.next_ref.saturating_sub(1));
+        ref_map.push(result_ref);
     }
     Ok(())
+}
+
+fn module_uses_exceptions(module: &AstModule) -> bool {
+    module.info().tag_at(0).is_some()
 }
 
 fn ast_operand_ref(ast_ref: crate::ast::AstRef, block: &[Node], ref_map: &[IrNode]) -> IrNode {
@@ -416,10 +473,11 @@ fn lower_node(
             } else if Some(*func) == ctx.module.getchar_import() {
                 ctx.builder.push(Inst::Getchar);
             } else {
-                ctx.builder.push(Inst::Call {
+                let call_ref = ctx.builder.push(Inst::Call {
                     func: *func,
                     args: map_ast_args(args, ref_map),
                 });
+                emit_post_call_check(ctx, call_ref);
             }
         }
         Node::CallIndirect {
@@ -428,12 +486,13 @@ fn lower_node(
             index,
             args,
         } => {
-            ctx.builder.push(Inst::CallIndirect {
+            let call_ref = ctx.builder.push(Inst::CallIndirect {
                 type_index: *type_index,
                 table_index: *table_index,
                 index: ref_map[index.index()],
                 args: map_ast_args(args, ref_map),
             });
+            emit_post_call_check(ctx, call_ref);
         }
         Node::Drop(_) => {
             ctx.builder.push(Inst::Drop);
@@ -565,7 +624,194 @@ fn lower_node(
                 after,
             );
         }
+        Node::Try {
+            body,
+            catches,
+            catch_all,
+            delegate,
+        } => {
+            lower_try(ctx, body, catches, catch_all.as_deref(), *delegate)?;
+        }
+        Node::Throw { tag, arg } => {
+            if let Some(arg_ref) = arg {
+                let val = ref_map[arg_ref.index()];
+                ctx.builder.push(Inst::ExcPayloadSet(val));
+            }
+            ctx.builder.push(Inst::ExcSet { tag_index: *tag });
+            let handler = ctx
+                .builder
+                .eh_stack
+                .last()
+                .copied()
+                .context("throw outside exception handler scope")?;
+            let after = ctx.builder.alloc_block();
+            ctx.builder
+                .finish_and_switch(Terminator::Goto(handler), after);
+        }
+        Node::ExcPayloadGet => {
+            ctx.builder.push(Inst::ExcPayloadGet);
+        }
+        Node::Rethrow(depth) => {
+            if *depth != 0 {
+                anyhow::bail!(
+                    "rethrow with depth > 0 not supported (got depth {})",
+                    depth
+                );
+            }
+            let tag_idx = ctx
+                .builder
+                .catch_tag_stack
+                .last()
+                .copied()
+                .context("rethrow outside exception handler scope")?;
+            let tag_index = tag_idx.context(
+                "rethrow from catch_all is not supported (no static tag to re-raise)",
+            )?;
+            ctx.builder.push(Inst::ExcSet { tag_index });
+            let handler = ctx
+                .builder
+                .eh_stack
+                .last()
+                .copied()
+                .context("rethrow outside exception handler scope")?;
+            let after = ctx.builder.alloc_block();
+            ctx.builder
+                .finish_and_switch(Terminator::Goto(handler), after);
+        }
     }
+    Ok(())
+}
+
+fn emit_post_call_check(ctx: &mut LowerCtx, call_ref: IrNode) {
+    if !ctx.uses_eh {
+        return;
+    }
+    let handler = match ctx.builder.eh_stack.last().copied() {
+        Some(h) => h,
+        None => return,
+    };
+    let flag = ctx.builder.push(Inst::ExcFlagGet);
+    let continue_block = ctx.builder.alloc_block();
+    ctx.builder.finish_and_switch(
+        Terminator::Branch {
+            cond: flag,
+            if_true: handler,
+            if_false: continue_block,
+        },
+        continue_block,
+    );
+    // Preserve the call's ref as this AST node's produced value; the
+    // flag-get and branch we just emitted are plumbing, not a value.
+    ctx.last_ref_override = Some(call_ref);
+}
+
+fn lower_try(
+    ctx: &mut LowerCtx,
+    body: &[Node],
+    catches: &[crate::ast::Catch],
+    catch_all: Option<&[Node]>,
+    delegate: Option<u32>,
+) -> anyhow::Result<()> {
+    // Delegate: body's exceptions skip local catches and go straight to
+    // the handler at the given label depth. The current lowering only
+    // supports depth 0 (the immediately enclosing scope's handler).
+    if let Some(depth) = delegate {
+        if depth != 0 {
+            anyhow::bail!(
+                "try ... delegate with depth > 0 not supported (got depth {})",
+                depth
+            );
+        }
+        let body_block = ctx.builder.alloc_block();
+        let merge_block = ctx.builder.alloc_block();
+        ctx.builder
+            .finish_and_switch(Terminator::Goto(body_block), body_block);
+        ctx.builder.label_stack.push(merge_block);
+        lower_block_nodes(body, ctx)?;
+        ctx.builder.label_stack.pop();
+        ctx.builder
+            .finish_and_switch(Terminator::Goto(merge_block), merge_block);
+        return Ok(());
+    }
+
+    let body_block = ctx.builder.alloc_block();
+    let dispatch_block = ctx.builder.alloc_block();
+    let merge_block = ctx.builder.alloc_block();
+    let uncaught_forward_block = ctx.builder.alloc_block();
+    let catch_blocks: Vec<BlockId> = (0..catches.len())
+        .map(|_| ctx.builder.alloc_block())
+        .collect();
+    let catch_all_block = catch_all.as_ref().map(|_| ctx.builder.alloc_block());
+
+    ctx.builder
+        .finish_and_switch(Terminator::Goto(body_block), body_block);
+    ctx.builder.label_stack.push(merge_block);
+    ctx.builder.eh_stack.push(dispatch_block);
+    lower_block_nodes(body, ctx)?;
+    let popped = ctx.builder.eh_stack.pop();
+    debug_assert_eq!(popped, Some(dispatch_block));
+    ctx.builder.label_stack.pop();
+    ctx.builder
+        .finish_and_switch(Terminator::Goto(merge_block), dispatch_block);
+
+    // Dispatch: test current exc_tag against each catch's tag_index.
+    for (i, catch) in catches.iter().enumerate() {
+        let tag = ctx.builder.push(Inst::ExcTagGet);
+        let expected = IrNode::imm_i32(catch.tag_index as i32);
+        let cmp = ctx.builder.push(Inst::Compare(RelOp::Eq, tag, expected));
+        let next_check = ctx.builder.alloc_block();
+        ctx.builder.finish_and_switch(
+            Terminator::Branch {
+                cond: cmp,
+                if_true: catch_blocks[i],
+                if_false: next_check,
+            },
+            next_check,
+        );
+    }
+    let dispatch_tail = catch_all_block.unwrap_or(uncaught_forward_block);
+    ctx.builder.finish_and_switch(
+        Terminator::Goto(dispatch_tail),
+        uncaught_forward_block,
+    );
+
+    // Uncaught forward: no catch matched; propagate to outer handler.
+    let outer_handler = ctx
+        .builder
+        .eh_stack
+        .last()
+        .copied()
+        .context("try uncaught forward without outer handler")?;
+    ctx.builder
+        .finish_and_switch(Terminator::Goto(outer_handler), merge_block);
+
+    // Catch bodies.
+    for (i, catch) in catches.iter().enumerate() {
+        ctx.builder.switch_to_block(catch_blocks[i]);
+        ctx.builder.push(Inst::ExcClear);
+        ctx.builder.label_stack.push(merge_block);
+        ctx.builder.catch_tag_stack.push(Some(catch.tag_index));
+        lower_block_nodes(&catch.body, ctx)?;
+        ctx.builder.catch_tag_stack.pop();
+        ctx.builder.label_stack.pop();
+        ctx.builder
+            .finish_and_switch(Terminator::Goto(merge_block), merge_block);
+    }
+
+    // Catch-all body.
+    if let (Some(catch_all_body), Some(catch_all_id)) = (catch_all, catch_all_block) {
+        ctx.builder.switch_to_block(catch_all_id);
+        ctx.builder.push(Inst::ExcClear);
+        ctx.builder.label_stack.push(merge_block);
+        ctx.builder.catch_tag_stack.push(None);
+        lower_block_nodes(catch_all_body, ctx)?;
+        ctx.builder.catch_tag_stack.pop();
+        ctx.builder.label_stack.pop();
+        ctx.builder
+            .finish_and_switch(Terminator::Goto(merge_block), merge_block);
+    }
+
+    // Subsequent nodes continue in merge_block (switched into above).
     Ok(())
 }
 
@@ -638,9 +884,29 @@ fn maybe_fuse_tail_call(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{AstRef, BinOp, Node, RelOp};
-    use crate::module::{AstFuncBody, AstModule, FuncType, ModuleInfo};
+    use crate::ast::{AstRef, BinOp, Catch, Node, RelOp};
+    use crate::module::{AstFuncBody, AstModule, FuncType, ModuleInfo, TagInfo};
     use wasmparser::ValType;
+
+    fn mk_module_with_tag(
+        types: Vec<FuncType>,
+        functions_ast: Vec<(FuncType, Option<AstFuncBody>)>,
+        tag_type_index: u32,
+    ) -> AstModule {
+        let function_types = functions_ast
+            .iter()
+            .map(|(sig, _)| sig.clone())
+            .collect::<Vec<_>>();
+        let bodies = functions_ast
+            .into_iter()
+            .map(|(_, body)| body)
+            .collect::<Vec<_>>();
+        let mut info = ModuleInfo::default();
+        *info.types_mut() = types;
+        *info.functions_mut() = function_types;
+        info.tags_mut().push(TagInfo::new(tag_type_index));
+        AstModule::new(info, bodies)
+    }
 
     fn mk_sig(params: &[ValType], results: &[ValType]) -> FuncType {
         FuncType::new(
@@ -893,5 +1159,180 @@ mod tests {
             block.insts[3],
             Inst::Compare(RelOp::Eq, IrNode(2), r) if r.imm_i32_value() == Some(10)
         ));
+    }
+
+    fn count_inst<F: Fn(&Inst) -> bool>(body: &IrFuncBody, pred: F) -> usize {
+        body.blocks()
+            .iter()
+            .flat_map(|b| b.insts.iter())
+            .filter(|i| pred(i))
+            .count()
+    }
+
+    #[test]
+    fn lower_try_catch_emits_dispatch_and_catch_bodies() {
+        let module = mk_module_with_tag(
+            vec![mk_sig(&[], &[])],
+            vec![(
+                mk_sig(&[], &[]),
+                Some(AstFuncBody::new(
+                    vec![],
+                    vec![Node::Try {
+                        body: vec![Node::Throw { tag: 0, arg: None }],
+                        catches: vec![Catch {
+                            tag_index: 0,
+                            body: vec![],
+                        }],
+                        catch_all: None,
+                        delegate: None,
+                    }],
+                )),
+            )],
+            0,
+        );
+        let ir = lower_function(&module, 0, module.body_at(0)).expect("lower");
+        let body = ir.expect("body");
+
+        // ExcSet{tag:0} emitted exactly once (for the throw).
+        assert_eq!(
+            count_inst(&body, |i| matches!(
+                i,
+                Inst::ExcSet { tag_index: 0 }
+            )),
+            1
+        );
+        // ExcTagGet present for dispatch; ExcClear at catch entry.
+        assert!(count_inst(&body, |i| matches!(i, Inst::ExcTagGet)) >= 1);
+        assert_eq!(count_inst(&body, |i| matches!(i, Inst::ExcClear)), 1);
+    }
+
+    #[test]
+    fn lower_call_inside_try_emits_post_call_exc_flag_check() {
+        let module = mk_module_with_tag(
+            vec![mk_sig(&[], &[])],
+            vec![
+                (mk_sig(&[], &[]), None),
+                (
+                    mk_sig(&[], &[]),
+                    Some(AstFuncBody::new(
+                        vec![],
+                        vec![Node::Try {
+                            body: vec![Node::Call(0, vec![])],
+                            catches: vec![Catch {
+                                tag_index: 0,
+                                body: vec![],
+                            }],
+                            catch_all: None,
+                            delegate: None,
+                        }],
+                    )),
+                ),
+            ],
+            0,
+        );
+        let ir = lower_function(&module, 1, module.body_at(1)).expect("lower");
+        let body = ir.expect("body");
+
+        // Post-call check: an ExcFlagGet is emitted after the call, and
+        // at least one Branch uses it as its condition.
+        assert!(count_inst(&body, |i| matches!(i, Inst::ExcFlagGet)) >= 1);
+        let has_branch_on_flag = body.blocks().iter().any(|b| {
+            matches!(&b.terminator, Terminator::Branch { .. })
+                && b.insts.iter().any(|i| matches!(i, Inst::ExcFlagGet))
+        });
+        assert!(
+            has_branch_on_flag,
+            "expected a Branch terminator in a block containing ExcFlagGet"
+        );
+    }
+
+    #[test]
+    fn lower_module_without_tags_skips_eh_machinery() {
+        // Same call pattern, but no tag registered: no EH lowering.
+        let module = mk_module(
+            None,
+            vec![mk_sig(&[], &[])],
+            vec![
+                (mk_sig(&[], &[]), None),
+                (
+                    mk_sig(&[], &[]),
+                    Some(AstFuncBody::new(vec![], vec![Node::Call(0, vec![])])),
+                ),
+            ],
+        );
+        let ir = lower_function(&module, 1, module.body_at(1)).expect("lower");
+        let body = ir.expect("body");
+
+        assert_eq!(count_inst(&body, |i| matches!(i, Inst::ExcFlagGet)), 0);
+        assert_eq!(
+            count_inst(&body, |i| matches!(i, Inst::ExcSet { .. })),
+            0
+        );
+        assert_eq!(count_inst(&body, |i| matches!(i, Inst::ExcClear)), 0);
+    }
+
+    #[test]
+    fn lower_try_delegate_zero_is_transparent() {
+        // try { throw 0 } delegate 0 — no dispatch/catch blocks; throw
+        // propagates to the outer (function-level) handler.
+        let module = mk_module_with_tag(
+            vec![mk_sig(&[], &[])],
+            vec![(
+                mk_sig(&[], &[]),
+                Some(AstFuncBody::new(
+                    vec![],
+                    vec![Node::Try {
+                        body: vec![Node::Throw { tag: 0, arg: None }],
+                        catches: vec![],
+                        catch_all: None,
+                        delegate: Some(0),
+                    }],
+                )),
+            )],
+            0,
+        );
+        let ir = lower_function(&module, 0, module.body_at(0)).expect("lower");
+        let body = ir.expect("body");
+
+        // No catch-dispatch machinery: ExcTagGet and ExcClear are absent.
+        assert_eq!(count_inst(&body, |i| matches!(i, Inst::ExcTagGet)), 0);
+        assert_eq!(count_inst(&body, |i| matches!(i, Inst::ExcClear)), 0);
+        // But the throw still fires.
+        assert_eq!(
+            count_inst(&body, |i| matches!(
+                i,
+                Inst::ExcSet { tag_index: 0 }
+            )),
+            1
+        );
+    }
+
+    #[test]
+    fn lower_rethrow_nonzero_depth_errors() {
+        let module = mk_module_with_tag(
+            vec![mk_sig(&[], &[])],
+            vec![(
+                mk_sig(&[], &[]),
+                Some(AstFuncBody::new(
+                    vec![],
+                    vec![Node::Try {
+                        body: vec![],
+                        catches: vec![Catch {
+                            tag_index: 0,
+                            body: vec![Node::Rethrow(1)],
+                        }],
+                        catch_all: None,
+                        delegate: None,
+                    }],
+                )),
+            )],
+            0,
+        );
+        let err = lower_function(&module, 0, module.body_at(0))
+            .expect_err("expected unsupported depth error");
+        assert!(
+            format!("{err}").contains("rethrow"),
+            "error should mention rethrow: {err}"
+        );
     }
 }

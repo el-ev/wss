@@ -1,7 +1,7 @@
 use anyhow::{Context, bail};
 use wasmparser::{
     CompositeInnerType, DataKind, ElementItems, ElementKind, ExternalKind, Parser, Payload::*,
-    RefType, TableInit, TypeRef, ValType,
+    RefType, TableInit, TagKind, TypeRef, ValType,
 };
 
 use crate::ast::Node;
@@ -77,12 +77,28 @@ pub(crate) struct ModuleInfo {
     functions: Vec<FuncType>,
     globals: Vec<GlobalInfo>,
     tables: Vec<TableInfo>,
+    tags: Vec<TagInfo>,
     num_pages: u64,
     preloaded_data: Vec<(usize, Vec<u8>)>,
     num_imported_funcs: usize,
     putchar_import: Option<u32>,
     getchar_import: Option<u32>,
     entry_export: Option<u32>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct TagInfo {
+    type_index: u32,
+}
+
+impl TagInfo {
+    pub(crate) fn new(type_index: u32) -> Self {
+        Self { type_index }
+    }
+
+    pub(crate) fn type_index(&self) -> u32 {
+        self.type_index
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -140,6 +156,10 @@ impl ModuleInfo {
 
     pub(crate) fn tables(&self) -> &[TableInfo] {
         &self.tables
+    }
+
+    pub(crate) fn tag_at(&self, tag_index: u32) -> Option<&TagInfo> {
+        self.tags.get(tag_index as usize)
     }
 
     pub(crate) fn num_pages(&self) -> u64 {
@@ -217,6 +237,10 @@ impl ModuleInfo {
         &mut self.tables
     }
 
+    pub(crate) fn tags_mut(&mut self) -> &mut Vec<TagInfo> {
+        &mut self.tags
+    }
+
     pub(crate) fn preloaded_data_mut(&mut self) -> &mut Vec<(usize, Vec<u8>)> {
         &mut self.preloaded_data
     }
@@ -261,6 +285,12 @@ pub(crate) fn decode_module_info(wasm_bytes: &[u8]) -> anyhow::Result<ModuleInfo
                         TypeRef::Table(_) => {
                             bail!("imported tables are not supported");
                         }
+                        TypeRef::Tag(tag_type) => {
+                            if tag_type.kind != TagKind::Exception {
+                                bail!("only exception tags are supported");
+                            }
+                            module.tags.push(TagInfo::new(tag_type.func_type_idx));
+                        }
                         _ => {}
                     }
                 }
@@ -290,6 +320,15 @@ pub(crate) fn decode_module_info(wasm_bytes: &[u8]) -> anyhow::Result<ModuleInfo
                     module
                         .tables
                         .push(build_table_info(table.ty, init).context("table section")?);
+                }
+            }
+            TagSection(s) => {
+                for tag in s {
+                    let tag = tag.context("tag")?;
+                    if tag.kind != TagKind::Exception {
+                        bail!("only exception tags are supported");
+                    }
+                    module.tags.push(TagInfo::new(tag.func_type_idx));
                 }
             }
             ExportSection(s) => {

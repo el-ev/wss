@@ -62,6 +62,65 @@ pub(super) fn lower_inst(
     }
     match inst {
         Inst::Drop => Ok(()),
+        Inst::ExcSet { tag_index } => {
+            let tag_word = Word::from_u32_imm(*tag_index);
+            for (lane, src) in tag_word.bytes().into_iter().enumerate() {
+                b.emit(Inst8::no_dst(Inst8Kind::ExcTagSet {
+                    lane: lane as u8,
+                    val: src,
+                }));
+            }
+            b.emit(Inst8::no_dst(Inst8Kind::ExcFlagSet {
+                val: Val8::imm(1),
+            }));
+            Ok(())
+        }
+        Inst::ExcClear => {
+            b.emit(Inst8::no_dst(Inst8Kind::ExcFlagSet {
+                val: Val8::imm(0),
+            }));
+            Ok(())
+        }
+        Inst::ExcFlagGet => {
+            let flag = b.alloc_reg();
+            b.emit(Inst8::with_dst(flag, Inst8Kind::ExcFlagGet));
+            let dst = b.alloc_word();
+            b.set_word_from_byte(dst, flag);
+            b.set_word(iref, dst);
+            Ok(())
+        }
+        Inst::ExcTagGet => {
+            let dst = b.alloc_word();
+            for (lane, dst_lane) in dst.bytes().into_iter().enumerate() {
+                b.emit(Inst8::with_dst(
+                    dst_lane,
+                    Inst8Kind::ExcTagGet { lane: lane as u8 },
+                ));
+            }
+            b.set_word(iref, dst);
+            Ok(())
+        }
+        Inst::ExcPayloadSet(val_ref) => {
+            let word = b.get_word(*val_ref);
+            for (lane, src) in word.bytes().into_iter().enumerate() {
+                b.emit(Inst8::no_dst(Inst8Kind::ExcPayloadSet {
+                    lane: lane as u8,
+                    val: src,
+                }));
+            }
+            Ok(())
+        }
+        Inst::ExcPayloadGet => {
+            let dst = b.alloc_word();
+            for (lane, dst_lane) in dst.bytes().into_iter().enumerate() {
+                b.emit(Inst8::with_dst(
+                    dst_lane,
+                    Inst8Kind::ExcPayloadGet { lane: lane as u8 },
+                ));
+            }
+            b.set_word(iref, dst);
+            Ok(())
+        }
         _ => anyhow::bail!("ice: unhandled lowering op {inst:?}"),
     }
 }

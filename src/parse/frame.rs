@@ -1,7 +1,7 @@
 use anyhow::{Context, bail};
 use wasmparser::ValType;
 
-use crate::ast::{AstRef, Node};
+use crate::ast::{AstRef, Catch, Node};
 
 #[derive(Debug)]
 pub(super) enum BlockKind {
@@ -14,6 +14,17 @@ pub(super) enum BlockKind {
     Else {
         cond_ref: AstRef,
         then_insts: Vec<Node>,
+    },
+    Try,
+    TryCatch {
+        try_insts: Vec<Node>,
+        prior_catches: Vec<Catch>,
+        /// Set once `catch_all` has been seen. The currently parsing segment
+        /// is the catch_all body while `current_tag` is `None`.
+        catch_all_seen: bool,
+        /// `Some(tag)` while parsing a specific catch body; `None` while
+        /// parsing the catch_all body.
+        current_tag: Option<u32>,
     },
 }
 
