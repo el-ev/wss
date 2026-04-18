@@ -475,7 +475,7 @@ impl EnvConfig {
             default_wasm_stack_size: parse_positive_int_env("WSS_WASM_STACK_SIZE", 256),
             default_wss_memory_bytes: parse_positive_int_env("WSS_MEMORY_BYTES", 1024),
             default_wss_stack_slots: parse_positive_int_env("WSS_STACK_SLOTS", 128),
-            default_wss_js_clock: parse_bool_env("WSS_JS_CLOCK", false),
+            default_wss_js_clock: parse_bool_env("WSS_JS_CLOCK", true),
             default_wss_js_coprocessor: false,
             virtual_time_budget_ms: parse_positive_int_env("WSS_VIRTUAL_TIME_BUDGET_MS", 15_000),
             clang_timeout_ms: parse_positive_int_env("WSS_CLANG_TIMEOUT_MS", 3_000),
@@ -2028,4 +2028,77 @@ fn find_repo_root(start: &Path) -> Result<PathBuf> {
         "could not find repository root from '{}': missing Cargo.toml and tests/cases.json",
         start.display()
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::Value;
+
+    fn test_env_config(default_wss_js_clock: bool) -> EnvConfig {
+        EnvConfig {
+            root: PathBuf::from("."),
+            cases_path: PathBuf::from("tests/cases.json"),
+            out_dir: PathBuf::from("tests/out"),
+            chrome_bin: "chrome".to_string(),
+            default_wss_bin: PathBuf::from("target/release/wss"),
+            wss_bin: "target/release/wss".to_string(),
+            normal_timeout_ms: 15_000,
+            max_frames: 15_000,
+            default_wasm_stack_size: 256,
+            default_wss_memory_bytes: 1024,
+            default_wss_stack_slots: 128,
+            default_wss_js_clock,
+            default_wss_js_coprocessor: false,
+            virtual_time_budget_ms: 15_000,
+            clang_timeout_ms: 3_000,
+            wss_timeout_ms: 3_000,
+            wss_build_timeout_ms: 120_000,
+            dump_timeout_buffer_ms: 10_000,
+            include_lengthy_by_default: false,
+            include_broken_by_default: false,
+            case_retries_by_default: 1,
+            case_jobs_by_default: 1,
+            case_node_heap_mb_by_default: 3072,
+        }
+    }
+
+    fn test_case() -> TestCase {
+        TestCase {
+            id: "case".to_string(),
+            source: "tests/cases/hello_exit.c".to_string(),
+            expect: CaseExpect::default(),
+            tags: Vec::new(),
+            console_input: None,
+            js_coprocessor: None,
+            js_clock: None,
+            reference_types: None,
+            wasm_stack_size: None,
+            memory_bytes: None,
+            stack_slots: None,
+            max_frames: None,
+            virtual_time_budget_ms: None,
+        }
+    }
+
+    #[test]
+    fn build_case_config_defaults_to_env_js_clock_setting() {
+        let case = test_case();
+        let env_cfg = test_env_config(true);
+
+        let config = build_case_config(&case, &env_cfg).expect("case config should build");
+
+        assert!(config.js_clock);
+    }
+
+    #[test]
+    fn build_case_config_allows_case_to_disable_default_js_clock() {
+        let mut case = test_case();
+        case.js_clock = Some(Value::Bool(false));
+        let env_cfg = test_env_config(true);
+
+        let config = build_case_config(&case, &env_cfg).expect("case config should build");
+
+        assert!(!config.js_clock);
+    }
 }

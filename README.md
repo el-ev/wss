@@ -78,6 +78,11 @@ Options:
 - `--js-clock-debugger`: enable the JS debugger popup. Conflicts with `--no-js-clock`.
 - `--max-phys-regs <N>`: register-allocation cap, including reserved `r0`-`r3`. Default: `256`
 
+## Testing
+
+- The blackbox runner rebuilds `target/release/wss` before running when `WSS_BIN` is unset, so the suite uses the current source tree by default.
+- With no per-case override, blackbox cases default to JS clock enabled to match the CLI default. Cases can still opt out with `"js_clock": false`.
+
 ## What is supported
 
 - **i32 arithmetic** — add, sub, mul, div, rem, and, or, xor, shl, shr, rotl, rotr, clz, ctz, popcnt, eqz
