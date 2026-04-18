@@ -2,6 +2,12 @@ use super::*;
 
 impl<'a> Emitter<'a> {
     pub(super) fn emit_support(&self, out: &mut String) {
+        fn terminal_codes(uses_callstack: bool) -> impl Iterator<Item = TrapCode> {
+            TrapCode::TERMINAL
+                .into_iter()
+                .filter(move |code| uses_callstack || *code != TrapCode::CallstackOverflow)
+        }
+
         out.push_str("@function --pow2(--s <integer>) returns <number> { result: if(");
         // TODO(i64): pow2 lookup is currently capped for 32-bit bit-manipulation helpers.
         for s in 0..=32u32 {
@@ -54,61 +60,56 @@ impl<'a> Emitter<'a> {
         out.push_str(".screen::after { white-space: pre-wrap; word-break: break-all; ");
         out.push_str("content: if(");
         // TODO(i64): exit-code display currently formats return values as 32-bit hex words.
-        out.push_str("style(--pc: -1): var(--fb, \"\") \"\\a[Program exited with code \" var(--ra, \"0x00000000\") \"]\"; ");
-        out.push_str("style(--pc: -2): var(--fb, \"\") \"\\a[Trap: unreachable]\"; ");
-        out.push_str("style(--pc: -3): var(--fb, \"\") \"\\a[Trap: invalid memory access]\"; ");
-        out.push_str("style(--pc: -4): var(--fb, \"\") \"\\a[Trap: division by zero]\"; ");
-        if self.uses_callstack {
-            out.push_str("style(--pc: -5): var(--fb, \"\") \"\\a[Trap: callstack overflow]\"; ");
-        }
-        out.push_str("style(--pc: -6): var(--fb, \"\") \"\\a[Trap: uncaught exception]\"; ");
-        out.push_str("else: var(--fb, \"\")); ");
-        out.push_str("color: if(");
-        out.push_str("style(--pc: -2): #d00; style(--pc: -3): #d00; style(--pc: -4): #d00; ");
-        if self.uses_callstack {
-            out.push_str("style(--pc: -5): #d00; ");
-        }
-        out.push_str("style(--pc: -6): #d00; ");
-        out.push_str("else: #222); display: block; flex: 0 0 auto; }\n");
-
-        out.push_str("@container style(--pc: -1) { .screen::after { content: var(--fb, \"\") \"\\a[Program exited with code \" var(--ra, \"0x00000000\") \"]\"; } }\n");
-        out.push_str("@container style(--pc: -2) { .screen::after { content: var(--fb, \"\") \"\\a[Trap: unreachable]\"; color: #d00; } }\n");
-        let _ = writeln!(
-            out,
-            "@container style(--pc: {}) {{ .screen::after {{ content: var(--fb, \"\") \"\\a[Trap: invalid memory access]\"; color: #d00; }} }}",
-            TrapCode::InvalidMemoryAccess as i32
-        );
-        out.push_str("@container style(--pc: -4) { .screen::after { content: var(--fb, \"\") \"\\a[Trap: division by zero]\"; color: #d00; } }\n");
-        if self.uses_callstack {
-            let _ = writeln!(
+        for code in terminal_codes(self.uses_callstack) {
+            if code == TrapCode::Exited {
+                let _ = write!(
+                    out,
+                    "style(--pc: {}): var(--fb, \"\") \"\\a[Program exited with code \" var(--ra, \"0x00000000\") \"]\"; ",
+                    code.pc()
+                );
+                continue;
+            }
+            let _ = write!(
                 out,
-                "@container style(--pc: {}) {{ .screen::after {{ content: var(--fb, \"\") \"\\a[Trap: callstack overflow]\"; color: #d00; }} }}",
-                TrapCode::CallstackOverflow as i32
+                "style(--pc: {}): var(--fb, \"\") \"\\a[{}]\"; ",
+                code.pc(),
+                code.screen_label().unwrap_or("")
             );
         }
-        let _ = writeln!(
-            out,
-            "@container style(--pc: {}) {{ .screen::after {{ content: var(--fb, \"\") \"\\a[Trap: uncaught exception]\"; color: #d00; }} }}",
-            TrapCode::UncaughtException as i32
-        );
+        out.push_str("else: var(--fb, \"\")); ");
+        out.push_str("color: if(");
+        for code in terminal_codes(self.uses_callstack) {
+            if code == TrapCode::Exited {
+                continue;
+            }
+            let _ = write!(out, "style(--pc: {}): #d00; ", code.pc());
+        }
+        out.push_str("else: #222); display: block; flex: 0 0 auto; }\n");
 
-        let pause_start = if self.uses_callstack {
-            TrapCode::CallstackOverflow as i32
-        } else {
-            TrapCode::DivisionByZero as i32
-        };
-        for code in pause_start..=(TrapCode::Exited as i32) {
+        for code in terminal_codes(self.uses_callstack) {
+            if code == TrapCode::Exited {
+                let _ = writeln!(
+                    out,
+                    "@container style(--pc: {}) {{ .screen::after {{ content: var(--fb, \"\") \"\\a[Program exited with code \" var(--ra, \"0x00000000\") \"]\"; }} }}",
+                    code.pc()
+                );
+                continue;
+            }
+            let _ = writeln!(
+                out,
+                "@container style(--pc: {}) {{ .screen::after {{ content: var(--fb, \"\") \"\\a[{}]\"; color: #d00; }} }}",
+                code.pc(),
+                code.screen_label().unwrap_or("")
+            );
+        }
+
+        for code in terminal_codes(self.uses_callstack) {
             let _ = writeln!(
                 out,
                 ".clk:has(.terminal) {{ @container style(--pc: {}) {{ .terminal {{ animation-play-state: paused, paused !important; }} }} }}",
-                code
+                code.pc()
             );
         }
-        let _ = writeln!(
-            out,
-            ".clk:has(.terminal) {{ @container style(--pc: {}) {{ .terminal {{ animation-play-state: paused, paused !important; }} }} }}",
-            TrapCode::UncaughtException as i32
-        );
     }
 
     pub(super) fn emit_i2char(&self, out: &mut String) {

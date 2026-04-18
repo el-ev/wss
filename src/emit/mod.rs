@@ -28,6 +28,7 @@ const BASE_HTML: &str = include_str!("base.html");
 const PROPS_PLACEHOLDER: &str = "/*__WSS_PROPS__*/";
 const LOGIC_PLACEHOLDER: &str = "/*__WSS_LOGIC__*/";
 const SUPPORT_PLACEHOLDER: &str = "/*__WSS_SUPPORT__*/";
+const TERMINAL_PCS_PLACEHOLDER: &str = "/*__WSS_TERMINAL_PCS__*/";
 const READ_LOOKUP_CHUNK: usize = 128;
 const VIS_SHADOW_CHUNK: usize = 8;
 const VIS_COLS: usize = 128;
@@ -330,6 +331,12 @@ pub fn emit_program(program: &Ir8Program, config: EmitConfig) -> anyhow::Result<
     let html = replace_placeholder_once(BASE_HTML, PROPS_PLACEHOLDER, &props_css)?;
     let html = replace_placeholder_once(&html, LOGIC_PLACEHOLDER, &logic_css)?;
     let html = replace_placeholder_once(&html, SUPPORT_PLACEHOLDER, &support_css)?;
+    let terminal_pcs = TrapCode::TERMINAL
+        .iter()
+        .map(|code| code.pc().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let html = replace_placeholder_once(&html, TERMINAL_PCS_PLACEHOLDER, &terminal_pcs)?;
     emitter.apply_template_features(html)
 }
 
