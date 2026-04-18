@@ -286,6 +286,12 @@ pub(crate) fn decode_module_info(wasm_bytes: &[u8]) -> anyhow::Result<ModuleInfo
                         TypeRef::Table(_) => {
                             bail!("imported tables are not supported");
                         }
+                        TypeRef::Memory(_) => {
+                            bail!("imported memories are not supported");
+                        }
+                        TypeRef::Global(_) => {
+                            bail!("imported globals are not supported");
+                        }
                         TypeRef::Tag(tag_type) => {
                             if tag_type.kind != TagKind::Exception {
                                 bail!("only exception tags are supported");
@@ -479,6 +485,30 @@ mod tests {
         let err =
             decode_module_info(&wasm_bytes).expect_err("multiple memories should be rejected");
         assert!(format!("{err:#}").contains("multiple memories"));
+    }
+
+    #[test]
+    fn decode_module_info_rejects_imported_memory() {
+        let wasm_bytes = [
+            0x00, 0x61, 0x73, 0x6d, // magic
+            0x01, 0x00, 0x00, 0x00, // version
+            0x02, 0x0a, 0x01, 0x03, 0x65, 0x6e, 0x76, 0x01, 0x6d, 0x02, 0x00, 0x00,
+        ];
+
+        let err = decode_module_info(&wasm_bytes).expect_err("imported memory should be rejected");
+        assert!(format!("{err:#}").contains("imported memories"));
+    }
+
+    #[test]
+    fn decode_module_info_rejects_imported_global() {
+        let wasm_bytes = [
+            0x00, 0x61, 0x73, 0x6d, // magic
+            0x01, 0x00, 0x00, 0x00, // version
+            0x02, 0x0a, 0x01, 0x03, 0x65, 0x6e, 0x76, 0x01, 0x67, 0x03, 0x7f, 0x00,
+        ];
+
+        let err = decode_module_info(&wasm_bytes).expect_err("imported global should be rejected");
+        assert!(format!("{err:#}").contains("imported globals"));
     }
 }
 
