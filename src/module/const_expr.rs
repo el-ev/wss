@@ -7,8 +7,8 @@ pub(super) fn parse_const_expr(expr: wasmparser::ConstExpr<'_>) -> anyhow::Resul
     let mut reader = expr.get_operators_reader();
     let op = reader.read().context("const expr")?;
     let val = match op {
-        // TODO(i64): const-init parsing only accepts i32 const expressions today.
         Operator::I32Const { value } => ConstInit::I32(value),
+        Operator::I64Const { value } => ConstInit::I64(value),
         other => anyhow::bail!("unsupported const init operator: {:?}", other),
     };
     let end = reader.read().context("const expr end")?;

@@ -340,7 +340,11 @@ pub fn emit_program(program: &Ir8Program, config: EmitConfig) -> anyhow::Result<
     emitter.apply_template_features(html)
 }
 
-fn replace_placeholder_once(template: &str, placeholder: &str, replacement: &str) -> anyhow::Result<String> {
+fn replace_placeholder_once(
+    template: &str,
+    placeholder: &str,
+    replacement: &str,
+) -> anyhow::Result<String> {
     let matches = template.match_indices(placeholder).count();
     anyhow::ensure!(
         matches == 1,
@@ -614,7 +618,8 @@ impl<'a> Emitter<'a> {
             features |= TemplateFeatures::FN_EQ | TemplateFeatures::FN_EQZ;
         }
         if usage.uses_ne {
-            features |= TemplateFeatures::FN_NE | TemplateFeatures::FN_NEZ | TemplateFeatures::FN_EQZ;
+            features |=
+                TemplateFeatures::FN_NE | TemplateFeatures::FN_NEZ | TemplateFeatures::FN_EQZ;
         }
         if uses_callstack {
             features |= TemplateFeatures::SP_INDICATOR;
@@ -624,7 +629,12 @@ impl<'a> Emitter<'a> {
         features
     }
 
-    fn apply_marked_section(out: &mut String, start: &str, end: &str, keep: bool) -> anyhow::Result<()> {
+    fn apply_marked_section(
+        out: &mut String,
+        start: &str,
+        end: &str,
+        keep: bool,
+    ) -> anyhow::Result<()> {
         fn marker_line_bounds(s: &str, marker_idx: usize) -> (usize, usize) {
             let line_start = s[..marker_idx].rfind('\n').map(|i| i + 1).unwrap_or(0);
             let line_end = s[marker_idx..]

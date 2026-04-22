@@ -404,15 +404,11 @@ impl<'a> Emitter<'a> {
                         }
                     }
                     Inst8Kind::ExcTagSet { lane, val } => {
-                        exc_tag_set_exprs[*lane as usize] =
-                            Some(Self::val_expr(&reg_now, *val));
+                        exc_tag_set_exprs[*lane as usize] = Some(Self::val_expr(&reg_now, *val));
                     }
                     Inst8Kind::ExcTagGet { lane } => {
                         if let Some(dst) = op.dst {
-                            reg_now.insert(
-                                dst.expect_vreg(),
-                                format!("var(--_1exc_tag_{})", lane),
-                            );
+                            reg_now.insert(dst.expect_vreg(), format!("var(--_1exc_tag_{})", lane));
                         }
                     }
                     Inst8Kind::ExcPayloadSet { lane, val } => {
@@ -614,22 +610,14 @@ impl<'a> Emitter<'a> {
                 }
                 for (lane, slot) in exc_tag_set_exprs.iter().enumerate() {
                     if let Some(e) = slot {
-                        let _ = write!(
-                            exc_tag_arms[lane],
-                            "style(--_1pc: {}): {}; ",
-                            pc, e
-                        );
+                        let _ = write!(exc_tag_arms[lane], "style(--_1pc: {}): {}; ", pc, e);
                     }
                 }
             }
             if self.uses_exc_payload {
                 for (lane, slot) in exc_payload_set_exprs.iter().enumerate() {
                     if let Some(e) = slot {
-                        let _ = write!(
-                            exc_payload_arms[lane],
-                            "style(--_1pc: {}): {}; ",
-                            pc, e
-                        );
+                        let _ = write!(exc_payload_arms[lane], "style(--_1pc: {}): {}; ", pc, e);
                     }
                 }
             }
@@ -693,11 +681,7 @@ impl<'a> Emitter<'a> {
         if self.uses_exceptions {
             let _ = writeln!(out, " --_1exc_flag: var(--_2exc_flag, 0);");
             for lane in 0..4u8 {
-                let _ = writeln!(
-                    out,
-                    " --_1exc_tag_{}: var(--_2exc_tag_{}, 0);",
-                    lane, lane
-                );
+                let _ = writeln!(out, " --_1exc_tag_{}: var(--_2exc_tag_{}, 0);", lane, lane);
             }
         }
         if self.uses_callstack {
@@ -961,13 +945,7 @@ impl<'a> Emitter<'a> {
                 }
             },
             Terminator8::Return { val } => {
-                let exit_code_expr = val.map(|w| Self::word_hex_expr(reg_now, w));
-                if let Some(w) = val {
-                    reg_now.insert(0, Self::val_expr(reg_now, w.b0));
-                    reg_now.insert(1, Self::val_expr(reg_now, w.b1));
-                    reg_now.insert(2, Self::val_expr(reg_now, w.b2));
-                    reg_now.insert(3, Self::val_expr(reg_now, w.b3));
-                }
+                let exit_code_expr = Self::emit_exit_value(reg_now, *val);
                 let fallback_pc_expr = if self.uses_callstack {
                     // Return may be in a later packed cycle than CsLoadPc; in that case,
                     // re-read RA from the current call-stack top.
@@ -989,13 +967,7 @@ impl<'a> Emitter<'a> {
                 }
             }
             Terminator8::Exit { val } => {
-                let exit_code_expr = val.map(|w| Self::word_hex_expr(reg_now, w));
-                if let Some(w) = val {
-                    reg_now.insert(0, Self::val_expr(reg_now, w.b0));
-                    reg_now.insert(1, Self::val_expr(reg_now, w.b1));
-                    reg_now.insert(2, Self::val_expr(reg_now, w.b2));
-                    reg_now.insert(3, Self::val_expr(reg_now, w.b3));
-                }
+                let exit_code_expr = Self::emit_exit_value(reg_now, *val);
                 TermResult {
                     pc_expr: TrapCode::Exited.pc().to_string(),
                     trap_expr: "0".to_string(),
@@ -1380,12 +1352,49 @@ impl<'a> Emitter<'a> {
         format!("--hex({}) --hex({})", hi, lo)
     }
 
-    pub(super) fn word_hex_expr(now: &HashMap<u16, String>, w: Word) -> String {
+    fn word_hex_body_expr(now: &HashMap<u16, String>, w: Word) -> String {
         let b3 = Self::byte_hex_expr(&Self::val_expr(now, w.b3));
         let b2 = Self::byte_hex_expr(&Self::val_expr(now, w.b2));
         let b1 = Self::byte_hex_expr(&Self::val_expr(now, w.b1));
         let b0 = Self::byte_hex_expr(&Self::val_expr(now, w.b0));
-        format!("\"0x\" {} {} {} {}", b3, b2, b1, b0)
+        format!("{} {} {} {}", b3, b2, b1, b0)
+    }
+
+    pub(super) fn word_hex_expr(now: &HashMap<u16, String>, w: Word) -> String {
+        format!("\"0x\" {}", Self::word_hex_body_expr(now, w))
+    }
+
+    fn emit_exit_value(
+        reg_now: &mut HashMap<u16, String>,
+        val: Option<crate::ir8::ValueWords>,
+    ) -> Option<String> {
+        let exit_code_expr = val.map(|w| Self::value_hex_expr(reg_now, w));
+        if let Some(w) = val {
+            for (i, expr) in Self::word_bytes_expr(reg_now, w.lo).into_iter().enumerate() {
+                reg_now.insert(i as u16, expr);
+            }
+            if let Some(hi) = w.hi {
+                for (i, expr) in Self::word_bytes_expr(reg_now, hi).into_iter().enumerate() {
+                    reg_now.insert(4 + i as u16, expr);
+                }
+            }
+        }
+        exit_code_expr
+    }
+
+    pub(super) fn value_hex_expr(
+        now: &HashMap<u16, String>,
+        value: crate::ir8::ValueWords,
+    ) -> String {
+        if let Some(hi) = value.hi {
+            format!(
+                "\"0x\" {} {}",
+                Self::word_hex_body_expr(now, hi),
+                Self::word_hex_body_expr(now, value.lo)
+            )
+        } else {
+            Self::word_hex_expr(now, value.lo)
+        }
     }
 
     pub(super) fn coprocessor_setup_for_builtin_call(

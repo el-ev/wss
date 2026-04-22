@@ -1,3 +1,5 @@
+use wasmparser::ValType;
+
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub struct AstRef(usize);
 
@@ -26,6 +28,18 @@ impl From<usize> for AstRef {
 impl From<AstRef> for usize {
     fn from(value: AstRef) -> Self {
         value.0
+    }
+}
+
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub struct TypedAstRef {
+    pub value: AstRef,
+    pub ty: ValType,
+}
+
+impl TypedAstRef {
+    pub const fn new(value: AstRef, ty: ValType) -> Self {
+        Self { value, ty }
     }
 }
 
@@ -70,12 +84,16 @@ pub enum UnOp {
     Eqz,
     Extend8S,
     Extend16S,
+    Extend32S,
+    WrapI64,
+    ExtendI32S,
+    ExtendI32U,
 }
 
 #[derive(Debug, Clone)]
 pub enum Node {
-    // TODO(i64): AST value nodes are currently i32-only; add i64/typed const and op variants.
     I32Const(i32),
+    I64Const(i64),
 
     LocalGet(u32),
     LocalTee(u32, AstRef),
@@ -83,18 +101,33 @@ pub enum Node {
     MemorySize,
     TableSize(u32),
 
-    Unary(UnOp, AstRef),
-    Binary(BinOp, AstRef, AstRef),
-    Compare(RelOp, AstRef, AstRef),
+    Unary {
+        op: UnOp,
+        ty: ValType,
+        val: AstRef,
+    },
+    Binary {
+        op: BinOp,
+        ty: ValType,
+        lhs: AstRef,
+        rhs: AstRef,
+    },
+    Compare {
+        op: RelOp,
+        ty: ValType,
+        lhs: AstRef,
+        rhs: AstRef,
+    },
 
     Select {
+        ty: ValType,
         cond: AstRef,
         then_val: AstRef,
         else_val: AstRef,
     },
 
     Load {
-        // TODO(i64): load size handling is wired for i32 consumers (8/16/32 extensions only).
+        ty: ValType,
         size: usize,
         signed: bool,
         offset: usize,
@@ -114,7 +147,7 @@ pub enum Node {
     GlobalSet(u32, AstRef),
 
     Store {
-        // TODO(i64): store size handling is wired for i32 producers (8/16/32 only).
+        ty: ValType,
         size: usize,
         offset: usize,
         value: AstRef,

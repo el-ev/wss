@@ -71,10 +71,10 @@ fn validate_imports_exports(module: &ModuleInfo) -> anyhow::Result<()> {
         .entry_export()
         .context("module must export '_start'")?;
     let entry_func = func_signature(module, entry_idx)?;
-    // TODO(i64): top-level ABI currently requires `_start` to return i32.
-    if entry_func.results() != [ValType::I32] {
-        bail!("exported '_start' must return i32");
+    if entry_func.results().len() != 1 {
+        bail!("exported '_start' must return exactly one value");
     }
+    validate_valtype(entry_func.results()[0], "exported '_start' result")?;
     Ok(())
 }
 
@@ -97,8 +97,7 @@ fn validate_types(module: &ModuleInfo) -> anyhow::Result<()> {
 
 fn validate_valtype(v: ValType, location: &str) -> anyhow::Result<()> {
     match v {
-        // TODO(i64): validator accepts only i32 value types today.
-        ValType::I32 => Ok(()),
+        ValType::I32 | ValType::I64 => Ok(()),
         _ => bail!("unsupported value type {:?} at {}", v, location),
     }
 }
@@ -171,16 +170,16 @@ mod tests {
             0x03, 0x02, 0x01, 0x00, // function section
             0x07, 0x0a, 0x01, 0x06, 0x5f, 0x73, 0x74, 0x61, 0x72, 0x74, 0x00,
             0x00, // export _start
-            0x0a, 0x0c, 0x01, 0x0a, 0x00, 0x02, 0x40, 0x0b, 0x42, 0x00, 0x1a, 0x41,
-            0x00, 0x0b, // code: block/end, then invalid i64.const
+            0x0a, 0x0f, 0x01, 0x0d, 0x00, 0x02, 0x40, 0x0b, 0x43, 0x00, 0x00, 0x00, 0x00, 0x1a,
+            0x41, 0x00, 0x0b, // code: block/end, then invalid f32.const
         ];
 
         let module = decode_module_info(&wasm_bytes).expect("module should decode");
-        let err = validate(&module, &wasm_bytes).expect_err("nested trailing i64 op should fail");
+        let err = validate(&module, &wasm_bytes).expect_err("nested trailing f32 op should fail");
         let msg = format!("{err:#}");
         assert!(
-            msg.contains("i64 not supported"),
-            "expected i64 validation failure, got: {msg}"
+            msg.contains("floating point not supported"),
+            "expected floating point validation failure, got: {msg}"
         );
     }
 }

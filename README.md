@@ -96,7 +96,9 @@ Options:
 
 ## What is under development
 
-- **i64 arithmetic**
+- **Partial i64 integer support**
+  - The transpiler now accepts integer-only wasm signatures using `i32` and `i64`, including `i64` `_start` returns and a working end-to-end path for basic `i64` constants, direct-call/return plumbing, locals, and simple integer operations.
+  - The lower8/runtime path is still incomplete for the full wasm `i64` opcode set, so some `i64` operations may still fail at transpile time.
 
 ## What will not be supported
 

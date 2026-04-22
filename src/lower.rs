@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::Context;
+use wasmparser::ValType;
 
 use crate::ast::{Node, RelOp};
 use crate::ir::{BasicBlock, BlockId, Inst, IrNode, Terminator};
@@ -194,9 +195,6 @@ fn remove_dead_blocks(blocks: &mut Vec<BasicBlock>, entry: &mut BlockId) -> anyh
 }
 
 fn remap_ref(r: &mut IrNode, remap: &HashMap<IrNode, IrNode>) -> anyhow::Result<()> {
-    if r.is_imm() {
-        return Ok(());
-    }
     let old = *r;
     *r = *remap
         .get(&old)
@@ -214,6 +212,7 @@ fn remap_refs<'a>(
 fn remap_inst_refs(inst: &mut Inst, remap: &HashMap<IrNode, IrNode>) -> anyhow::Result<()> {
     match inst {
         Inst::I32Const(_)
+        | Inst::I64Const(_)
         | Inst::LocalGet(_)
         | Inst::GlobalGet(_)
         | Inst::MemorySize
@@ -228,12 +227,12 @@ fn remap_inst_refs(inst: &mut Inst, remap: &HashMap<IrNode, IrNode>) -> anyhow::
         Inst::LocalSet(_, v)
         | Inst::LocalTee(_, v)
         | Inst::GlobalSet(_, v)
-        | Inst::Unary(_, v)
+        | Inst::Unary { val: v, .. }
         | Inst::Putchar(v)
         | Inst::Load { addr: v, .. }
         | Inst::ExcPayloadSet(v) => remap_ref(v, remap)?,
-        Inst::Binary(_, l, r)
-        | Inst::Compare(_, l, r)
+        Inst::Binary { lhs: l, rhs: r, .. }
+        | Inst::Compare { lhs: l, rhs: r, .. }
         | Inst::Store {
             addr: l, val: r, ..
         } => {
@@ -244,6 +243,7 @@ fn remap_inst_refs(inst: &mut Inst, remap: &HashMap<IrNode, IrNode>) -> anyhow::
             cond,
             if_true,
             if_false,
+            ..
         } => {
             remap_refs([cond, if_true, if_false], remap)?;
         }
@@ -373,7 +373,7 @@ fn lower_block_nodes(block: &[Node], ctx: &mut LowerCtx) -> anyhow::Result<()> {
     let mut ref_map: Vec<IrNode> = Vec::with_capacity(block.len());
     for node in block.iter() {
         ctx.last_ref_override = None;
-        lower_node(node, block, ctx, &ref_map)?;
+        lower_node(node, ctx, &ref_map)?;
         let result_ref = ctx
             .last_ref_override
             .take()
@@ -387,80 +387,78 @@ fn module_uses_exceptions(module: &AstModule) -> bool {
     module.info().tag_at(0).is_some()
 }
 
-fn ast_operand_ref(ast_ref: crate::ast::AstRef, block: &[Node], ref_map: &[IrNode]) -> IrNode {
-    match block[ast_ref.index()] {
-        // TODO(i64): fast-path immediates are currently encoded only for i32 consts.
-        Node::I32Const(v) => IrNode::imm_i32(v),
-        _ => ref_map[ast_ref.index()],
-    }
-}
-
 fn map_ast_args(args: &[crate::ast::AstRef], ref_map: &[IrNode]) -> Vec<IrNode> {
     args.iter().map(|&a| ref_map[a.index()]).collect()
 }
 
-fn lower_node(
-    node: &Node,
-    block: &[Node],
-    ctx: &mut LowerCtx,
-    ref_map: &[IrNode],
-) -> anyhow::Result<()> {
-    let builder = &mut ctx.builder;
+fn lower_node(node: &Node, ctx: &mut LowerCtx, ref_map: &[IrNode]) -> anyhow::Result<()> {
     match node {
-        // TODO(i64): AST-to-IR lowering currently emits i32 const instructions only.
         Node::I32Const(v) => {
-            builder.push(Inst::I32Const(*v));
+            ctx.builder.push(Inst::I32Const(*v));
+        }
+        Node::I64Const(v) => {
+            ctx.builder.push(Inst::I64Const(*v));
         }
         Node::LocalGet(l) => {
-            builder.push(Inst::LocalGet(*l));
+            ctx.builder.push(Inst::LocalGet(*l));
         }
         Node::LocalTee(l, r) => {
-            builder.push(Inst::LocalTee(*l, ref_map[r.index()]));
+            ctx.builder.push(Inst::LocalTee(*l, ref_map[r.index()]));
         }
         Node::GlobalGet(g) => {
-            builder.push(Inst::GlobalGet(*g));
+            ctx.builder.push(Inst::GlobalGet(*g));
         }
         Node::MemorySize => {
-            builder.push(Inst::MemorySize);
+            ctx.builder.push(Inst::MemorySize);
         }
         Node::TableSize(t) => {
-            builder.push(Inst::TableSize(*t));
+            ctx.builder.push(Inst::TableSize(*t));
         }
-        Node::Unary(op, r) => {
-            builder.push(Inst::Unary(*op, ref_map[r.index()]));
+        Node::Unary { op, ty, val } => {
+            ctx.builder.push(Inst::Unary {
+                op: *op,
+                ty: *ty,
+                val: ref_map[val.index()],
+            });
         }
-        Node::Binary(op, l, r) => {
-            builder.push(Inst::Binary(
-                *op,
-                ast_operand_ref(*l, block, ref_map),
-                ast_operand_ref(*r, block, ref_map),
-            ));
+        Node::Binary { op, ty, lhs, rhs } => {
+            ctx.builder.push(Inst::Binary {
+                op: *op,
+                ty: *ty,
+                lhs: ref_map[lhs.index()],
+                rhs: ref_map[rhs.index()],
+            });
         }
-        Node::Compare(op, l, r) => {
-            builder.push(Inst::Compare(
-                *op,
-                ast_operand_ref(*l, block, ref_map),
-                ast_operand_ref(*r, block, ref_map),
-            ));
+        Node::Compare { op, ty, lhs, rhs } => {
+            ctx.builder.push(Inst::Compare {
+                op: *op,
+                ty: *ty,
+                lhs: ref_map[lhs.index()],
+                rhs: ref_map[rhs.index()],
+            });
         }
         Node::Select {
+            ty,
             cond,
             then_val,
             else_val,
         } => {
             ctx.builder.push(Inst::Select {
+                ty: *ty,
                 cond: ref_map[cond.index()],
                 if_true: ref_map[then_val.index()],
                 if_false: ref_map[else_val.index()],
             });
         }
         Node::Load {
+            ty,
             size,
             signed,
             offset,
             address,
         } => {
             ctx.builder.push(Inst::Load {
+                ty: *ty,
                 size: *size as u8,
                 signed: *signed,
                 offset: *offset as u32,
@@ -504,12 +502,14 @@ fn lower_node(
             ctx.builder.push(Inst::GlobalSet(*g, ref_map[r.index()]));
         }
         Node::Store {
+            ty,
             size,
             offset,
             value,
             address,
         } => {
             ctx.builder.push(Inst::Store {
+                ty: *ty,
                 size: *size as u8,
                 offset: *offset as u32,
                 val: ref_map[value.index()],
@@ -653,10 +653,7 @@ fn lower_node(
         }
         Node::Rethrow(depth) => {
             if *depth != 0 {
-                anyhow::bail!(
-                    "rethrow with depth > 0 not supported (got depth {})",
-                    depth
-                );
+                anyhow::bail!("rethrow with depth > 0 not supported (got depth {})", depth);
             }
             let tag_idx = ctx
                 .builder
@@ -664,9 +661,8 @@ fn lower_node(
                 .last()
                 .copied()
                 .context("rethrow outside exception handler scope")?;
-            let tag_index = tag_idx.context(
-                "rethrow from catch_all is not supported (no static tag to re-raise)",
-            )?;
+            let tag_index = tag_idx
+                .context("rethrow from catch_all is not supported (no static tag to re-raise)")?;
             ctx.builder.push(Inst::ExcSet { tag_index });
             let handler = ctx
                 .builder
@@ -757,8 +753,13 @@ fn lower_try(
     // Dispatch: test current exc_tag against each catch's tag_index.
     for (i, catch) in catches.iter().enumerate() {
         let tag = ctx.builder.push(Inst::ExcTagGet);
-        let expected = IrNode::imm_i32(catch.tag_index as i32);
-        let cmp = ctx.builder.push(Inst::Compare(RelOp::Eq, tag, expected));
+        let expected = ctx.builder.push(Inst::I32Const(catch.tag_index as i32));
+        let cmp = ctx.builder.push(Inst::Compare {
+            op: RelOp::Eq,
+            ty: ValType::I32,
+            lhs: tag,
+            rhs: expected,
+        });
         let next_check = ctx.builder.alloc_block();
         ctx.builder.finish_and_switch(
             Terminator::Branch {
@@ -770,10 +771,8 @@ fn lower_try(
         );
     }
     let dispatch_tail = catch_all_block.unwrap_or(uncaught_forward_block);
-    ctx.builder.finish_and_switch(
-        Terminator::Goto(dispatch_tail),
-        uncaught_forward_block,
-    );
+    ctx.builder
+        .finish_and_switch(Terminator::Goto(dispatch_tail), uncaught_forward_block);
 
     // Uncaught forward: no catch matched; propagate to outer handler.
     let outer_handler = ctx
@@ -952,7 +951,12 @@ mod tests {
                 id: BlockId(2),
                 insts: vec![
                     Inst::LocalGet(0),
-                    Inst::Binary(BinOp::Add, IrNode(0), IrNode(2)),
+                    Inst::Binary {
+                        op: BinOp::Add,
+                        ty: ValType::I32,
+                        lhs: IrNode(0),
+                        rhs: IrNode(2),
+                    },
                 ],
                 terminator: Terminator::Return(Some(IrNode(3))),
             },
@@ -967,7 +971,12 @@ mod tests {
         assert!(matches!(blocks[1].insts[0], Inst::LocalGet(0)));
         assert!(matches!(
             blocks[1].insts[1],
-            Inst::Binary(BinOp::Add, IrNode(0), IrNode(1))
+            Inst::Binary {
+                op: BinOp::Add,
+                ty: ValType::I32,
+                lhs: IrNode(0),
+                rhs: IrNode(1)
+            }
         ));
         assert!(matches!(
             blocks[1].terminator,
@@ -1135,12 +1144,22 @@ mod tests {
             vec![(
                 mk_sig(&[ValType::I32], &[ValType::I32]),
                 Some(AstFuncBody::new(
-                    vec![],
+                    vec![ValType::I32],
                     vec![
-                        Node::I32Const(10),                                        // 0
-                        Node::LocalGet(0),                                         // 1
-                        Node::Binary(BinOp::DivU, AstRef::new(1), AstRef::new(0)), // 2
-                        Node::Compare(RelOp::Eq, AstRef::new(2), AstRef::new(0)),  // 3
+                        Node::I32Const(10), // 0
+                        Node::LocalGet(0),  // 1
+                        Node::Binary {
+                            op: BinOp::DivU,
+                            ty: ValType::I32,
+                            lhs: AstRef::new(1),
+                            rhs: AstRef::new(0),
+                        }, // 2
+                        Node::Compare {
+                            op: RelOp::Eq,
+                            ty: ValType::I32,
+                            lhs: AstRef::new(2),
+                            rhs: AstRef::new(0),
+                        }, // 3
                         Node::Return(Some(AstRef::new(3))),
                     ],
                 )),
@@ -1153,11 +1172,21 @@ mod tests {
 
         assert!(matches!(
             block.insts[2],
-            Inst::Binary(BinOp::DivU, IrNode(1), r) if r.imm_i32_value() == Some(10)
+            Inst::Binary {
+                op: BinOp::DivU,
+                ty: ValType::I32,
+                lhs: IrNode(1),
+                rhs: IrNode(0)
+            }
         ));
         assert!(matches!(
             block.insts[3],
-            Inst::Compare(RelOp::Eq, IrNode(2), r) if r.imm_i32_value() == Some(10)
+            Inst::Compare {
+                op: RelOp::Eq,
+                ty: ValType::I32,
+                lhs: IrNode(2),
+                rhs: IrNode(0)
+            }
         ));
     }
 
@@ -1195,10 +1224,7 @@ mod tests {
 
         // ExcSet{tag:0} emitted exactly once (for the throw).
         assert_eq!(
-            count_inst(&body, |i| matches!(
-                i,
-                Inst::ExcSet { tag_index: 0 }
-            )),
+            count_inst(&body, |i| matches!(i, Inst::ExcSet { tag_index: 0 })),
             1
         );
         // ExcTagGet present for dispatch; ExcClear at catch entry.
@@ -1264,10 +1290,7 @@ mod tests {
         let body = ir.expect("body");
 
         assert_eq!(count_inst(&body, |i| matches!(i, Inst::ExcFlagGet)), 0);
-        assert_eq!(
-            count_inst(&body, |i| matches!(i, Inst::ExcSet { .. })),
-            0
-        );
+        assert_eq!(count_inst(&body, |i| matches!(i, Inst::ExcSet { .. })), 0);
         assert_eq!(count_inst(&body, |i| matches!(i, Inst::ExcClear)), 0);
     }
 
@@ -1299,10 +1322,7 @@ mod tests {
         assert_eq!(count_inst(&body, |i| matches!(i, Inst::ExcClear)), 0);
         // But the throw still fires.
         assert_eq!(
-            count_inst(&body, |i| matches!(
-                i,
-                Inst::ExcSet { tag_index: 0 }
-            )),
+            count_inst(&body, |i| matches!(i, Inst::ExcSet { tag_index: 0 })),
             1
         );
     }

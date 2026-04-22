@@ -1,7 +1,7 @@
 use anyhow::{Context, bail};
 use wasmparser::ValType;
 
-use crate::ast::{AstRef, Catch, Node};
+use crate::ast::{AstRef, Catch, Node, TypedAstRef};
 
 #[derive(Debug)]
 pub(super) enum BlockKind {
@@ -34,7 +34,7 @@ pub(super) struct BlockFrame {
     pub(super) temp_locals: Vec<u32>,
     pub(super) insts: Vec<Node>,
     pub(super) unreachable: bool,
-    pub(super) dummy_ref: Option<AstRef>,
+    pub(super) dummy_refs: Vec<TypedAstRef>,
 }
 
 impl BlockFrame {
@@ -44,53 +44,76 @@ impl BlockFrame {
         r
     }
 
-    pub(super) fn ensure_dummy(&mut self) {
-        if self.dummy_ref.is_none() {
-            // TODO(i64): unreachable-stack dummy values are currently materialized as i32 consts.
-            self.dummy_ref = Some(self.emit(Node::I32Const(0)));
+    pub(super) fn ensure_dummy(&mut self, ty: ValType) -> TypedAstRef {
+        if let Some(existing) = self.dummy_refs.iter().find(|existing| existing.ty == ty) {
+            return *existing;
         }
+        let value = match ty {
+            ValType::I32 => self.emit(Node::I32Const(0)),
+            ValType::I64 => self.emit(Node::I64Const(0)),
+            _ => unreachable!("unsupported dummy type {:?}", ty),
+        };
+        let typed = TypedAstRef::new(value, ty);
+        self.dummy_refs.push(typed);
+        typed
     }
 
-    pub(super) fn pop_ref(&mut self, ref_stack: &mut Vec<AstRef>) -> anyhow::Result<AstRef> {
+    pub(super) fn pop_ref(
+        &mut self,
+        ref_stack: &mut Vec<TypedAstRef>,
+        expected_ty: ValType,
+    ) -> anyhow::Result<TypedAstRef> {
         if self.unreachable {
-            self.ensure_dummy();
-            self.dummy_ref
-                .context("ice: missing dummy ref in unreachable frame")
+            Ok(self.ensure_dummy(expected_ty))
         } else {
-            ref_stack.pop().context("stack underflow")
+            let typed = ref_stack.pop().context("stack underflow")?;
+            if typed.ty != expected_ty {
+                bail!(
+                    "type mismatch: expected {:?}, got {:?}",
+                    expected_ty,
+                    typed.ty
+                );
+            }
+            Ok(typed)
         }
     }
 
     pub(super) fn pop_ref_or_dummy(
         &mut self,
-        ref_stack: &mut Vec<AstRef>,
-    ) -> anyhow::Result<AstRef> {
+        ref_stack: &mut Vec<TypedAstRef>,
+        expected_ty: ValType,
+    ) -> anyhow::Result<TypedAstRef> {
         if self.unreachable || ref_stack.is_empty() {
-            self.ensure_dummy();
-            self.dummy_ref
-                .context("ice: missing dummy ref in pop_ref_or_dummy")
+            Ok(self.ensure_dummy(expected_ty))
         } else {
-            ref_stack
+            let typed = ref_stack
                 .pop()
-                .context("stack underflow in pop_ref_or_dummy")
+                .context("stack underflow in pop_ref_or_dummy")?;
+            if typed.ty != expected_ty {
+                bail!(
+                    "type mismatch: expected {:?}, got {:?}",
+                    expected_ty,
+                    typed.ty
+                );
+            }
+            Ok(typed)
         }
     }
 }
 
 pub(super) fn materialize_ref_stack(
-    ref_stack: &mut Vec<AstRef>,
+    ref_stack: &mut Vec<TypedAstRef>,
     block_stack: &mut [BlockFrame],
     locals: &mut Vec<ValType>,
 ) -> anyhow::Result<Vec<u32>> {
     let refs = std::mem::take(ref_stack);
     let parent = current_frame_mut(block_stack)?;
     let mut temps = Vec::with_capacity(refs.len());
-    for r in refs {
-        // TODO(i64): spilled temporary refs are currently forced to i32 locals.
-        locals.push(ValType::I32);
+    for typed in refs {
+        locals.push(typed.ty);
         let temp = (locals.len() - 1) as u32;
         temps.push(temp);
-        parent.emit(Node::LocalSet(temp, r));
+        parent.emit(Node::LocalSet(temp, typed.value));
     }
     Ok(temps)
 }
@@ -115,10 +138,11 @@ pub(super) fn target_block_index(
 }
 
 pub(super) fn pop_call_args(
-    ref_stack: &mut Vec<AstRef>,
-    arg_count: usize,
+    ref_stack: &mut Vec<TypedAstRef>,
+    param_types: &[ValType],
     op_name: &str,
 ) -> anyhow::Result<Vec<AstRef>> {
+    let arg_count = param_types.len();
     let stack_len = ref_stack.len();
     if stack_len < arg_count {
         bail!(
@@ -128,5 +152,17 @@ pub(super) fn pop_call_args(
             arg_count
         );
     }
-    Ok(ref_stack.drain(stack_len - arg_count..).collect())
+    let mut out = Vec::with_capacity(arg_count);
+    for (typed, expected_ty) in ref_stack.drain(stack_len - arg_count..).zip(param_types) {
+        if typed.ty != *expected_ty {
+            bail!(
+                "{}: argument type mismatch, expected {:?}, got {:?}",
+                op_name,
+                expected_ty,
+                typed.ty
+            );
+        }
+        out.push(typed.value);
+    }
+    Ok(out)
 }

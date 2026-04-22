@@ -86,54 +86,6 @@ pub(super) fn validate_operator(
         | I64TruncSatF32U
         | I64TruncSatF64S
         | I64TruncSatF64U => bail!("floating point not supported at {}", location),
-        // TODO(i64): operator validator currently rejects all i64 operators.
-        I64Load { .. }
-        | I64Load8S { .. }
-        | I64Load8U { .. }
-        | I64Load16S { .. }
-        | I64Load16U { .. }
-        | I64Load32S { .. }
-        | I64Load32U { .. }
-        | I64Store { .. }
-        | I64Store8 { .. }
-        | I64Store16 { .. }
-        | I64Store32 { .. }
-        | I64Const { .. }
-        | I64Eqz
-        | I64Eq
-        | I64Ne
-        | I64LtS
-        | I64LtU
-        | I64GtS
-        | I64GtU
-        | I64LeS
-        | I64LeU
-        | I64GeS
-        | I64GeU
-        | I64Clz
-        | I64Ctz
-        | I64Popcnt
-        | I64Add
-        | I64Sub
-        | I64Mul
-        | I64DivS
-        | I64DivU
-        | I64RemS
-        | I64RemU
-        | I64And
-        | I64Or
-        | I64Xor
-        | I64Shl
-        | I64ShrS
-        | I64ShrU
-        | I64Rotl
-        | I64Rotr
-        | I32WrapI64
-        | I64ExtendI32S
-        | I64ExtendI32U
-        | I64Extend8S
-        | I64Extend16S
-        | I64Extend32S => bail!("i64 not supported at {}", location),
         MemoryGrow { .. } => bail!("memory.grow not supported at {}", location),
         MemoryInit { .. }
         | DataDrop { .. }
@@ -200,9 +152,20 @@ pub(super) fn validate_operator(
         | I32Load8U { memarg }
         | I32Load16S { memarg }
         | I32Load16U { memarg }
+        | I64Load { memarg }
+        | I64Load8S { memarg }
+        | I64Load8U { memarg }
+        | I64Load16S { memarg }
+        | I64Load16U { memarg }
+        | I64Load32S { memarg }
+        | I64Load32U { memarg }
         | I32Store { memarg }
         | I32Store8 { memarg }
-        | I32Store16 { memarg } => validate_memory_index(memarg.memory, location)?,
+        | I32Store16 { memarg }
+        | I64Store { memarg }
+        | I64Store8 { memarg }
+        | I64Store16 { memarg }
+        | I64Store32 { memarg } => validate_memory_index(memarg.memory, location)?,
         CallIndirect {
             type_index,
             table_index,
@@ -352,14 +315,10 @@ fn validate_memory_index(memory_index: u32, location: &str) -> anyhow::Result<()
     Ok(())
 }
 
-fn validate_tag_payload(
-    tag_index: u32,
-    module: &ModuleInfo,
-    location: &str,
-) -> anyhow::Result<()> {
-    let tag = module.tag_at(tag_index).with_context(|| {
-        format!("tag index {} out of bounds at {}", tag_index, location)
-    })?;
+fn validate_tag_payload(tag_index: u32, module: &ModuleInfo, location: &str) -> anyhow::Result<()> {
+    let tag = module
+        .tag_at(tag_index)
+        .with_context(|| format!("tag index {} out of bounds at {}", tag_index, location))?;
     let ty = module.type_at(tag.type_index()).with_context(|| {
         format!(
             "tag {} references missing type {} at {}",

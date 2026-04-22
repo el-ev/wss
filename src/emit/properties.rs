@@ -82,11 +82,7 @@ impl<'a> Emitter<'a> {
         }
         if self.uses_exc_payload {
             for lane in 0..4u8 {
-                let _ = writeln!(
-                    out,
-                    "{}",
-                    Self::prop(&format!("--exc_payload_{}", lane), 0)
-                );
+                let _ = writeln!(out, "{}", Self::prop(&format!("--exc_payload_{}", lane), 0));
             }
         }
     }

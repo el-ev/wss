@@ -706,11 +706,7 @@ impl<'a> Emitter<'a> {
         if self.uses_exceptions {
             let _ = writeln!(out, "    --_0exc_flag: var(--exc_flag);");
             for lane in 0..4u8 {
-                let _ = writeln!(
-                    out,
-                    "    --_0exc_tag_{}: var(--exc_tag_{});",
-                    lane, lane
-                );
+                let _ = writeln!(out, "    --_0exc_tag_{}: var(--exc_tag_{});", lane, lane);
             }
         }
         if self.uses_exc_payload {

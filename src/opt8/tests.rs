@@ -4,7 +4,7 @@ use super::{
 };
 use crate::ir8::{
     Addr, BasicBlock8, BoolNary8, BuiltinId, CallTarget, Inst8, Inst8Kind, Ir8Program, Pc,
-    Terminator8, Val8, Word,
+    Terminator8, Val8, ValueWords, Word,
 };
 
 fn r(i: u16) -> Val8 {
@@ -58,7 +58,12 @@ fn opt8_dce_drops_unused_add32_byte_lanes() {
             Inst8::with_dst(r(23), Inst8Kind::Add32Byte { lhs, rhs, lane: 3 }),
         ],
         terminator: Terminator8::Exit {
-            val: Some(Word::new(r(23), Val8::imm(0), Val8::imm(0), Val8::imm(0))),
+            val: Some(ValueWords::one(Word::new(
+                r(23),
+                Val8::imm(0),
+                Val8::imm(0),
+                Val8::imm(0),
+            ))),
         },
     }]);
 
@@ -234,8 +239,8 @@ fn opt8_copy_elim_rewrites_cross_block_copy_uses_when_source_is_stable() {
         BasicBlock8 {
             id: Pc::new(0),
             insts: vec![
-                Inst8::with_dst(r(4), Inst8Kind::Copy(Val8::imm(7))),
-                Inst8::with_dst(r(8), Inst8Kind::Copy(r(4))),
+                Inst8::with_dst(r(12), Inst8Kind::Copy(Val8::imm(7))),
+                Inst8::with_dst(r(16), Inst8Kind::Copy(r(12))),
             ],
             terminator: Terminator8::Goto(Pc::new(1)),
         },
@@ -243,7 +248,7 @@ fn opt8_copy_elim_rewrites_cross_block_copy_uses_when_source_is_stable() {
             id: Pc::new(1),
             insts: vec![],
             terminator: Terminator8::Exit {
-                val: Some(Word::new(r(8), r(4), r(4), r(4))),
+                val: Some(ValueWords::one(Word::new(r(16), r(12), r(12), r(12)))),
             },
         },
     ]);
@@ -252,14 +257,14 @@ fn opt8_copy_elim_rewrites_cross_block_copy_uses_when_source_is_stable() {
 
     let b0 = &prog.func_blocks[0][0];
     assert!(
-        b0.insts.iter().all(|i| i.dst != Some(r(8))),
+        b0.insts.iter().all(|i| i.dst != Some(r(16))),
         "copy result register should be eliminated"
     );
 
     let Terminator8::Exit { val: Some(w) } = &prog.func_blocks[0][1].terminator else {
         panic!("expected exit value");
     };
-    assert_eq!(w.b0, Val8::imm(7));
+    assert_eq!(w.lo.b0, Val8::imm(7));
 }
 
 #[test]
@@ -274,7 +279,7 @@ fn opt8_copy_elim_pools_repeated_constants() {
             id: Pc::new(1),
             insts: vec![Inst8::with_dst(r(8), Inst8Kind::Copy(Val8::imm(0xff)))],
             terminator: Terminator8::Exit {
-                val: Some(Word::new(r(4), r(8), r(4), r(8))),
+                val: Some(ValueWords::one(Word::new(r(4), r(8), r(4), r(8)))),
             },
         },
     ]);
@@ -311,7 +316,7 @@ fn opt8_coalesces_linear_goto_chain() {
             id: Pc::new(3),
             insts: vec![],
             terminator: Terminator8::Exit {
-                val: Some(Word::new(r(12), r(4), r(4), r(4))),
+                val: Some(ValueWords::one(Word::new(r(12), r(4), r(4), r(4)))),
             },
         },
     ]);
@@ -425,7 +430,7 @@ fn opt8_prefers_arch_register_after_copy() {
             Inst8::with_dst(r(30), Inst8Kind::Ne(r(20), r(4))),
         ],
         terminator: Terminator8::Exit {
-            val: Some(Word::new(r(6), r(30), r(4), r(4))),
+            val: Some(ValueWords::one(Word::new(r(6), r(30), r(4), r(4)))),
         },
     }]);
 
@@ -452,7 +457,7 @@ fn opt8_does_not_prefer_arbitrary_lower_temp_after_copy() {
             Inst8::with_dst(r(30), Inst8Kind::Ne(r(20), r(4))),
         ],
         terminator: Terminator8::Exit {
-            val: Some(Word::new(r(16), r(30), r(4), r(4))),
+            val: Some(ValueWords::one(Word::new(r(16), r(30), r(4), r(4)))),
         },
     }]);
 
@@ -634,7 +639,7 @@ fn opt8_pools_repeated_consts_even_with_redefined_dests() {
                 Inst8::with_dst(r(22), Inst8Kind::Copy(r(20))),
             ],
             terminator: Terminator8::Exit {
-                val: Some(Word::new(r(20), r(21), r(22), r(20))),
+                val: Some(ValueWords::one(Word::new(r(20), r(21), r(22), r(20)))),
             },
         },
     ]);
@@ -818,7 +823,7 @@ fn opt8_instcombine_simplifies_common_arithmetic_and_bitwise_identities() {
             Inst8::with_dst(r(24), Inst8Kind::Xor8(r(12), r(12))),
         ],
         terminator: Terminator8::Exit {
-            val: Some(Word::new(r(20), r(21), r(22), r(24))),
+            val: Some(ValueWords::one(Word::new(r(20), r(21), r(22), r(24)))),
         },
     }]);
 
@@ -841,7 +846,7 @@ fn opt8_instcombine_pushes_bool_not_into_unique_boolean_defs() {
             Inst8::with_dst(r(22), Inst8Kind::BoolNot(r(21))),
         ],
         terminator: Terminator8::Exit {
-            val: Some(Word::new(r(20), r(21), r(22), r(4))),
+            val: Some(ValueWords::one(Word::new(r(20), r(21), r(22), r(4)))),
         },
     }]);
 
@@ -864,7 +869,7 @@ fn opt8_instcombine_simplifies_selects_that_reuse_boolean_condition() {
             Inst8::with_dst(r(24), Inst8Kind::Sel(r(20), r(20), Val8::imm(1))),
         ],
         terminator: Terminator8::Exit {
-            val: Some(Word::new(r(21), r(22), r(23), r(24))),
+            val: Some(ValueWords::one(Word::new(r(21), r(22), r(23), r(24)))),
         },
     }]);
 
@@ -886,7 +891,7 @@ fn opt8_instcombine_flips_select_using_bool_not_inner_condition() {
             Inst8::with_dst(r(22), Inst8Kind::Sel(r(21), r(10), r(11))),
         ],
         terminator: Terminator8::Exit {
-            val: Some(Word::new(r(22), r(20), r(21), r(4))),
+            val: Some(ValueWords::one(Word::new(r(22), r(20), r(21), r(4)))),
         },
     }]);
 
@@ -905,7 +910,7 @@ fn opt8_instcombine_uses_inner_bool_for_ne_condition() {
             Inst8::with_dst(r(22), Inst8Kind::Sel(r(21), r(10), r(11))),
         ],
         terminator: Terminator8::Exit {
-            val: Some(Word::new(r(22), r(20), r(21), r(4))),
+            val: Some(ValueWords::one(Word::new(r(22), r(20), r(21), r(4)))),
         },
     }]);
 
@@ -1074,7 +1079,12 @@ fn opt8_optimizer_keeps_saved_ret_lane_across_later_callsetup() {
                 Inst8::with_dst(r(23), Inst8Kind::Xor8(r(21), r(22))),
             ],
             terminator: Terminator8::Exit {
-                val: Some(Word::new(Val8::imm(0), Val8::imm(0), Val8::imm(0), r(23))),
+                val: Some(ValueWords::one(Word::new(
+                    Val8::imm(0),
+                    Val8::imm(0),
+                    Val8::imm(0),
+                    r(23),
+                ))),
             },
         },
     ]);
@@ -1089,7 +1099,7 @@ fn opt8_optimizer_keeps_saved_ret_lane_across_later_callsetup() {
         })
         .expect("exit word should remain");
     assert_ne!(
-        exit_word.b3,
+        exit_word.lo.b3,
         Val8::imm(0),
         "saved return lane should survive across a later callsetup"
     );
@@ -1117,7 +1127,7 @@ fn opt8_stlf_forwards_store_to_matching_load() {
             ),
         ],
         terminator: Terminator8::Exit {
-            val: Some(Word::new(r(30), r(4), r(4), r(4))),
+            val: Some(ValueWords::one(Word::new(r(30), r(4), r(4), r(4)))),
         },
     }]);
 
@@ -1148,7 +1158,7 @@ fn opt8_stlf_forwards_matching_effective_offset() {
             ),
         ],
         terminator: Terminator8::Exit {
-            val: Some(Word::new(r(30), r(4), r(4), r(4))),
+            val: Some(ValueWords::one(Word::new(r(30), r(4), r(4), r(4)))),
         },
     }]);
 
@@ -1179,7 +1189,7 @@ fn opt8_stlf_does_not_forward_different_offset() {
             ),
         ],
         terminator: Terminator8::Exit {
-            val: Some(Word::new(r(30), r(4), r(4), r(4))),
+            val: Some(ValueWords::one(Word::new(r(30), r(4), r(4), r(4)))),
         },
     }]);
 
@@ -1209,7 +1219,7 @@ fn opt8_stlf_does_not_forward_different_addr() {
             ),
         ],
         terminator: Terminator8::Exit {
-            val: Some(Word::new(r(30), r(4), r(4), r(4))),
+            val: Some(ValueWords::one(Word::new(r(30), r(4), r(4), r(4)))),
         },
     }]);
 
@@ -1239,7 +1249,7 @@ fn opt8_stlf_invalidates_on_addr_reg_redefinition() {
             ),
         ],
         terminator: Terminator8::Exit {
-            val: Some(Word::new(r(30), r(4), r(4), r(4))),
+            val: Some(ValueWords::one(Word::new(r(30), r(4), r(4), r(4)))),
         },
     }]);
 
@@ -1269,7 +1279,7 @@ fn opt8_stlf_invalidates_on_stored_val_redefinition() {
             ),
         ],
         terminator: Terminator8::Exit {
-            val: Some(Word::new(r(30), r(4), r(4), r(4))),
+            val: Some(ValueWords::one(Word::new(r(30), r(4), r(4), r(4)))),
         },
     }]);
 
@@ -1304,7 +1314,7 @@ fn opt8_stlf_updates_forwarded_val_on_second_store() {
             ),
         ],
         terminator: Terminator8::Exit {
-            val: Some(Word::new(r(30), r(4), r(4), r(4))),
+            val: Some(ValueWords::one(Word::new(r(30), r(4), r(4), r(4)))),
         },
     }]);
 
@@ -1335,7 +1345,7 @@ fn opt8_stlf_forwards_immediate_value() {
             ),
         ],
         terminator: Terminator8::Exit {
-            val: Some(Word::new(r(30), r(4), r(4), r(4))),
+            val: Some(ValueWords::one(Word::new(r(30), r(4), r(4), r(4)))),
         },
     }]);
 
@@ -1373,7 +1383,7 @@ fn opt8_stlf_clears_on_store_to_different_addr() {
             ),
         ],
         terminator: Terminator8::Exit {
-            val: Some(Word::new(r(30), r(4), r(4), r(4))),
+            val: Some(ValueWords::one(Word::new(r(30), r(4), r(4), r(4)))),
         },
     }]);
 

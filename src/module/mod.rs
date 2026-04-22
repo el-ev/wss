@@ -16,6 +16,7 @@ use helpers::{build_table_info, clone_func_type, is_entry_export_name};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ConstInit {
     I32(i32),
+    I64(i64),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -123,9 +124,11 @@ impl FuncType {
 
 fn parse_i32_const_offset(init: ConstInit, nonnegative_label: &str) -> anyhow::Result<usize> {
     match init {
-        // TODO(i64): element/data offsets are parsed from i32 consts only.
         ConstInit::I32(v) => {
             usize::try_from(v).with_context(|| format!("{nonnegative_label} must be >= 0, got {v}"))
+        }
+        ConstInit::I64(v) => {
+            bail!("{nonnegative_label} must be initialized with i32.const, got i64.const {v}")
         }
     }
 }

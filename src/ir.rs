@@ -1,31 +1,12 @@
 use crate::ast::{BinOp, RelOp, UnOp};
+use wasmparser::ValType;
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub struct IrNode(pub usize);
 
 impl IrNode {
-    pub const IMM_TAG: usize = 1usize << (usize::BITS as usize - 1);
-
     pub const fn index(self) -> usize {
         self.0
-    }
-
-    // TODO(i64): immediate encoding/decoding is hardcoded to 32-bit integers.
-    pub const fn imm_i32(value: i32) -> Self {
-        Self(Self::IMM_TAG | (value as u32 as usize))
-    }
-
-    // TODO(i64): immediate encoding/decoding is hardcoded to 32-bit integers.
-    pub const fn imm_i32_value(self) -> Option<i32> {
-        if self.is_imm() {
-            Some((self.0 as u32) as i32)
-        } else {
-            None
-        }
-    }
-
-    pub const fn is_imm(self) -> bool {
-        (self.0 & Self::IMM_TAG) != 0
     }
 
     pub const fn saturating_sub(self, rhs: usize) -> Self {
@@ -88,8 +69,8 @@ impl From<BlockId> for usize {
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum Inst {
-    // TODO(i64): IR instruction set is currently i32-only for value-producing ops.
     I32Const(i32),
+    I64Const(i64),
 
     LocalGet(u32),
     LocalSet(u32, IrNode),
@@ -101,17 +82,32 @@ pub enum Inst {
     MemorySize,
     TableSize(u32),
 
-    Unary(UnOp, IrNode),
-    Binary(BinOp, IrNode, IrNode),
-    Compare(RelOp, IrNode, IrNode),
+    Unary {
+        op: UnOp,
+        ty: ValType,
+        val: IrNode,
+    },
+    Binary {
+        op: BinOp,
+        ty: ValType,
+        lhs: IrNode,
+        rhs: IrNode,
+    },
+    Compare {
+        op: RelOp,
+        ty: ValType,
+        lhs: IrNode,
+        rhs: IrNode,
+    },
     Select {
+        ty: ValType,
         cond: IrNode,
         if_true: IrNode,
         if_false: IrNode,
     },
 
     Load {
-        // TODO(i64): memory op metadata assumes i32 load widths/sign-extension behavior.
+        ty: ValType,
         size: u8,
         signed: bool,
         offset: u32,
@@ -132,7 +128,7 @@ pub enum Inst {
     Getchar,
     Drop,
     Store {
-        // TODO(i64): memory op metadata assumes i32 store widths.
+        ty: ValType,
         size: u8,
         offset: u32,
         addr: IrNode,

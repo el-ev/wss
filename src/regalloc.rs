@@ -556,6 +556,17 @@ fn map_word_vals(
     Ok(())
 }
 
+fn map_value_words(
+    value: &mut crate::ir8::ValueWords,
+    f: &mut impl FnMut(Val8) -> anyhow::Result<Val8>,
+) -> anyhow::Result<()> {
+    map_word_vals(&mut value.lo, f)?;
+    if let Some(hi) = &mut value.hi {
+        map_word_vals(hi, f)?;
+    }
+    Ok(())
+}
+
 fn map_word_vals_through_lane(
     w: &mut Word,
     lane: u8,
@@ -643,9 +654,7 @@ fn map_inst_kind_vals(
         | Inst8Kind::ExcPayloadSet { val, .. } => {
             *val = f(*val)?;
         }
-        Inst8Kind::ExcFlagGet
-        | Inst8Kind::ExcTagGet { .. }
-        | Inst8Kind::ExcPayloadGet { .. } => {}
+        Inst8Kind::ExcFlagGet | Inst8Kind::ExcTagGet { .. } | Inst8Kind::ExcPayloadGet { .. } => {}
     }
     Ok(())
 }
@@ -676,7 +685,7 @@ fn map_terminator_vals(
         }
         Terminator8::Return { val } | Terminator8::Exit { val } => {
             if let Some(w) = val {
-                map_word_vals(w, f)?;
+                map_value_words(w, f)?;
             }
         }
     }
@@ -786,7 +795,8 @@ mod tests {
     use super::regalloc;
     use crate::constants::DEFAULT_MAX_PHYS_REGS;
     use crate::ir8::{
-        Addr, BasicBlock8, CallTarget, Inst8, Inst8Kind, Ir8Program, Pc, Terminator8, Val8, Word,
+        Addr, BasicBlock8, CallTarget, Inst8, Inst8Kind, Ir8Program, Pc, Terminator8, Val8,
+        ValueWords, Word,
     };
 
     fn regs_in_func(blocks: &[BasicBlock8]) -> HashSet<Val8> {
@@ -822,12 +832,12 @@ mod tests {
 
     #[test]
     fn regalloc_separates_physical_banks_per_function() {
-        let f0_r0 = Val8::reg(4);
-        let f0_r1 = Val8::reg(5);
-        let f0_r2 = Val8::reg(6);
-        let f0_r3 = Val8::reg(7);
-        let f1_addr_lo = Val8::reg(8);
-        let f1_addr_hi = Val8::reg(9);
+        let f0_r0 = Val8::reg(8);
+        let f0_r1 = Val8::reg(9);
+        let f0_r2 = Val8::reg(10);
+        let f0_r3 = Val8::reg(11);
+        let f1_addr_lo = Val8::reg(12);
+        let f1_addr_hi = Val8::reg(13);
 
         let func0 = vec![BasicBlock8 {
             id: Pc::new(0),
@@ -838,7 +848,7 @@ mod tests {
                 Inst8::with_dst(f0_r3, Inst8Kind::Copy(Val8::imm(0))),
             ],
             terminator: Terminator8::Return {
-                val: Some(Word::new(f0_r0, f0_r1, f0_r2, f0_r3)),
+                val: Some(ValueWords::one(Word::new(f0_r0, f0_r1, f0_r2, f0_r3))),
             },
         }];
 
@@ -870,7 +880,7 @@ mod tests {
 
         let prog = Ir8Program {
             entry_func: 1,
-            num_vregs: 12,
+            num_vregs: 16,
             func_blocks: vec![func0, func1],
             func_entries: vec![Pc::new(0), Pc::new(1000)],
             func_num_locals: vec![0, 0],
@@ -884,8 +894,8 @@ mod tests {
 
         let mut f0_regs = regs_in_func(&out.func_blocks[0]);
         let mut f1_regs = regs_in_func(&out.func_blocks[1]);
-        f0_regs.retain(|r| r.expect_vreg() >= 4);
-        f1_regs.retain(|r| r.expect_vreg() >= 4);
+        f0_regs.retain(|r| r.expect_vreg() >= 8);
+        f1_regs.retain(|r| r.expect_vreg() >= 8);
 
         let overlap: HashSet<Val8> = f0_regs.intersection(&f1_regs).copied().collect();
         assert!(
@@ -896,14 +906,14 @@ mod tests {
 
     #[test]
     fn regalloc_compacts_physical_vregs_to_dense_range() {
-        let r_a = Val8::reg(4);
-        let r_b = Val8::reg(5);
-        let r_c = Val8::reg(16);
-        let r_d = Val8::reg(17);
+        let r_a = Val8::reg(8);
+        let r_b = Val8::reg(9);
+        let r_c = Val8::reg(20);
+        let r_d = Val8::reg(21);
 
         let prog = Ir8Program {
             entry_func: 0,
-            num_vregs: 24,
+            num_vregs: 28,
             func_blocks: vec![vec![
                 BasicBlock8 {
                     id: Pc::new(0),
@@ -918,7 +928,12 @@ mod tests {
                     id: Pc::new(1),
                     insts: vec![Inst8::with_dst(r_d, Inst8Kind::Copy(r_c))],
                     terminator: Terminator8::Return {
-                        val: Some(Word::new(r_d, Val8::reg(0), Val8::reg(1), Val8::reg(2))),
+                        val: Some(ValueWords::one(Word::new(
+                            r_d,
+                            Val8::reg(0),
+                            Val8::reg(1),
+                            Val8::reg(2),
+                        ))),
                     },
                 },
             ]],
@@ -934,12 +949,12 @@ mod tests {
         let mut regs: Vec<u16> = regs_in_program(&out)
             .into_iter()
             .map(|r| r.expect_vreg())
-            .filter(|idx| *idx >= 4)
+            .filter(|idx| *idx >= 8)
             .collect();
         regs.sort_unstable();
         regs.dedup();
 
-        let expected: Vec<u16> = (4..out.num_vregs).collect();
+        let expected: Vec<u16> = (8..out.num_vregs).collect();
         assert_eq!(regs, expected);
     }
 
@@ -947,7 +962,7 @@ mod tests {
     fn regalloc_enforces_physical_register_limit_256() {
         let mut insts = Vec::new();
         let mut args = Vec::new();
-        let mut next = 4u16;
+        let mut next = 8u16;
         for _ in 0..64 {
             let b0 = Val8::reg(next);
             let b1 = Val8::reg(next + 1);
@@ -964,7 +979,7 @@ mod tests {
 
         let prog = Ir8Program {
             entry_func: 0,
-            num_vregs: 260,
+            num_vregs: 264,
             func_blocks: vec![vec![
                 BasicBlock8 {
                     id: Pc::new(0),
@@ -1022,12 +1037,12 @@ mod tests {
                     ),
                 ],
                 terminator: Terminator8::Exit {
-                    val: Some(Word::new(
+                    val: Some(ValueWords::one(Word::new(
                         Val8::reg(5),
                         Val8::imm(0),
                         Val8::imm(0),
                         Val8::imm(0),
-                    )),
+                    ))),
                 },
             }]],
             func_entries: vec![Pc::new(0)],

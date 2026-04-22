@@ -21,6 +21,7 @@ fn fmt_sig(params: &[wasmparser::ValType], results: &[wasmparser::ValType]) -> S
 fn fmt_const_init(init: ConstInit) -> String {
     match init {
         ConstInit::I32(v) => format!("{}", v),
+        ConstInit::I64(v) => format!("{}", v),
     }
 }
 
@@ -127,18 +128,7 @@ fn ir_produces_value(inst: &Inst) -> bool {
 }
 
 fn write_ir_operand(out: &mut String, v: IrNode) {
-    if let Some(imm) = v.imm_i32_value() {
-        write!(out, "{}", imm).unwrap();
-    } else {
-        write!(out, "%{}", v).unwrap();
-    }
-}
-
-fn write_ir_binop(out: &mut String, name: &str, lhs: IrNode, rhs: IrNode) {
-    write!(out, "{} ", name).unwrap();
-    write_ir_operand(out, lhs);
-    write!(out, " ").unwrap();
-    write_ir_operand(out, rhs);
+    write!(out, "%{}", v).unwrap();
 }
 
 fn print_ir_inst(out: &mut String, r: IrNode, inst: &Inst) {
@@ -147,6 +137,7 @@ fn print_ir_inst(out: &mut String, r: IrNode, inst: &Inst) {
     }
     match inst {
         Inst::I32Const(n) => write!(out, "i32.const {}", n).unwrap(),
+        Inst::I64Const(n) => write!(out, "i64.const {}", n).unwrap(),
         Inst::LocalGet(local) => write!(out, "local.get {}", local).unwrap(),
         Inst::LocalTee(local, v) => {
             write!(out, "local.tee {} ", local).unwrap();
@@ -155,29 +146,53 @@ fn print_ir_inst(out: &mut String, r: IrNode, inst: &Inst) {
         Inst::GlobalGet(global) => write!(out, "global.get {}", global).unwrap(),
         Inst::MemorySize => write!(out, "memory.size").unwrap(),
         Inst::TableSize(table) => write!(out, "table.size {}", table).unwrap(),
-        Inst::Unary(op, v) => {
+        Inst::Unary { op, ty, val } => {
             write!(out, "{} ", unop_name(op)).unwrap();
-            write_ir_operand(out, *v);
+            write!(out, "{} ", fmt_valtype(ty)).unwrap();
+            write_ir_operand(out, *val);
         }
-        Inst::Binary(op, l, r) => write_ir_binop(out, &binop_name(op), *l, *r),
-        Inst::Compare(op, l, r) => write_ir_binop(out, &relop_name(op), *l, *r),
+        Inst::Binary { op, ty, lhs, rhs } => {
+            write!(out, "{} {} ", binop_name(op), fmt_valtype(ty)).unwrap();
+            write_ir_operand(out, *lhs);
+            write!(out, " ").unwrap();
+            write_ir_operand(out, *rhs);
+        }
+        Inst::Compare { op, ty, lhs, rhs } => {
+            write!(out, "{} {} ", relop_name(op), fmt_valtype(ty)).unwrap();
+            write_ir_operand(out, *lhs);
+            write!(out, " ").unwrap();
+            write_ir_operand(out, *rhs);
+        }
         Inst::Select {
+            ty,
             cond,
             if_true,
             if_false,
         } => {
-            write_ir_binop(out, "select", *cond, *if_true);
+            write!(out, "select {} ", fmt_valtype(ty)).unwrap();
+            write_ir_operand(out, *cond);
+            write!(out, " ").unwrap();
+            write_ir_operand(out, *if_true);
             write!(out, " ").unwrap();
             write_ir_operand(out, *if_false);
         }
         Inst::Load {
+            ty,
             size,
             signed,
             offset,
             addr,
         } => {
             let sign = if *signed { "s" } else { "u" };
-            write!(out, "load i32.{}b{} offset={:#x} ", size, sign, offset).unwrap();
+            write!(
+                out,
+                "load {}.{}b{} offset={:#x} ",
+                fmt_valtype(ty),
+                size,
+                sign,
+                offset
+            )
+            .unwrap();
             write_ir_operand(out, *addr);
         }
         Inst::Call { func, args } => {
@@ -220,12 +235,20 @@ fn print_ir_inst(out: &mut String, r: IrNode, inst: &Inst) {
             write_ir_operand(out, *v);
         }
         Inst::Store {
+            ty,
             size,
             offset,
             addr,
             val,
         } => {
-            write!(out, "store i32.{}b offset={:#x} ", size, offset).unwrap();
+            write!(
+                out,
+                "store {}.{}b offset={:#x} ",
+                fmt_valtype(ty),
+                size,
+                offset
+            )
+            .unwrap();
             write_ir_operand(out, *addr);
             write!(out, " ").unwrap();
             write_ir_operand(out, *val);
@@ -325,29 +348,58 @@ fn print_insts(out: &mut String, insts: &[Node], indent: usize) {
 fn print_inst(out: &mut String, idx: AstRef, inst: &Node, indent: usize) {
     match inst {
         Node::I32Const(n) => write!(out, "%{} = i32.const {}", idx, n).unwrap(),
+        Node::I64Const(n) => write!(out, "%{} = i64.const {}", idx, n).unwrap(),
         Node::LocalGet(local) => write!(out, "%{} = local.get {}", idx, local).unwrap(),
         Node::LocalTee(local, r) => write!(out, "%{} = local.tee {} %{}", idx, local, r).unwrap(),
         Node::GlobalGet(global) => write!(out, "%{} = global.get {}", idx, global).unwrap(),
         Node::MemorySize => write!(out, "%{} = memory.size", idx).unwrap(),
         Node::TableSize(table) => write!(out, "%{} = table.size {}", idx, table).unwrap(),
-        Node::Unary(op, r) => write!(out, "%{} = {} %{}", idx, unop_name(op), r).unwrap(),
-        Node::Binary(op, l, r) => {
-            write!(out, "%{} = {} %{} %{}", idx, binop_name(op), l, r).unwrap()
-        }
-        Node::Compare(op, l, r) => {
-            write!(out, "%{} = {} %{} %{}", idx, relop_name(op), l, r).unwrap()
-        }
+        Node::Unary { op, ty, val } => write!(
+            out,
+            "%{} = {} {} %{}",
+            idx,
+            unop_name(op),
+            fmt_valtype(ty),
+            val
+        )
+        .unwrap(),
+        Node::Binary { op, ty, lhs, rhs } => write!(
+            out,
+            "%{} = {} {} %{} %{}",
+            idx,
+            binop_name(op),
+            fmt_valtype(ty),
+            lhs,
+            rhs
+        )
+        .unwrap(),
+        Node::Compare { op, ty, lhs, rhs } => write!(
+            out,
+            "%{} = {} {} %{} %{}",
+            idx,
+            relop_name(op),
+            fmt_valtype(ty),
+            lhs,
+            rhs
+        )
+        .unwrap(),
         Node::Select {
+            ty,
             cond,
             then_val,
             else_val,
         } => write!(
             out,
-            "%{} = select %{} %{} %{}",
-            idx, cond, then_val, else_val
+            "%{} = select {} %{} %{} %{}",
+            idx,
+            fmt_valtype(ty),
+            cond,
+            then_val,
+            else_val
         )
         .unwrap(),
         Node::Load {
+            ty,
             size,
             signed,
             offset,
@@ -356,8 +408,13 @@ fn print_inst(out: &mut String, idx: AstRef, inst: &Node, indent: usize) {
             let sign = if *signed { "s" } else { "u" };
             write!(
                 out,
-                "%{} = load i32 {}b{} offset={:#x} %{}",
-                idx, size, sign, offset, address
+                "%{} = load {} {}b{} offset={:#x} %{}",
+                idx,
+                fmt_valtype(ty),
+                size,
+                sign,
+                offset,
+                address
             )
             .unwrap();
         }
@@ -387,6 +444,7 @@ fn print_inst(out: &mut String, idx: AstRef, inst: &Node, indent: usize) {
         Node::LocalSet(local, r) => write!(out, "local.set {} %{}", local, r).unwrap(),
         Node::GlobalSet(global, r) => write!(out, "global.set {} %{}", global, r).unwrap(),
         Node::Store {
+            ty,
             size,
             offset,
             value,
@@ -394,8 +452,12 @@ fn print_inst(out: &mut String, idx: AstRef, inst: &Node, indent: usize) {
         } => {
             write!(
                 out,
-                "store i32 {}b offset={:#x} %{} %{}",
-                size, offset, address, value
+                "store {} {}b offset={:#x} %{} %{}",
+                fmt_valtype(ty),
+                size,
+                offset,
+                address,
+                value
             )
             .unwrap();
         }
@@ -484,7 +546,7 @@ fn binop_name(op: &BinOp) -> String {
         BinOp::Rotl => "rotl",
         BinOp::Rotr => "rotr",
     };
-    format!("{}.{}", "i32", op_str)
+    op_str.to_string()
 }
 
 fn relop_name(op: &RelOp) -> String {
@@ -500,7 +562,7 @@ fn relop_name(op: &RelOp) -> String {
         RelOp::GeS => "ge_s",
         RelOp::GeU => "ge_u",
     };
-    format!("{}.{}", "i32", op_str)
+    op_str.to_string()
 }
 
 fn unop_name(op: &UnOp) -> String {
@@ -511,8 +573,12 @@ fn unop_name(op: &UnOp) -> String {
         UnOp::Eqz => "eqz",
         UnOp::Extend8S => "extend8_s",
         UnOp::Extend16S => "extend16_s",
+        UnOp::Extend32S => "extend32_s",
+        UnOp::WrapI64 => "wrap_i64",
+        UnOp::ExtendI32S => "extend_i32_s",
+        UnOp::ExtendI32U => "extend_i32_u",
     };
-    format!("{}.{}", "i32", op_str)
+    op_str.to_string()
 }
 
 // ─── IR8 printer ─────────────────────────────────────────────────────────────
@@ -577,6 +643,13 @@ fn fmt_word(w: Word) -> String {
         fmt_val8(w.b2),
         fmt_val8(w.b3)
     )
+}
+
+fn fmt_value_words(value: crate::ir8::ValueWords) -> String {
+    match value.hi {
+        Some(hi) => format!("{} {}", fmt_word(hi), fmt_word(value.lo)),
+        None => fmt_word(value.lo),
+    }
 }
 
 fn fmt_pc(pc: Pc) -> String {
@@ -709,9 +782,7 @@ fn print_inst8(out: &mut String, inst: &crate::ir8::Inst8) {
         Inst8Kind::ExcPayloadSet { lane, val } => {
             write!(out, "exc.payload.set lane={} {}", lane, fmt_val8(*val)).unwrap()
         }
-        Inst8Kind::ExcPayloadGet { lane } => {
-            write!(out, "exc.payload.get lane={}", lane).unwrap()
-        }
+        Inst8Kind::ExcPayloadGet { lane } => write!(out, "exc.payload.get lane={}", lane).unwrap(),
     }
 }
 
@@ -741,9 +812,11 @@ fn print_term8(out: &mut String, term: &Terminator8) {
             }
             write!(out, " default:{}", fmt_pc(*default)).unwrap();
         }
-        Terminator8::Return { val: Some(w) } => write!(out, "return {}", fmt_word(*w)).unwrap(),
+        Terminator8::Return { val: Some(w) } => {
+            write!(out, "return {}", fmt_value_words(*w)).unwrap()
+        }
         Terminator8::Return { val: None } => write!(out, "return").unwrap(),
-        Terminator8::Exit { val: Some(w) } => write!(out, "exit {}", fmt_word(*w)).unwrap(),
+        Terminator8::Exit { val: Some(w) } => write!(out, "exit {}", fmt_value_words(*w)).unwrap(),
         Terminator8::Exit { val: None } => write!(out, "exit").unwrap(),
         Terminator8::CallSetup {
             callee_entry,
