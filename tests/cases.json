@@ -13,6 +13,162 @@
     }
   },
   {
+    "id": "i64_return_const",
+    "source": "tests/cases/i64_return_const.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x1122334455667798",
+      "rendered_includes": [
+        "Program exited with code",
+        "0x1122334455667798"
+      ]
+    }
+  },
+  {
+    "id": "i64_direct_call_add",
+    "source": "tests/cases/i64_direct_call_add.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x1122334455667798",
+      "rendered_includes": [
+        "Program exited with code",
+        "0x1122334455667798"
+      ]
+    }
+  },
+  {
+    "id": "i64_sub_borrow",
+    "source": "tests/cases/i64_sub_borrow.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000000ffffffff",
+      "rendered_includes": [
+        "Program exited with code",
+        "0x00000000ffffffff"
+      ]
+    }
+  },
+  {
+    "id": "i64_bitwise",
+    "source": "tests/cases/i64_bitwise.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0xfffffffffffffffe",
+      "rendered_includes": [
+        "Program exited with code",
+        "0xfffffffffffffffe"
+      ]
+    }
+  },
+  {
+    "id": "i64_compare_u64",
+    "source": "tests/cases/i64_compare_u64.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x800000000000015b",
+      "rendered_includes": [
+        "Program exited with code",
+        "0x800000000000015b"
+      ]
+    }
+  },
+  {
+    "id": "i64_wrap_extend",
+    "source": "tests/cases/i64_wrap_extend.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x0000000092345677",
+      "rendered_includes": [
+        "Program exited with code",
+        "0x0000000092345677"
+      ]
+    }
+  },
+  {
+    "id": "i64_eqz_wrap",
+    "source": "tests/cases/i64_eqz_wrap.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0xdeadbeee80000001",
+      "rendered_includes": [
+        "Program exited with code",
+        "0xdeadbeee80000001"
+      ]
+    }
+  },
+  {
+    "id": "i64_select",
+    "source": "tests/cases/i64_select.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0x4444444466666666",
+      "rendered_includes": [
+        "Program exited with code",
+        "0x4444444466666666"
+      ]
+    }
+  },
+  {
+    "id": "i64_memory_round_trip",
+    "source": "tests/cases/i64_memory_round_trip.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0xd004c1c601020304",
+      "rendered_includes": [
+        "Program exited with code",
+        "0xd004c1c601020304"
+      ]
+    }
+  },
+  {
+    "id": "i64_narrow_memory",
+    "source": "tests/cases/i64_narrow_memory.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0x0012345678ce20a5",
+      "rendered_includes": [
+        "Program exited with code",
+        "0x0012345678ce20a5"
+      ]
+    }
+  },
+  {
+    "id": "i64_globals",
+    "source": "tests/cases/i64_globals.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0xdeadbef112345676",
+      "rendered_includes": [
+        "Program exited with code",
+        "0xdeadbef112345676"
+      ]
+    }
+  },
+  {
+    "id": "i64_spill_call",
+    "source": "tests/cases/i64_spill_call.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0xaaaaaaaa11111112",
+      "rendered_includes": [
+        "Program exited with code",
+        "0xaaaaaaaa11111112"
+      ]
+    }
+  },
+  {
+    "id": "i64_call_indirect",
+    "source": "tests/cases/i64_call_indirect.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0xfedcba9812345678",
+      "rendered_includes": [
+        "Program exited with code",
+        "0xfedcba9812345678"
+      ]
+    }
+  },
+  {
     "id": "putchar_banner",
     "source": "tests/cases/putchar_banner.c",
     "expect": {
@@ -776,6 +932,10 @@
   {
     "id": "return_negative",
     "source": "tests/cases/return_negative.c",
+    "tags": [
+      "lengthy"
+    ],
+    "virtual_time_budget_ms": 60000,
     "expect": {
       "pc": -1,
       "ra": "0xffffff85",
@@ -1166,6 +1326,10 @@
   {
     "id": "builtin_bitcount_sum_seed",
     "source": "tests/cases/builtin_bitcount_sum_seed.c",
+    "tags": [
+      "lengthy"
+    ],
+    "virtual_time_budget_ms": 30000,
     "expect": {
       "pc": -1,
       "ra": "0x00000013",
@@ -1348,6 +1512,10 @@
   {
     "id": "bitcount_relop_blend",
     "source": "tests/cases/bitcount_relop_blend.c",
+    "tags": [
+      "lengthy"
+    ],
+    "virtual_time_budget_ms": 30000,
     "expect": {
       "pc": -1,
       "ra": "0x0024408e",
@@ -1685,6 +1853,10 @@
   {
     "id": "indirect_halfword_guard",
     "source": "tests/cases/indirect_halfword_guard.c",
+    "tags": [
+      "lengthy"
+    ],
+    "virtual_time_budget_ms": 60000,
     "expect": {
       "pc": -1,
       "ra": "0x55aa14e5",
@@ -1725,6 +1897,10 @@
   {
     "id": "select_narrow_memory_mix",
     "source": "tests/cases/select_narrow_memory_mix.c",
+    "tags": [
+      "lengthy"
+    ],
+    "virtual_time_budget_ms": 30000,
     "expect": {
       "pc": -1,
       "ra": "0x85a4c758",

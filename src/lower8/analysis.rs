@@ -1,31 +1,11 @@
 use super::*;
 use std::collections::HashSet;
 
-fn use_if_non_imm(value_ref: IrNode) -> Vec<IrNode> {
-    if value_ref.is_imm() {
-        Vec::new()
-    } else {
-        vec![value_ref]
-    }
-}
-
-fn push_if_non_imm(out: &mut Vec<IrNode>, value_ref: IrNode) {
-    if !value_ref.is_imm() {
-        out.push(value_ref);
-    }
-}
-
-fn collect_non_imm_uses(values: impl IntoIterator<Item = IrNode>) -> Vec<IrNode> {
-    values
-        .into_iter()
-        .filter(|value_ref| !value_ref.is_imm())
-        .collect()
-}
-
 pub(super) fn inst_uses(inst: &Inst) -> Vec<IrNode> {
     match inst {
         // TODO(i64): liveness model keys off an i32-only IR opcode set today.
         Inst::I32Const(_)
+        | Inst::I64Const(_)
         | Inst::LocalGet(_)
         | Inst::GlobalGet(_)
         | Inst::MemorySize
@@ -40,28 +20,26 @@ pub(super) fn inst_uses(inst: &Inst) -> Vec<IrNode> {
         Inst::LocalSet(_, value_ref)
         | Inst::LocalTee(_, value_ref)
         | Inst::GlobalSet(_, value_ref)
-        | Inst::Unary(_, value_ref)
+        | Inst::Unary { val: value_ref, .. }
         | Inst::Putchar(value_ref)
         | Inst::Load {
             addr: value_ref, ..
         }
-        | Inst::ExcPayloadSet(value_ref) => use_if_non_imm(*value_ref),
-        Inst::Binary(_, lhs, rhs)
-        | Inst::Compare(_, lhs, rhs)
+        | Inst::ExcPayloadSet(value_ref) => vec![*value_ref],
+        Inst::Binary { lhs, rhs, .. }
+        | Inst::Compare { lhs, rhs, .. }
         | Inst::Store {
             addr: lhs,
             val: rhs,
             ..
         } => {
-            let mut out = Vec::with_capacity(2);
-            push_if_non_imm(&mut out, *lhs);
-            push_if_non_imm(&mut out, *rhs);
-            out
+            vec![*lhs, *rhs]
         }
         Inst::Select {
             cond,
             if_true,
             if_false,
+            ..
         } => vec![*cond, *if_true, *if_false],
         Inst::Call { args, .. } => args.clone(),
         Inst::CallIndirect { index, args, .. } => {
@@ -76,34 +54,38 @@ pub(super) fn inst_uses(inst: &Inst) -> Vec<IrNode> {
 pub(super) fn term_uses(term: &Terminator) -> Vec<IrNode> {
     match term {
         Terminator::Goto(_) | Terminator::Unreachable | Terminator::UncaughtExit => Vec::new(),
-        Terminator::Branch { cond, .. } => use_if_non_imm(*cond),
-        Terminator::Switch { index, .. } => use_if_non_imm(*index),
-        Terminator::TailCall { args, .. } => collect_non_imm_uses(args.iter().copied()),
+        Terminator::Branch { cond, .. } => vec![*cond],
+        Terminator::Switch { index, .. } => vec![*index],
+        Terminator::TailCall { args, .. } => args.clone(),
         Terminator::TailCallIndirect { index, args, .. } => {
             let mut out = Vec::with_capacity(args.len() + 1);
-            push_if_non_imm(&mut out, *index);
-            out.extend(collect_non_imm_uses(args.iter().copied()));
+            out.push(*index);
+            out.extend(args.iter().copied());
             out
         }
-        Terminator::Return(value_ref) => collect_non_imm_uses(value_ref.iter().copied()),
+        Terminator::Return(value_ref) => value_ref.iter().copied().collect(),
     }
 }
 
 pub(super) fn collect_spill_words(
     live_after: &[IrNode],
-    inst_map: &HashMap<IrNode, Word>,
-    local_vregs: &[Word],
+    inst_map: &HashMap<IrNode, ValueWords>,
+    local_vregs: &[ValueWords],
 ) -> Vec<Word> {
-    let locals: HashSet<Word> = local_vregs.iter().copied().collect();
     let mut seen = HashSet::new();
     let mut out = Vec::new();
     for iref in live_after {
-        if let Some(w) = inst_map.get(iref).copied() {
-            if locals.contains(&w) {
+        if let Some(value) = inst_map.get(iref).copied() {
+            if local_vregs.iter().any(|l| l == &value) {
                 continue;
             }
-            if seen.insert(w) {
-                out.push(w);
+            if seen.insert(value.lo) {
+                out.push(value.lo);
+            }
+            if let Some(hi) = value.hi
+                && seen.insert(hi)
+            {
+                out.push(hi);
             }
         }
     }

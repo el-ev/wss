@@ -40,6 +40,45 @@ struct IndirectEmitContext<'a> {
     join_pc: Option<Pc>,
 }
 
+pub(super) fn flatten_local_prefix(
+    values: &[ValueWords],
+    word_count: usize,
+) -> anyhow::Result<Vec<Word>> {
+    if word_count == 0 {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::new();
+    for value in values {
+        out.push(value.lo);
+        if out.len() == word_count {
+            return Ok(out);
+        }
+        if let Some(hi) = value.hi {
+            out.push(hi);
+            if out.len() == word_count {
+                return Ok(out);
+            }
+        }
+    }
+    anyhow::bail!(
+        "callee local prefix has {} machine word(s), expected {}",
+        out.len(),
+        word_count
+    );
+}
+
+fn flatten_arg_values(b: &FuncBuilder, args: &[IrNode]) -> Vec<Word> {
+    let mut out = Vec::new();
+    for arg in args {
+        let value = b.get_value(*arg);
+        out.push(value.lo);
+        if let Some(hi) = value.hi {
+            out.push(hi);
+        }
+    }
+    out
+}
+
 fn build_callee_setup(
     allocs: &[FuncAlloc],
     callee_id: u32,
@@ -49,7 +88,7 @@ fn build_callee_setup(
     let callee_alloc = allocs
         .get(callee_id as usize)
         .with_context(|| format!("{} references missing function {}", op_name, callee_id))?;
-    let callee_arg_vregs = callee_alloc.local_vregs[..arg_count].to_vec();
+    let callee_arg_vregs = flatten_local_prefix(&callee_alloc.local_vregs, arg_count)?;
     let callee_entry = Pc::new(callee_id as u16 * PC_STRIDE);
     Ok((callee_entry, callee_arg_vregs))
 }
@@ -136,7 +175,7 @@ fn emit_indirect_target_case(
     Ok(())
 }
 
-pub(super) fn emit_non_main_return_sequence(b: &mut FuncBuilder, val: Option<Word>) {
+pub(super) fn emit_non_main_return_sequence(b: &mut FuncBuilder, val: Option<ValueWords>) {
     // Pop RA from the call stack before returning.
     // The caller pushed RA as the last slot of its frame.
     // CsFree(1) backs up cs_sp by one slot, then CsLoadPc(0)
@@ -152,7 +191,7 @@ pub(super) fn lower_tail_call(
     args: &[IrNode],
     allocs: &[FuncAlloc],
 ) -> anyhow::Result<Terminator8> {
-    let arg_words: Vec<Word> = args.iter().map(|r| b.get_word(*r)).collect();
+    let arg_words = flatten_arg_values(b, args);
     let (callee_entry, callee_arg_vregs) =
         build_callee_setup(allocs, func, arg_words.len(), "tail_call")?;
     Ok(Terminator8::CallSetup {
@@ -168,7 +207,7 @@ pub(super) fn lower_call_indirect_inst(
     ctx: &Lower8Context<'_>,
     inst: CallIndirectInst<'_>,
 ) -> anyhow::Result<()> {
-    let arg_words: Vec<Word> = inst.args.iter().map(|r| b.get_word(*r)).collect();
+    let arg_words = flatten_arg_values(b, inst.args);
     let index_word = b.get_word(inst.index);
     let spill_words = analysis::collect_spill_words(inst.live_after, &b.inst_map, &b.local_vregs);
 
@@ -202,9 +241,16 @@ pub(super) fn lower_call_indirect_inst(
     }
 
     b.switch_to(join_pc);
-    let dst = b.alloc_word();
-    b.copy_ret_to_word(dst);
-    b.set_word(inst.result_ref, dst);
+    if let Some(result_ty) = ctx
+        .module
+        .type_at(inst.type_index)
+        .and_then(|sig| sig.results().first())
+        .copied()
+    {
+        let dst = b.alloc_value(result_ty);
+        b.copy_ret_to_value(dst);
+        b.set_value(inst.result_ref, dst);
+    }
 
     Ok(())
 }
@@ -218,7 +264,7 @@ pub(super) fn lower_tail_call_indirect(
     args: &[IrNode],
     allocs: &[FuncAlloc],
 ) -> anyhow::Result<()> {
-    let arg_words: Vec<Word> = args.iter().map(|r| b.get_word(*r)).collect();
+    let arg_words = flatten_arg_values(b, args);
     let index_word = b.get_word(index);
     let emit_ctx = IndirectEmitContext {
         allocs,
@@ -276,12 +322,20 @@ fn build_indirect_dispatch(
             req.op_name, req.type_index
         )
     })?;
+    let expected_word_count: usize = expected_sig
+        .params()
+        .iter()
+        .map(|ty| match ty {
+            wasmparser::ValType::I64 => 2,
+            _ => 1,
+        })
+        .sum();
     anyhow::ensure!(
-        expected_sig.params().len() == req.arg_count,
-        "{} type {} expects {} arg(s), got {}",
+        expected_word_count == req.arg_count,
+        "{} type {} expects {} arg word(s), got {}",
         req.op_name,
         req.type_index,
-        expected_sig.params().len(),
+        expected_word_count,
         req.arg_count
     );
 

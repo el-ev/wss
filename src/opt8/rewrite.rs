@@ -182,7 +182,9 @@ pub(super) fn rewrite_inst(mut inst: Inst8, subst: &HashMap<Val8, Val8>) -> Inst
         | Inst8Kind::CsAlloc(_)
         | Inst8Kind::CsFree(_) => inst.kind,
 
-        Inst8Kind::ExcFlagSet { val } => Inst8Kind::ExcFlagSet { val: rw(subst, val) },
+        Inst8Kind::ExcFlagSet { val } => Inst8Kind::ExcFlagSet {
+            val: rw(subst, val),
+        },
         Inst8Kind::ExcTagSet { lane, val } => Inst8Kind::ExcTagSet {
             lane,
             val: rw(subst, val),
@@ -191,9 +193,9 @@ pub(super) fn rewrite_inst(mut inst: Inst8, subst: &HashMap<Val8, Val8>) -> Inst
             lane,
             val: rw(subst, val),
         },
-        Inst8Kind::ExcFlagGet
-        | Inst8Kind::ExcTagGet { .. }
-        | Inst8Kind::ExcPayloadGet { .. } => inst.kind,
+        Inst8Kind::ExcFlagGet | Inst8Kind::ExcTagGet { .. } | Inst8Kind::ExcPayloadGet { .. } => {
+            inst.kind
+        }
     };
     inst
 }
@@ -205,12 +207,18 @@ pub(super) fn rewrite_term(term: &mut Terminator8, subst: &HashMap<Val8, Val8>) 
         Terminator8::Switch { index, .. } => *index = rw(subst, *index),
         Terminator8::Return { val } => {
             if let Some(w) = val {
-                *w = rw_word(subst, *w);
+                w.lo = rw_word(subst, w.lo);
+                if let Some(hi) = &mut w.hi {
+                    *hi = rw_word(subst, *hi);
+                }
             }
         }
         Terminator8::Exit { val } => {
             if let Some(w) = val {
-                *w = rw_word(subst, *w);
+                w.lo = rw_word(subst, w.lo);
+                if let Some(hi) = &mut w.hi {
+                    *hi = rw_word(subst, *hi);
+                }
             }
         }
         Terminator8::CallSetup { args, .. } => {
@@ -323,9 +331,7 @@ pub(super) fn inst_uses(kind: &Inst8Kind, live: &mut HashSet<Val8>) {
         | Inst8Kind::ExcPayloadSet { val, .. } => {
             add_use(live, *val);
         }
-        Inst8Kind::ExcFlagGet
-        | Inst8Kind::ExcTagGet { .. }
-        | Inst8Kind::ExcPayloadGet { .. } => {}
+        Inst8Kind::ExcFlagGet | Inst8Kind::ExcTagGet { .. } | Inst8Kind::ExcPayloadGet { .. } => {}
     }
 }
 
@@ -340,7 +346,10 @@ pub(super) fn term_uses(term: &Terminator8, live: &mut HashSet<Val8>) {
         }
         Terminator8::Return { val } | Terminator8::Exit { val } => {
             if let Some(w) = val {
-                live.extend(w.bytes().into_iter().filter(|r| !r.is_imm()));
+                live.extend(w.lo.bytes().into_iter().filter(|r| !r.is_imm()));
+                if let Some(hi) = w.hi {
+                    live.extend(hi.bytes().into_iter().filter(|r| !r.is_imm()));
+                }
             }
         }
         Terminator8::CallSetup { args, .. } => {

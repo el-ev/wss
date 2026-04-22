@@ -1612,13 +1612,25 @@ fn dump_case_memory(
     let mut trap = None;
 
     match instance.get_func(&mut store, "_start") {
-        Some(func) => match func.typed::<(), i32>(&store) {
-            Ok(start_func) => match start_func.call(&mut store, ()) {
-                Ok(value) => ra = Some(format_hex32(value as u32)),
-                Err(err) => trap = Some(err.to_string()),
-            },
-            Err(err) => trap = Some(err.to_string()),
-        },
+        Some(func) => {
+            let ty = func.ty(&store);
+            if ty.params().len() != 0 || ty.results().len() != 1 {
+                trap = Some("unsupported exported _start signature".to_string());
+            } else {
+                let mut results = vec![Val::I32(0)];
+                match func.call(&mut store, &[], &mut results) {
+                    Ok(()) => match results.first() {
+                        Some(Val::I32(value)) => ra = Some(format_hex32(*value as u32)),
+                        Some(Val::I64(value)) => ra = Some(format_hex64(*value as u64)),
+                        Some(other) => {
+                            trap = Some(format!("unsupported _start result {:?}", other))
+                        }
+                        None => trap = Some("missing _start result".to_string()),
+                    },
+                    Err(err) => trap = Some(err.to_string()),
+                }
+            }
+        }
         None => {
             trap = Some("missing exported _start".to_string());
         }
@@ -1973,6 +1985,10 @@ fn path_arg_from_root(abs_path: &Path, root: &Path) -> String {
 
 fn format_hex32(value: u32) -> String {
     format!("0x{:08x}", value)
+}
+
+fn format_hex64(value: u64) -> String {
+    format!("0x{:016x}", value)
 }
 
 fn format_command(cmd: &str, args: &[String]) -> String {

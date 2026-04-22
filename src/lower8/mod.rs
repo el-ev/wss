@@ -7,7 +7,7 @@ use crate::constants::MAX_ADDRESSABLE_MEMORY_BYTES;
 use crate::ir::{BasicBlock, BlockId, Inst, IrNode, Terminator};
 use crate::ir8::{
     BasicBlock8, BoolNary8, BuiltinId, CallTarget, Inst8, Inst8Kind, Ir8Program, PC_STRIDE, Pc,
-    Terminator8, TrapCode, VREG_START, Val8, Word,
+    Terminator8, TrapCode, VREG_START, Val8, ValueWords, Word,
 };
 use crate::module::{ConstInit, IrFuncBody, IrModule};
 
@@ -18,6 +18,7 @@ mod ops;
 
 use analysis::{collect_spill_words, compute_live_after_by_block};
 use builder::{FuncAlloc, FuncBuilder, alloc_builtin_div_params, prealloc_locals};
+use ops::lower_load_fill_byte;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Lower8Config {
@@ -64,30 +65,39 @@ fn build_memory_layout(
     Ok((runtime_memory_end, init_bytes))
 }
 
-fn build_global_init(module: &IrModule) -> anyhow::Result<Vec<u32>> {
-    let mut out = Vec::with_capacity(module.globals().len());
+fn build_global_init(module: &IrModule) -> anyhow::Result<(Vec<Vec<u32>>, Vec<u32>)> {
+    let mut map = Vec::with_capacity(module.globals().len());
+    let mut out = Vec::new();
     for (i, g) in module.globals().iter().enumerate() {
-        // TODO(i64): global lowering currently supports only i32 globals.
-        anyhow::ensure!(
-            g.content_type() == wasmparser::ValType::I32,
-            "global {} type {:?} is unsupported (only i32 globals are supported)",
-            i,
-            g.content_type()
-        );
-        let v = match g.init() {
-            // TODO(i64): global init lowering currently supports only i32 const inits.
-            ConstInit::I32(v) => v as u32,
-        };
-        out.push(v);
+        let base = out.len() as u32;
+        match (g.content_type(), g.init()) {
+            (wasmparser::ValType::I32, ConstInit::I32(v)) => {
+                map.push(vec![base]);
+                out.push(v as u32);
+            }
+            (wasmparser::ValType::I64, ConstInit::I64(v)) => {
+                map.push(vec![base, base + 1]);
+                out.push(v as u64 as u32);
+                out.push(((v as u64) >> 32) as u32);
+            }
+            (ty, init) => {
+                anyhow::bail!(
+                    "global {} type/init mismatch in lower8: {:?} initialized with {:?}",
+                    i,
+                    ty,
+                    init
+                );
+            }
+        }
     }
-    Ok(out)
+    Ok((map, out))
 }
 
 struct Lower8Context<'a> {
     module: &'a IrModule,
     allocs: &'a [FuncAlloc],
+    global_words: &'a [Vec<u32>],
     div_builtins: Option<DivBuiltinFuncs>,
-    js_coprocessor: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -140,8 +150,23 @@ fn lower_word_bytewise_op(
     dst
 }
 
+fn lower_value_bytewise_op(
+    b: &mut FuncBuilder,
+    lhs: ValueWords,
+    rhs: ValueWords,
+    make_kind: impl Fn(Val8, Val8) -> Inst8Kind + Copy,
+) -> ValueWords {
+    let lo = lower_word_bytewise_op(b, lhs.lo, rhs.lo, make_kind);
+    let hi = lower_word_bytewise_op(
+        b,
+        lhs.hi.expect("i64 lhs must have hi"),
+        rhs.hi.expect("i64 rhs must have hi"),
+        make_kind,
+    );
+    ValueWords::two(lo, hi)
+}
+
 fn lower_add32(b: &mut FuncBuilder, lhs: Word, rhs: Word) -> Word {
-    // TODO(i64): arithmetic helpers are currently specialized to 32-bit words.
     lower_word_lane32_op(b, lhs, rhs, |lhs, rhs, lane| Inst8Kind::Add32Byte {
         lhs,
         rhs,
@@ -177,6 +202,22 @@ fn select_word(b: &mut FuncBuilder, cond: Val8, if_true: Word, if_false: Word) -
         ));
     }
     dst
+}
+
+fn select_value(
+    b: &mut FuncBuilder,
+    cond: Val8,
+    if_true: ValueWords,
+    if_false: ValueWords,
+) -> ValueWords {
+    let lo = select_word(b, cond, if_true.lo, if_false.lo);
+    match (if_true.hi, if_false.hi) {
+        (Some(true_hi), Some(false_hi)) => {
+            ValueWords::two(lo, select_word(b, cond, true_hi, false_hi))
+        }
+        (None, None) => ValueWords::one(lo),
+        _ => unreachable!("mismatched value widths in select_value"),
+    }
 }
 
 fn emit_bool_chain(
@@ -260,6 +301,119 @@ fn word_bit(b: &mut FuncBuilder, w: Word, bit_index: u8, zero: Val8) -> Val8 {
 fn negate_word(b: &mut FuncBuilder, w: Word) -> Word {
     let zero = Word::from_u32_imm(0);
     lower_sub32(b, zero, w)
+}
+
+fn lower_eq64_bit(b: &mut FuncBuilder, lhs: ValueWords, rhs: ValueWords) -> Val8 {
+    let lo_eq = lower_eq32_bit(b, lhs.lo, rhs.lo);
+    let hi_eq = lower_eq32_bit(
+        b,
+        lhs.hi.expect("i64 lhs must have hi"),
+        rhs.hi.expect("i64 rhs must have hi"),
+    );
+    emit_bool_chain(b, &[lo_eq, hi_eq], Inst8Kind::BoolAnd)
+}
+
+fn lower_ltu64_bit(b: &mut FuncBuilder, lhs: ValueWords, rhs: ValueWords) -> Val8 {
+    let lhs_hi = lhs.hi.expect("i64 lhs must have hi");
+    let rhs_hi = rhs.hi.expect("i64 rhs must have hi");
+    let hi_lt = lower_ltu32_bit(b, lhs_hi, rhs_hi);
+    let hi_eq = lower_eq32_bit(b, lhs_hi, rhs_hi);
+    let lo_lt = lower_ltu32_bit(b, lhs.lo, rhs.lo);
+    let hi_eq_and_lo_lt = emit_bool_chain(b, &[hi_eq, lo_lt], Inst8Kind::BoolAnd);
+    emit_bool_chain(b, &[hi_lt, hi_eq_and_lo_lt], Inst8Kind::BoolOr)
+}
+
+fn lower_add64(b: &mut FuncBuilder, lhs: ValueWords, rhs: ValueWords) -> ValueWords {
+    let lo = lower_add32(b, lhs.lo, rhs.lo);
+    let carry = lower_ltu32_bit(b, lo, lhs.lo);
+    let hi_sum = lower_add32(
+        b,
+        lhs.hi.expect("i64 lhs must have hi"),
+        rhs.hi.expect("i64 rhs must have hi"),
+    );
+    let hi = lower_add32(
+        b,
+        hi_sum,
+        Word::new(carry, Val8::imm(0), Val8::imm(0), Val8::imm(0)),
+    );
+    ValueWords::two(lo, hi)
+}
+
+fn lower_sub64_with_borrow(
+    b: &mut FuncBuilder,
+    lhs: ValueWords,
+    rhs: ValueWords,
+) -> (ValueWords, Val8) {
+    let (lo, borrow0) = lower_sub32_with_borrow(b, lhs.lo, rhs.lo);
+    let (hi_tmp, borrow1a) = lower_sub32_with_borrow(
+        b,
+        lhs.hi.expect("i64 lhs must have hi"),
+        rhs.hi.expect("i64 rhs must have hi"),
+    );
+    let borrow_word = Word::new(borrow0, Val8::imm(0), Val8::imm(0), Val8::imm(0));
+    let (hi, borrow1b) = lower_sub32_with_borrow(b, hi_tmp, borrow_word);
+    let borrow = emit_bool_chain(b, &[borrow1a, borrow1b], Inst8Kind::BoolOr);
+    (ValueWords::two(lo, hi), borrow)
+}
+
+fn lower_sub64(b: &mut FuncBuilder, lhs: ValueWords, rhs: ValueWords) -> ValueWords {
+    lower_sub64_with_borrow(b, lhs, rhs).0
+}
+
+fn lower_eqz64(b: &mut FuncBuilder, value: ValueWords) -> Word {
+    let zero = ValueWords::two(Word::from_u32_imm(0), Word::from_u32_imm(0));
+    let bit = lower_eq64_bit(b, value, zero);
+    bool_to_word(b, bit)
+}
+
+pub(super) fn lower_extend_i32_to_i64(
+    b: &mut FuncBuilder,
+    value: Word,
+    signed: bool,
+) -> ValueWords {
+    if signed {
+        let fill = lower_load_fill_byte(b, value.bytes()[3], true);
+        let hi = Word::new(fill, fill, fill, fill);
+        ValueWords::two(value, hi)
+    } else {
+        ValueWords::two(value, Word::from_u32_imm(0))
+    }
+}
+
+fn lower_sign_extend64_from_byte(
+    b: &mut FuncBuilder,
+    value: ValueWords,
+    check_word_hi: bool,
+    check_byte: usize,
+) -> ValueWords {
+    let sign_src = if check_word_hi {
+        value.hi.expect("i64 value must have hi").bytes()[check_byte]
+    } else {
+        value.lo.bytes()[check_byte]
+    };
+    let fill = lower_load_fill_byte(b, sign_src, true);
+    let mut lo = value.lo;
+    let mut hi = value.hi.expect("i64 value must have hi");
+    if check_word_hi {
+        for lane in (check_byte + 1)..4 {
+            hi = Word::new(
+                if lane == 0 { fill } else { hi.b0 },
+                if lane <= 1 { fill } else { hi.b1 },
+                if lane <= 2 { fill } else { hi.b2 },
+                if lane <= 3 { fill } else { hi.b3 },
+            );
+        }
+    } else {
+        let lo_bytes = lo.bytes();
+        lo = Word::new(
+            lo_bytes[0],
+            if check_byte < 1 { fill } else { lo_bytes[1] },
+            if check_byte < 2 { fill } else { lo_bytes[2] },
+            if check_byte < 3 { fill } else { lo_bytes[3] },
+        );
+        hi = Word::new(fill, fill, fill, fill);
+    }
+    ValueWords::two(lo, hi)
 }
 
 fn emit_divrem_u32_iteration(
@@ -399,7 +553,6 @@ fn lower_divrem_s32(b: &mut FuncBuilder, numer: Word, denom: Word, want_rem: boo
 }
 
 fn word_const_u32(w: Word) -> Option<u32> {
-    // TODO(i64): constant folding only reconstructs 32-bit immediates.
     let b0 = w.b0.imm_value()? as u32;
     let b1 = w.b1.imm_value()? as u32;
     let b2 = w.b2.imm_value()? as u32;
@@ -708,7 +861,6 @@ fn lower_builtin_call(b: &mut FuncBuilder, builtin: BuiltinId, args: Vec<Word>) 
 }
 
 fn lower_binary(b: &mut FuncBuilder, op: BinOp, lhs: Word, rhs: Word) -> anyhow::Result<Word> {
-    // TODO(i64): binary op lowering routes through 32-bit helpers/builtins only.
     Ok(match op {
         BinOp::Add => lower_add32(b, lhs, rhs),
         BinOp::Sub => lower_sub32(b, lhs, rhs),
@@ -811,6 +963,12 @@ fn bool32(b: &mut FuncBuilder, val: Word) -> Val8 {
     emit_bool_chain(b, &nes, Inst8Kind::BoolOr)
 }
 
+fn bool_not(b: &mut FuncBuilder, bit: Val8) -> Val8 {
+    let dst = b.alloc_reg();
+    b.emit(Inst8::with_dst(dst, Inst8Kind::BoolNot(bit)));
+    dst
+}
+
 fn bool_to_word(b: &mut FuncBuilder, bit: Val8) -> Word {
     let dst = b.alloc_word();
     b.set_word_from_byte(dst, bit);
@@ -861,7 +1019,6 @@ fn flip_sign(b: &mut FuncBuilder, value: Word) -> Word {
 }
 
 fn lower_compare(b: &mut FuncBuilder, op: RelOp, lhs: Word, rhs: Word) -> anyhow::Result<Word> {
-    // TODO(i64): compare lowering is currently specialized to 32-bit words.
     Ok(match op {
         RelOp::Eq => lower_eq32(b, lhs, rhs),
         RelOp::Ne => lower_ne32(b, lhs, rhs),
@@ -890,7 +1047,6 @@ fn lower_compare(b: &mut FuncBuilder, op: RelOp, lhs: Word, rhs: Word) -> anyhow
 }
 
 fn lower_unary(b: &mut FuncBuilder, op: UnOp, operand: Word) -> anyhow::Result<Word> {
-    // TODO(i64): unary lowering dispatches only 32-bit builtins/semantics.
     Ok(match op {
         UnOp::Eqz => {
             // eqz(a) = (a == 0)
@@ -902,6 +1058,9 @@ fn lower_unary(b: &mut FuncBuilder, op: UnOp, operand: Word) -> anyhow::Result<W
         UnOp::Clz => lower_builtin_call(b, BuiltinId::Clz32, vec![operand]),
         UnOp::Ctz => lower_builtin_call(b, BuiltinId::Ctz32, vec![operand]),
         UnOp::Popcnt => lower_builtin_call(b, BuiltinId::Popcnt32, vec![operand]),
+        UnOp::Extend32S | UnOp::WrapI64 | UnOp::ExtendI32S | UnOp::ExtendI32U => {
+            unreachable!("i64 unary ops are handled before lower_unary dispatch");
+        }
     })
 }
 
@@ -969,7 +1128,7 @@ fn lower_terminator(
             )?;
         }
         Terminator::Return(val_ref) => {
-            let val = val_ref.map(|r| b.get_word(r));
+            let val = val_ref.map(|r| b.get_value(r));
             if b.is_entry {
                 b.finish(Terminator8::Exit { val });
             } else {
@@ -998,18 +1157,18 @@ enum DivBuiltinKind {
     RemS,
 }
 
-fn divrem_param_vregs(local_vregs: &[Word], func_id: u32) -> anyhow::Result<[Word; 2]> {
+fn divrem_param_vregs(local_vregs: &[ValueWords], func_id: u32) -> anyhow::Result<[Word; 2]> {
     anyhow::ensure!(
         local_vregs.len() >= 2,
         "builtin div/rem function {} expects two parameter words",
         func_id
     );
-    Ok([local_vregs[0], local_vregs[1]])
+    Ok([local_vregs[0].lo, local_vregs[1].lo])
 }
 
 fn lower_divrem_builtin_function(
     func_id: u32,
-    local_vregs: Vec<Word>,
+    local_vregs: Vec<ValueWords>,
     vreg_start: u16,
     kind: DivBuiltinKind,
 ) -> anyhow::Result<(Vec<BasicBlock8>, Pc, u32, u16)> {
@@ -1026,7 +1185,7 @@ fn lower_divrem_builtin_function(
         DivBuiltinKind::RemS => lower_divrem_s32(&mut b, numer, denom, true),
     };
 
-    calls::emit_non_main_return_sequence(&mut b, Some(ret));
+    calls::emit_non_main_return_sequence(&mut b, Some(ValueWords::one(ret)));
 
     Ok((
         b.blocks,
@@ -1045,7 +1204,11 @@ pub fn lower8_module_with_config(
     memory_bytes_cap: u32,
     config: Lower8Config,
 ) -> anyhow::Result<Ir8Program> {
-    let builtin_slots = if config.js_coprocessor { 0usize } else { 4usize };
+    let builtin_slots = if config.js_coprocessor {
+        0usize
+    } else {
+        4usize
+    };
     let total_func_slots = module.bodies().len() + builtin_slots;
     let max_func_slots = usize::from(u16::MAX / PC_STRIDE) + 1;
     anyhow::ensure!(
@@ -1057,7 +1220,7 @@ pub fn lower8_module_with_config(
     );
 
     let entry_func_id = module.entry_export().context("no '_start' export")? as usize;
-    let global_init = build_global_init(module)?;
+    let (global_words, global_init) = build_global_init(module)?;
     let stack_pointer = global_init.first().copied();
     let (memory_end, init_bytes) = build_memory_layout(module, memory_bytes_cap, stack_pointer)?;
     let (mut allocs, mut vreg_counter) = prealloc_locals(module);
@@ -1085,8 +1248,8 @@ pub fn lower8_module_with_config(
     let lower_ctx = Lower8Context {
         module,
         allocs: &allocs,
+        global_words: &global_words,
         div_builtins,
-        js_coprocessor: config.js_coprocessor,
     };
 
     for (func_id, body) in module.bodies().iter().enumerate() {
@@ -1174,7 +1337,7 @@ fn lower_function(
     body: Option<&IrFuncBody>,
     func_id: u32,
     is_entry: bool,
-    local_vregs: Vec<Word>,
+    local_vregs: Vec<ValueWords>,
     vreg_start: u16,
 ) -> anyhow::Result<(Vec<BasicBlock8>, Pc, u32, u16)> {
     let body = match body {
@@ -1184,7 +1347,10 @@ fn lower_function(
         }
     };
 
-    let num_locals = body.locals().len() as u32;
+    let num_locals = local_vregs
+        .iter()
+        .map(|value| u32::from(value.word_count()))
+        .sum();
     let mut b = FuncBuilder::new(func_id, is_entry, vreg_start, local_vregs);
 
     let live_after_by_block = compute_live_after_by_block(body);
@@ -1277,7 +1443,7 @@ mod tests {
         blocks
             .iter()
             .find_map(|bb| match bb.terminator {
-                Terminator8::Exit { val: Some(v) } => Some(v),
+                Terminator8::Exit { val: Some(v) } => Some(v.lo),
                 _ => None,
             })
             .expect("expected main function exit value")
@@ -1418,7 +1584,7 @@ mod tests {
             crate::module::ConstInit::I32(0),
         ));
 
-        assert_lower8_error_contains(&module, 65536, "global 0 type I64 is unsupported");
+        assert_lower8_error_contains(&module, 65536, "global 0 type/init mismatch");
     }
 
     #[test]
@@ -1428,6 +1594,7 @@ mod tests {
             insts: vec![
                 Inst::I32Const(0),
                 Inst::Load {
+                    ty: ValType::I32,
                     size: 32,
                     signed: false,
                     offset: 0x1234_5678,
@@ -1452,6 +1619,7 @@ mod tests {
                 Inst::I32Const(0),
                 Inst::I32Const(0),
                 Inst::Store {
+                    ty: ValType::I32,
                     size: 16,
                     offset: u16::MAX as u32,
                     addr: r(0),
@@ -1475,6 +1643,7 @@ mod tests {
             insts: vec![
                 Inst::I32Const(0),
                 Inst::Load {
+                    ty: ValType::I32,
                     size: 1,
                     signed: false,
                     offset: 0,
@@ -1487,7 +1656,7 @@ mod tests {
         assert_lower8_error_contains(
             &module,
             65536,
-            "load i32 memory width 1 is unsupported (expected 8/16/32 bits)",
+            "load memory width 1 is unsupported (expected 8/16/32/64 bits)",
         );
     }
 
@@ -1499,6 +1668,7 @@ mod tests {
                 Inst::I32Const(0),
                 Inst::I32Const(0),
                 Inst::Store {
+                    ty: ValType::I32,
                     size: 4,
                     offset: 0,
                     addr: r(0),
@@ -1511,7 +1681,7 @@ mod tests {
         assert_lower8_error_contains(
             &module,
             65536,
-            "store i32 memory width 4 is unsupported (expected 8/16/32 bits)",
+            "store memory width 4 is unsupported (expected 8/16/32/64 bits)",
         );
     }
 
@@ -1520,15 +1690,50 @@ mod tests {
         let module = mk_single_main_module(BasicBlock {
             id: bid(0),
             insts: vec![
-                Inst::I32Const(100),                   // 0
-                Inst::I32Const(7),                     // 1
-                Inst::Binary(BinOp::DivU, r(0), r(1)), // 2
-                Inst::Binary(BinOp::RemU, r(0), r(1)), // 3
-                Inst::Binary(BinOp::DivS, r(0), r(1)), // 4
-                Inst::Binary(BinOp::RemS, r(0), r(1)), // 5
-                Inst::Binary(BinOp::Add, r(2), r(3)),  // 6
-                Inst::Binary(BinOp::Add, r(4), r(5)),  // 7
-                Inst::Binary(BinOp::Add, r(6), r(7)),  // 8
+                Inst::I32Const(100), // 0
+                Inst::I32Const(7),   // 1
+                Inst::Binary {
+                    op: BinOp::DivU,
+                    ty: ValType::I32,
+                    lhs: r(0),
+                    rhs: r(1),
+                }, // 2
+                Inst::Binary {
+                    op: BinOp::RemU,
+                    ty: ValType::I32,
+                    lhs: r(0),
+                    rhs: r(1),
+                }, // 3
+                Inst::Binary {
+                    op: BinOp::DivS,
+                    ty: ValType::I32,
+                    lhs: r(0),
+                    rhs: r(1),
+                }, // 4
+                Inst::Binary {
+                    op: BinOp::RemS,
+                    ty: ValType::I32,
+                    lhs: r(0),
+                    rhs: r(1),
+                }, // 5
+                Inst::Binary {
+                    op: BinOp::Add,
+                    ty: ValType::I32,
+                    lhs: r(2),
+                    rhs: r(3),
+                }, // 6
+                Inst::Binary {
+                    op: BinOp::Add,
+                    ty: ValType::I32,
+                    lhs: r(4),
+                    rhs: r(5),
+                }, // 7
+                Inst::Binary {
+                    op: BinOp::Add,
+                    ty: ValType::I32,
+                    lhs: r(6),
+                    rhs: r(7),
+                }, // 8
             ],
             terminator: Terminator::Return(Some(r(8))),
         });
@@ -1564,7 +1769,12 @@ mod tests {
             insts: vec![
                 Inst::I32Const(100),
                 Inst::Getchar,
-                Inst::Binary(BinOp::DivU, r(0), r(1)),
+                Inst::Binary {
+                    op: BinOp::DivU,
+                    ty: ValType::I32,
+                    lhs: r(0),
+                    rhs: r(1),
+                },
             ],
             terminator: Terminator::Return(Some(r(2))),
         });
@@ -1608,8 +1818,18 @@ mod tests {
             insts: vec![
                 Inst::Getchar,
                 Inst::I32Const(7),
-                Inst::Binary(BinOp::DivU, r(0), r(1)),
-                Inst::Binary(BinOp::RemU, r(0), r(1)),
+                Inst::Binary {
+                    op: BinOp::DivU,
+                    ty: ValType::I32,
+                    lhs: r(0),
+                    rhs: r(1),
+                },
+                Inst::Binary {
+                    op: BinOp::RemU,
+                    ty: ValType::I32,
+                    lhs: r(0),
+                    rhs: r(1),
+                },
             ],
             terminator: Terminator::Return(Some(r(3))),
         });
@@ -1658,9 +1878,24 @@ mod tests {
             insts: vec![
                 Inst::I32Const(123456789),
                 Inst::I32Const(10),
-                Inst::Binary(BinOp::DivU, r(0), r(1)),
-                Inst::Binary(BinOp::RemU, r(0), r(1)),
-                Inst::Binary(BinOp::Add, r(2), r(3)),
+                Inst::Binary {
+                    op: BinOp::DivU,
+                    ty: ValType::I32,
+                    lhs: r(0),
+                    rhs: r(1),
+                },
+                Inst::Binary {
+                    op: BinOp::RemU,
+                    ty: ValType::I32,
+                    lhs: r(0),
+                    rhs: r(1),
+                },
+                Inst::Binary {
+                    op: BinOp::Add,
+                    ty: ValType::I32,
+                    lhs: r(2),
+                    rhs: r(3),
+                },
             ],
             terminator: Terminator::Return(Some(r(4))),
         });
@@ -1709,7 +1944,12 @@ mod tests {
             insts: vec![
                 Inst::I32Const(100),
                 Inst::Getchar,
-                Inst::Binary(BinOp::DivU, r(0), r(1)),
+                Inst::Binary {
+                    op: BinOp::DivU,
+                    ty: ValType::I32,
+                    lhs: r(0),
+                    rhs: r(1),
+                },
             ],
             terminator: Terminator::Return(Some(r(2))),
         });
@@ -1762,7 +2002,12 @@ mod tests {
             insts: vec![
                 Inst::Getchar,
                 Inst::Getchar,
-                Inst::Binary(BinOp::DivU, r(0), r(1)),
+                Inst::Binary {
+                    op: BinOp::DivU,
+                    ty: ValType::I32,
+                    lhs: r(0),
+                    rhs: r(1),
+                },
             ],
             terminator: Terminator::Return(Some(r(2))),
         });
@@ -1823,11 +2068,36 @@ mod tests {
             insts: vec![
                 Inst::Getchar,
                 Inst::I32Const(5),
-                Inst::Binary(BinOp::Shl, r(0), r(1)),
-                Inst::Binary(BinOp::ShrU, r(0), r(1)),
-                Inst::Binary(BinOp::ShrS, r(0), r(1)),
-                Inst::Binary(BinOp::Rotl, r(0), r(1)),
-                Inst::Binary(BinOp::Rotr, r(0), r(1)),
+                Inst::Binary {
+                    op: BinOp::Shl,
+                    ty: ValType::I32,
+                    lhs: r(0),
+                    rhs: r(1),
+                },
+                Inst::Binary {
+                    op: BinOp::ShrU,
+                    ty: ValType::I32,
+                    lhs: r(0),
+                    rhs: r(1),
+                },
+                Inst::Binary {
+                    op: BinOp::ShrS,
+                    ty: ValType::I32,
+                    lhs: r(0),
+                    rhs: r(1),
+                },
+                Inst::Binary {
+                    op: BinOp::Rotl,
+                    ty: ValType::I32,
+                    lhs: r(0),
+                    rhs: r(1),
+                },
+                Inst::Binary {
+                    op: BinOp::Rotr,
+                    ty: ValType::I32,
+                    lhs: r(0),
+                    rhs: r(1),
+                },
             ],
             terminator: Terminator::Return(Some(r(6))),
         });
@@ -1858,11 +2128,36 @@ mod tests {
             insts: vec![
                 Inst::Getchar,
                 Inst::Getchar,
-                Inst::Binary(BinOp::Shl, r(0), r(1)),
-                Inst::Binary(BinOp::ShrU, r(0), r(1)),
-                Inst::Binary(BinOp::ShrS, r(0), r(1)),
-                Inst::Binary(BinOp::Rotl, r(0), r(1)),
-                Inst::Binary(BinOp::Rotr, r(0), r(1)),
+                Inst::Binary {
+                    op: BinOp::Shl,
+                    ty: ValType::I32,
+                    lhs: r(0),
+                    rhs: r(1),
+                },
+                Inst::Binary {
+                    op: BinOp::ShrU,
+                    ty: ValType::I32,
+                    lhs: r(0),
+                    rhs: r(1),
+                },
+                Inst::Binary {
+                    op: BinOp::ShrS,
+                    ty: ValType::I32,
+                    lhs: r(0),
+                    rhs: r(1),
+                },
+                Inst::Binary {
+                    op: BinOp::Rotl,
+                    ty: ValType::I32,
+                    lhs: r(0),
+                    rhs: r(1),
+                },
+                Inst::Binary {
+                    op: BinOp::Rotr,
+                    ty: ValType::I32,
+                    lhs: r(0),
+                    rhs: r(1),
+                },
             ],
             terminator: Terminator::Return(Some(r(6))),
         });
@@ -1884,7 +2179,12 @@ mod tests {
             insts: vec![
                 Inst::Getchar,
                 Inst::I32Const(8),
-                Inst::Binary(BinOp::DivU, r(0), r(1)),
+                Inst::Binary {
+                    op: BinOp::DivU,
+                    ty: ValType::I32,
+                    lhs: r(0),
+                    rhs: r(1),
+                },
             ],
             terminator: Terminator::Return(Some(r(2))),
         });
@@ -1907,6 +2207,7 @@ mod tests {
             insts: vec![
                 Inst::I32Const(0),
                 Inst::Load {
+                    ty: ValType::I32,
                     size: 8,
                     signed: true,
                     offset: 5,
@@ -1963,6 +2264,7 @@ mod tests {
             insts: vec![
                 Inst::I32Const(0),
                 Inst::Load {
+                    ty: ValType::I32,
                     size: 16,
                     signed: true,
                     offset: 6,
@@ -2018,6 +2320,7 @@ mod tests {
             insts: vec![
                 Inst::I32Const(0),
                 Inst::Load {
+                    ty: ValType::I32,
                     size: 16,
                     signed: false,
                     offset: 6,
@@ -2068,6 +2371,7 @@ mod tests {
                 Inst::I32Const(0),
                 Inst::I32Const(0x1122_3344),
                 Inst::Store {
+                    ty: ValType::I32,
                     size: 16,
                     offset: 9,
                     addr: r(0),
@@ -2135,25 +2439,51 @@ mod tests {
         let fib_block = BasicBlock {
             id: bid(0),
             insts: vec![
-                Inst::LocalGet(0),                    // 0: n
-                Inst::I32Const(4),                    // 1
-                Inst::Binary(BinOp::Mul, r(0), r(1)), // 2: n*4
-                Inst::I32Const(16),                   // 3: memo base
-                Inst::Binary(BinOp::Add, r(3), r(2)), // 4: addr
-                Inst::I32Const(1),                    // 5
-                Inst::Binary(BinOp::Sub, r(0), r(5)), // 6: n-1
+                Inst::LocalGet(0), // 0: n
+                Inst::I32Const(4), // 1
+                Inst::Binary {
+                    op: BinOp::Mul,
+                    ty: ValType::I32,
+                    lhs: r(0),
+                    rhs: r(1),
+                }, // 2: n*4
+                Inst::I32Const(16), // 3: memo base
+                Inst::Binary {
+                    op: BinOp::Add,
+                    ty: ValType::I32,
+                    lhs: r(3),
+                    rhs: r(2),
+                }, // 4: addr
+                Inst::I32Const(1), // 5
+                Inst::Binary {
+                    op: BinOp::Sub,
+                    ty: ValType::I32,
+                    lhs: r(0),
+                    rhs: r(5),
+                }, // 6: n-1
                 Inst::Call {
                     func: 0,
                     args: vec![r(6)],
                 }, // 7
-                Inst::I32Const(2),                    // 8
-                Inst::Binary(BinOp::Sub, r(0), r(8)), // 9: n-2
+                Inst::I32Const(2), // 8
+                Inst::Binary {
+                    op: BinOp::Sub,
+                    ty: ValType::I32,
+                    lhs: r(0),
+                    rhs: r(8),
+                }, // 9: n-2
                 Inst::Call {
                     func: 0,
                     args: vec![r(9)],
                 }, // 10
-                Inst::Binary(BinOp::Add, r(7), r(10)), // 11: fib(n-1)+fib(n-2)
+                Inst::Binary {
+                    op: BinOp::Add,
+                    ty: ValType::I32,
+                    lhs: r(7),
+                    rhs: r(10),
+                }, // 11: fib(n-1)+fib(n-2)
                 Inst::Store {
+                    ty: ValType::I32,
                     size: 32,
                     offset: 0,
                     addr: r(4),
@@ -2443,7 +2773,7 @@ mod tests {
         };
         let msg = format!("{err:#}");
         assert!(
-            msg.contains("call_indirect type 0 expects 1 arg(s), got 0"),
+            msg.contains("call_indirect type 0 expects 1 arg word(s), got 0"),
             "unexpected lower8 error: {msg}"
         );
     }
@@ -2771,7 +3101,7 @@ mod tests {
         };
         let msg = format!("{err:#}");
         assert!(
-            msg.contains("tail_call_indirect type 0 expects 1 arg(s), got 0"),
+            msg.contains("tail_call_indirect type 0 expects 1 arg word(s), got 0"),
             "unexpected lower8 error: {msg}"
         );
     }

@@ -1,7 +1,7 @@
 use anyhow::{Context, bail};
-use wasmparser::{BlockType, FunctionBody, Operator, Parser, Payload::*};
+use wasmparser::{BlockType, FunctionBody, Operator, Parser, Payload::*, ValType};
 
-use crate::ast::{AstRef, BinOp, Catch, Node, RelOp, UnOp};
+use crate::ast::{AstRef, BinOp, Catch, Node, RelOp, TypedAstRef, UnOp};
 use crate::module::{AstFuncBody, AstModule, ModuleInfo};
 
 mod frame;
@@ -31,10 +31,7 @@ pub fn parse_module(info: ModuleInfo, wasm_bytes: &[u8]) -> anyhow::Result<AstMo
     Ok(module)
 }
 
-fn extend_locals_from_body(
-    locals: &mut Vec<wasmparser::ValType>,
-    body: &FunctionBody,
-) -> anyhow::Result<()> {
+fn extend_locals_from_body(locals: &mut Vec<ValType>, body: &FunctionBody) -> anyhow::Result<()> {
     body.get_locals_reader()?.into_iter().try_for_each(|local| {
         let (count, val_type) = local?;
         locals.extend(std::iter::repeat_n(val_type, count as usize));
@@ -42,29 +39,29 @@ fn extend_locals_from_body(
     })
 }
 
-fn call_shape_from_func(
-    module: &AstModule,
+fn call_shape_from_func<'a>(
+    module: &'a AstModule,
     function_index: u32,
     op_name: &str,
-) -> anyhow::Result<(usize, bool)> {
+) -> anyhow::Result<(&'a [ValType], Option<ValType>)> {
     let sig = module.func_type_at(function_index).with_context(|| {
         format!(
             "{}: function index {} out of bounds",
             op_name, function_index
         )
     })?;
-    Ok((sig.params().len(), !sig.results().is_empty()))
+    Ok((sig.params(), sig.results().first().copied()))
 }
 
-fn call_shape_from_type(
-    module: &AstModule,
+fn call_shape_from_type<'a>(
+    module: &'a AstModule,
     type_index: u32,
     op_name: &str,
-) -> anyhow::Result<(usize, bool)> {
+) -> anyhow::Result<(&'a [ValType], Option<ValType>)> {
     let sig = module
         .type_at(type_index)
         .with_context(|| format!("{}: type index {} out of bounds", op_name, type_index))?;
-    Ok((sig.params().len(), !sig.results().is_empty()))
+    Ok((sig.params(), sig.results().first().copied()))
 }
 
 fn tag_has_i32_payload(module: &AstModule, tag_index: u32) -> anyhow::Result<bool> {
@@ -102,18 +99,50 @@ fn tag_has_i32_payload(module: &AstModule, tag_index: u32) -> anyhow::Result<boo
     }
 }
 
-fn emit_call(frame: &mut BlockFrame, ref_stack: &mut Vec<AstRef>, call: Node, has_result: bool) {
-    let r = frame.emit(call);
-    if has_result {
-        ref_stack.push(r);
+fn emit_call(
+    frame: &mut BlockFrame,
+    ref_stack: &mut Vec<TypedAstRef>,
+    call: Node,
+    result_ty: Option<ValType>,
+) {
+    let value = frame.emit(call);
+    if let Some(ty) = result_ty {
+        ref_stack.push(TypedAstRef::new(value, ty));
     }
 }
 
 fn emit_return_call(frame: &mut BlockFrame, call: Node, has_result: bool) {
     let call_ref = frame.emit(call);
     frame.emit(Node::Return(has_result.then_some(call_ref)));
-    frame.ensure_dummy();
+    frame.ensure_dummy(ValType::I32);
     frame.unreachable = true;
+}
+
+fn local_type(locals: &[ValType], local_index: u32, op_name: &str) -> anyhow::Result<ValType> {
+    locals
+        .get(local_index as usize)
+        .copied()
+        .with_context(|| format!("{}: local {} out of bounds", op_name, local_index))
+}
+
+fn global_type(module: &AstModule, global_index: u32, op_name: &str) -> anyhow::Result<ValType> {
+    module
+        .globals()
+        .get(global_index as usize)
+        .map(|global| global.content_type())
+        .with_context(|| format!("{}: global {} out of bounds", op_name, global_index))
+}
+
+fn pop_typed_ref(
+    frame: &mut BlockFrame,
+    ref_stack: &mut Vec<TypedAstRef>,
+    expected_ty: ValType,
+    context: &str,
+) -> anyhow::Result<AstRef> {
+    Ok(frame
+        .pop_ref(ref_stack, expected_ty)
+        .with_context(|| context.to_string())?
+        .value)
 }
 
 fn parse_function(
@@ -127,25 +156,29 @@ fn parse_function(
         .with_context(|| format!("function index {} out of bounds", func_index))?;
     locals.extend(signature.params().iter().copied());
     extend_locals_from_body(&mut locals, &body)?;
-    let mut ref_stack: Vec<AstRef> = Vec::new();
+    let mut ref_stack: Vec<TypedAstRef> = Vec::new();
     let mut block_stack = vec![BlockFrame {
         kind: BlockKind::Function,
         return_types: signature.results().to_vec(),
         insts: Vec::new(),
         temp_locals: Vec::new(),
         unreachable: false,
-        dummy_ref: None,
+        dummy_refs: Vec::new(),
     }];
     let mut ops_reader = body.get_operators_reader()?;
 
     while !ops_reader.eof() {
         let op = ops_reader.read()?;
         match op {
-            // TODO(i64): parser operator dispatch currently only lowers i32 numeric ops.
             Operator::I32Const { value } => {
                 let frame = current_frame_mut(&mut block_stack)?;
                 let r = frame.emit(Node::I32Const(value));
-                ref_stack.push(r);
+                ref_stack.push(TypedAstRef::new(r, ValType::I32));
+            }
+            Operator::I64Const { value } => {
+                let frame = current_frame_mut(&mut block_stack)?;
+                let r = frame.emit(Node::I64Const(value));
+                ref_stack.push(TypedAstRef::new(r, ValType::I64));
             }
             Operator::I32Add
             | Operator::I32Sub
@@ -161,10 +194,43 @@ fn parse_function(
             | Operator::I32ShrS
             | Operator::I32ShrU
             | Operator::I32Rotl
-            | Operator::I32Rotr => {
+            | Operator::I32Rotr
+            | Operator::I64Add
+            | Operator::I64Sub
+            | Operator::I64Mul
+            | Operator::I64DivS
+            | Operator::I64DivU
+            | Operator::I64RemS
+            | Operator::I64RemU
+            | Operator::I64And
+            | Operator::I64Or
+            | Operator::I64Xor
+            | Operator::I64Shl
+            | Operator::I64ShrS
+            | Operator::I64ShrU
+            | Operator::I64Rotl
+            | Operator::I64Rotr => {
+                let ty = match op {
+                    Operator::I32Add
+                    | Operator::I32Sub
+                    | Operator::I32Mul
+                    | Operator::I32DivS
+                    | Operator::I32DivU
+                    | Operator::I32RemS
+                    | Operator::I32RemU
+                    | Operator::I32And
+                    | Operator::I32Or
+                    | Operator::I32Xor
+                    | Operator::I32Shl
+                    | Operator::I32ShrS
+                    | Operator::I32ShrU
+                    | Operator::I32Rotl
+                    | Operator::I32Rotr => ValType::I32,
+                    _ => ValType::I64,
+                };
                 let frame = current_frame_mut(&mut block_stack)?;
-                let rhs = frame.pop_ref(&mut ref_stack).context("empty stack?")?;
-                let lhs = frame.pop_ref(&mut ref_stack).context("empty stack?")?;
+                let rhs = pop_typed_ref(frame, &mut ref_stack, ty, "empty stack?")?;
+                let lhs = pop_typed_ref(frame, &mut ref_stack, ty, "empty stack?")?;
                 let binop = match op {
                     Operator::I32Add => BinOp::Add,
                     Operator::I32Sub => BinOp::Sub,
@@ -181,23 +247,70 @@ fn parse_function(
                     Operator::I32ShrU => BinOp::ShrU,
                     Operator::I32Rotl => BinOp::Rotl,
                     Operator::I32Rotr => BinOp::Rotr,
-                    _ => bail!("ice: unexpected i32 binop variant {:?}", op),
+                    Operator::I64Add => BinOp::Add,
+                    Operator::I64Sub => BinOp::Sub,
+                    Operator::I64Mul => BinOp::Mul,
+                    Operator::I64DivS => BinOp::DivS,
+                    Operator::I64DivU => BinOp::DivU,
+                    Operator::I64RemS => BinOp::RemS,
+                    Operator::I64RemU => BinOp::RemU,
+                    Operator::I64And => BinOp::And,
+                    Operator::I64Or => BinOp::Or,
+                    Operator::I64Xor => BinOp::Xor,
+                    Operator::I64Shl => BinOp::Shl,
+                    Operator::I64ShrS => BinOp::ShrS,
+                    Operator::I64ShrU => BinOp::ShrU,
+                    Operator::I64Rotl => BinOp::Rotl,
+                    Operator::I64Rotr => BinOp::Rotr,
+                    _ => bail!("ice: unexpected integer binop variant {:?}", op),
                 };
-                let r = frame.emit(Node::Binary(binop, lhs, rhs));
-                ref_stack.push(r);
+                let r = frame.emit(Node::Binary {
+                    op: binop,
+                    ty,
+                    lhs,
+                    rhs,
+                });
+                ref_stack.push(TypedAstRef::new(r, ty));
             }
-            Operator::I32Clz | Operator::I32Ctz | Operator::I32Popcnt | Operator::I32Eqz => {
-                let frame = current_frame_mut(&mut block_stack)?;
-                let val = frame.pop_ref(&mut ref_stack).context("empty stack?")?;
-                let unop = match op {
-                    Operator::I32Clz => UnOp::Clz,
-                    Operator::I32Ctz => UnOp::Ctz,
-                    Operator::I32Popcnt => UnOp::Popcnt,
-                    Operator::I32Eqz => UnOp::Eqz,
-                    _ => bail!("ice: unexpected i32 unop variant {:?}", op),
+            Operator::I32Clz
+            | Operator::I32Ctz
+            | Operator::I32Popcnt
+            | Operator::I32Eqz
+            | Operator::I32Extend8S
+            | Operator::I32Extend16S
+            | Operator::I64Clz
+            | Operator::I64Ctz
+            | Operator::I64Popcnt
+            | Operator::I64Eqz
+            | Operator::I64Extend8S
+            | Operator::I64Extend16S
+            | Operator::I64Extend32S
+            | Operator::I32WrapI64
+            | Operator::I64ExtendI32S
+            | Operator::I64ExtendI32U => {
+                let (ty, result_ty, unop) = match op {
+                    Operator::I32Clz => (ValType::I32, ValType::I32, UnOp::Clz),
+                    Operator::I32Ctz => (ValType::I32, ValType::I32, UnOp::Ctz),
+                    Operator::I32Popcnt => (ValType::I32, ValType::I32, UnOp::Popcnt),
+                    Operator::I32Eqz => (ValType::I32, ValType::I32, UnOp::Eqz),
+                    Operator::I32Extend8S => (ValType::I32, ValType::I32, UnOp::Extend8S),
+                    Operator::I32Extend16S => (ValType::I32, ValType::I32, UnOp::Extend16S),
+                    Operator::I64Clz => (ValType::I64, ValType::I64, UnOp::Clz),
+                    Operator::I64Ctz => (ValType::I64, ValType::I64, UnOp::Ctz),
+                    Operator::I64Popcnt => (ValType::I64, ValType::I64, UnOp::Popcnt),
+                    Operator::I64Eqz => (ValType::I64, ValType::I32, UnOp::Eqz),
+                    Operator::I64Extend8S => (ValType::I64, ValType::I64, UnOp::Extend8S),
+                    Operator::I64Extend16S => (ValType::I64, ValType::I64, UnOp::Extend16S),
+                    Operator::I64Extend32S => (ValType::I64, ValType::I64, UnOp::Extend32S),
+                    Operator::I32WrapI64 => (ValType::I64, ValType::I32, UnOp::WrapI64),
+                    Operator::I64ExtendI32S => (ValType::I32, ValType::I64, UnOp::ExtendI32S),
+                    Operator::I64ExtendI32U => (ValType::I32, ValType::I64, UnOp::ExtendI32U),
+                    _ => bail!("ice: unexpected integer unary variant {:?}", op),
                 };
-                let r = frame.emit(Node::Unary(unop, val));
-                ref_stack.push(r);
+                let frame = current_frame_mut(&mut block_stack)?;
+                let val = pop_typed_ref(frame, &mut ref_stack, ty, "empty stack?")?;
+                let r = frame.emit(Node::Unary { op: unop, ty, val });
+                ref_stack.push(TypedAstRef::new(r, result_ty));
             }
             Operator::I32Eq
             | Operator::I32Ne
@@ -208,10 +321,33 @@ fn parse_function(
             | Operator::I32GeS
             | Operator::I32GtU
             | Operator::I32LeU
-            | Operator::I32GeU => {
+            | Operator::I32GeU
+            | Operator::I64Eq
+            | Operator::I64Ne
+            | Operator::I64LtS
+            | Operator::I64LtU
+            | Operator::I64GtS
+            | Operator::I64LeS
+            | Operator::I64GeS
+            | Operator::I64GtU
+            | Operator::I64LeU
+            | Operator::I64GeU => {
+                let ty = match op {
+                    Operator::I32Eq
+                    | Operator::I32Ne
+                    | Operator::I32LtS
+                    | Operator::I32LtU
+                    | Operator::I32GtS
+                    | Operator::I32LeS
+                    | Operator::I32GeS
+                    | Operator::I32GtU
+                    | Operator::I32LeU
+                    | Operator::I32GeU => ValType::I32,
+                    _ => ValType::I64,
+                };
                 let frame = current_frame_mut(&mut block_stack)?;
-                let rhs = frame.pop_ref(&mut ref_stack).context("empty stack?")?;
-                let lhs = frame.pop_ref(&mut ref_stack).context("empty stack?")?;
+                let rhs = pop_typed_ref(frame, &mut ref_stack, ty, "empty stack?")?;
+                let lhs = pop_typed_ref(frame, &mut ref_stack, ty, "empty stack?")?;
                 let relop = match op {
                     Operator::I32Eq => RelOp::Eq,
                     Operator::I32Ne => RelOp::Ne,
@@ -223,92 +359,139 @@ fn parse_function(
                     Operator::I32GtU => RelOp::GtU,
                     Operator::I32LeU => RelOp::LeU,
                     Operator::I32GeU => RelOp::GeU,
-                    _ => bail!("ice: unexpected i32 relop variant {:?}", op),
+                    Operator::I64Eq => RelOp::Eq,
+                    Operator::I64Ne => RelOp::Ne,
+                    Operator::I64LtS => RelOp::LtS,
+                    Operator::I64LtU => RelOp::LtU,
+                    Operator::I64GtS => RelOp::GtS,
+                    Operator::I64LeS => RelOp::LeS,
+                    Operator::I64GeS => RelOp::GeS,
+                    Operator::I64GtU => RelOp::GtU,
+                    Operator::I64LeU => RelOp::LeU,
+                    Operator::I64GeU => RelOp::GeU,
+                    _ => bail!("ice: unexpected integer relop variant {:?}", op),
                 };
-                let r = frame.emit(Node::Compare(relop, lhs, rhs));
-                ref_stack.push(r);
-            }
-            Operator::I32Extend8S | Operator::I32Extend16S => {
-                let frame = current_frame_mut(&mut block_stack)?;
-                let val = frame
-                    .pop_ref(&mut ref_stack)
-                    .context("stack underflow while popping operand for i32 extend")?;
-                let unop = match op {
-                    Operator::I32Extend8S => UnOp::Extend8S,
-                    Operator::I32Extend16S => UnOp::Extend16S,
-                    _ => bail!("ice: unexpected i32 extend variant {:?}", op),
-                };
-                let r = frame.emit(Node::Unary(unop, val));
-                ref_stack.push(r);
+                let r = frame.emit(Node::Compare {
+                    op: relop,
+                    ty,
+                    lhs,
+                    rhs,
+                });
+                ref_stack.push(TypedAstRef::new(r, ValType::I32));
             }
             Operator::LocalGet { local_index } => {
+                let ty = local_type(&locals, local_index, "LocalGet")?;
                 let frame = current_frame_mut(&mut block_stack)?;
                 let r = frame.emit(Node::LocalGet(local_index));
-                ref_stack.push(r);
+                ref_stack.push(TypedAstRef::new(r, ty));
             }
             Operator::LocalSet { local_index } => {
+                let ty = local_type(&locals, local_index, "LocalSet")?;
                 let frame = current_frame_mut(&mut block_stack)?;
-                let val = frame.pop_ref(&mut ref_stack).context("empty stack?")?;
+                let val = pop_typed_ref(frame, &mut ref_stack, ty, "empty stack?")?;
                 frame.emit(Node::LocalSet(local_index, val));
             }
             Operator::LocalTee { local_index } => {
+                let ty = local_type(&locals, local_index, "LocalTee")?;
                 let frame = current_frame_mut(&mut block_stack)?;
-                let val = frame.pop_ref(&mut ref_stack).context("empty stack?")?;
+                let val = pop_typed_ref(frame, &mut ref_stack, ty, "empty stack?")?;
                 let r = frame.emit(Node::LocalTee(local_index, val));
-                ref_stack.push(r);
+                ref_stack.push(TypedAstRef::new(r, ty));
             }
             Operator::GlobalGet { global_index } => {
+                let ty = global_type(module, global_index, "GlobalGet")?;
                 let frame = current_frame_mut(&mut block_stack)?;
                 let r = frame.emit(Node::GlobalGet(global_index));
-                ref_stack.push(r);
+                ref_stack.push(TypedAstRef::new(r, ty));
             }
             Operator::GlobalSet { global_index } => {
+                let ty = global_type(module, global_index, "GlobalSet")?;
                 let frame = current_frame_mut(&mut block_stack)?;
-                let val = frame.pop_ref(&mut ref_stack).context("empty stack?")?;
+                let val = pop_typed_ref(frame, &mut ref_stack, ty, "empty stack?")?;
                 frame.emit(Node::GlobalSet(global_index, val));
             }
             Operator::MemorySize { .. } => {
                 let frame = current_frame_mut(&mut block_stack)?;
                 let r = frame.emit(Node::MemorySize);
-                ref_stack.push(r);
+                ref_stack.push(TypedAstRef::new(r, ValType::I32));
             }
             Operator::I32Load { memarg }
             | Operator::I32Load8S { memarg }
             | Operator::I32Load8U { memarg }
             | Operator::I32Load16S { memarg }
-            | Operator::I32Load16U { memarg } => {
-                // TODO(i64): memory parsing only recognizes i32 load forms and widths.
+            | Operator::I32Load16U { memarg }
+            | Operator::I64Load { memarg }
+            | Operator::I64Load8S { memarg }
+            | Operator::I64Load8U { memarg }
+            | Operator::I64Load16S { memarg }
+            | Operator::I64Load16U { memarg }
+            | Operator::I64Load32S { memarg }
+            | Operator::I64Load32U { memarg } => {
+                let ty = match op {
+                    Operator::I32Load { .. }
+                    | Operator::I32Load8S { .. }
+                    | Operator::I32Load8U { .. }
+                    | Operator::I32Load16S { .. }
+                    | Operator::I32Load16U { .. } => ValType::I32,
+                    _ => ValType::I64,
+                };
                 let size: usize = match op {
                     Operator::I32Load8S { .. } | Operator::I32Load8U { .. } => 8,
                     Operator::I32Load16S { .. } | Operator::I32Load16U { .. } => 16,
                     Operator::I32Load { .. } => 32,
-                    _ => bail!("ice: unexpected i32 load variant {:?}", op),
+                    Operator::I64Load8S { .. } | Operator::I64Load8U { .. } => 8,
+                    Operator::I64Load16S { .. } | Operator::I64Load16U { .. } => 16,
+                    Operator::I64Load32S { .. } | Operator::I64Load32U { .. } => 32,
+                    Operator::I64Load { .. } => 64,
+                    _ => bail!("ice: unexpected integer load variant {:?}", op),
                 };
-                let signed = matches!(op, Operator::I32Load8S { .. } | Operator::I32Load16S { .. });
+                let signed = matches!(
+                    op,
+                    Operator::I32Load8S { .. }
+                        | Operator::I32Load16S { .. }
+                        | Operator::I64Load8S { .. }
+                        | Operator::I64Load16S { .. }
+                        | Operator::I64Load32S { .. }
+                );
                 let frame = current_frame_mut(&mut block_stack)?;
-                let address = frame.pop_ref(&mut ref_stack).context("empty stack?")?;
+                let address = pop_typed_ref(frame, &mut ref_stack, ValType::I32, "empty stack?")?;
                 let r = frame.emit(Node::Load {
+                    ty,
                     size,
                     signed,
                     offset: memarg.offset as usize,
                     address,
                 });
-                ref_stack.push(r);
+                ref_stack.push(TypedAstRef::new(r, ty));
             }
             Operator::I32Store { memarg }
             | Operator::I32Store8 { memarg }
-            | Operator::I32Store16 { memarg } => {
-                // TODO(i64): memory parsing only recognizes i32 store forms and widths.
+            | Operator::I32Store16 { memarg }
+            | Operator::I64Store { memarg }
+            | Operator::I64Store8 { memarg }
+            | Operator::I64Store16 { memarg }
+            | Operator::I64Store32 { memarg } => {
+                let ty = match op {
+                    Operator::I32Store { .. }
+                    | Operator::I32Store8 { .. }
+                    | Operator::I32Store16 { .. } => ValType::I32,
+                    _ => ValType::I64,
+                };
                 let size: usize = match op {
                     Operator::I32Store8 { .. } => 8,
                     Operator::I32Store16 { .. } => 16,
                     Operator::I32Store { .. } => 32,
-                    _ => bail!("ice: unexpected i32 store variant {:?}", op),
+                    Operator::I64Store8 { .. } => 8,
+                    Operator::I64Store16 { .. } => 16,
+                    Operator::I64Store32 { .. } => 32,
+                    Operator::I64Store { .. } => 64,
+                    _ => bail!("ice: unexpected integer store variant {:?}", op),
                 };
                 let frame = current_frame_mut(&mut block_stack)?;
-                let value = frame.pop_ref(&mut ref_stack).context("empty stack?")?;
-                let address = frame.pop_ref(&mut ref_stack).context("empty stack?")?;
+                let value = pop_typed_ref(frame, &mut ref_stack, ty, "empty stack?")?;
+                let address = pop_typed_ref(frame, &mut ref_stack, ValType::I32, "empty stack?")?;
                 frame.emit(Node::Store {
+                    ty,
                     size,
                     offset: memarg.offset as usize,
                     value,
@@ -318,24 +501,35 @@ fn parse_function(
             Operator::TableSize { table } => {
                 let frame = current_frame_mut(&mut block_stack)?;
                 let r = frame.emit(Node::TableSize(table));
-                ref_stack.push(r);
+                ref_stack.push(TypedAstRef::new(r, ValType::I32));
             }
             Operator::Drop => {
                 let frame = current_frame_mut(&mut block_stack)?;
-                let val = frame.pop_ref(&mut ref_stack).context("empty stack?")?;
-                frame.emit(Node::Drop(val));
+                let val = ref_stack.pop().context("empty stack?")?;
+                frame.emit(Node::Drop(val.value));
             }
             Operator::Select | Operator::TypedSelect { .. } => {
+                let select_ty = match op {
+                    Operator::TypedSelect { ty } => ty,
+                    // Untyped select: stack is [then, else, cond]; peek past cond at the else value.
+                    _ => ref_stack
+                        .iter()
+                        .rev()
+                        .nth(1)
+                        .map(|typed| typed.ty)
+                        .unwrap_or(ValType::I32),
+                };
                 let frame = current_frame_mut(&mut block_stack)?;
-                let cond = frame.pop_ref(&mut ref_stack).context("empty stack?")?;
-                let else_val = frame.pop_ref(&mut ref_stack).context("empty stack?")?;
-                let then_val = frame.pop_ref(&mut ref_stack).context("empty stack?")?;
+                let cond = pop_typed_ref(frame, &mut ref_stack, ValType::I32, "empty stack?")?;
+                let else_val = pop_typed_ref(frame, &mut ref_stack, select_ty, "empty stack?")?;
+                let then_val = pop_typed_ref(frame, &mut ref_stack, select_ty, "empty stack?")?;
                 let r = frame.emit(Node::Select {
+                    ty: select_ty,
                     cond,
                     then_val,
                     else_val,
                 });
-                ref_stack.push(r);
+                ref_stack.push(TypedAstRef::new(r, select_ty));
             }
             Operator::Block { blockty }
             | Operator::Loop { blockty }
@@ -346,9 +540,12 @@ fn parse_function(
                     Operator::Loop { .. } => BlockKind::Loop,
                     Operator::If { .. } => {
                         let frame = current_frame_mut(&mut block_stack)?;
-                        let cond_ref = frame
-                            .pop_ref(&mut ref_stack)
-                            .context("If: missing condition on stack")?;
+                        let cond_ref = pop_typed_ref(
+                            frame,
+                            &mut ref_stack,
+                            ValType::I32,
+                            "If: missing condition on stack",
+                        )?;
                         BlockKind::If { cond_ref }
                     }
                     Operator::Try { .. } => BlockKind::Try,
@@ -371,21 +568,23 @@ fn parse_function(
                     temp_locals,
                     insts: Vec::new(),
                     unreachable: false,
-                    dummy_ref: None,
+                    dummy_refs: Vec::new(),
                 });
                 for temp in temps.iter() {
+                    let ty = local_type(&locals, *temp, "block temp local")?;
                     let r = current_frame_mut(&mut block_stack)?.emit(Node::LocalGet(*temp));
-                    ref_stack.push(r);
+                    ref_stack.push(TypedAstRef::new(r, ty));
                 }
             }
             Operator::Else => {
                 let mut if_frame = block_stack.pop().context("Else without matching If")?;
 
                 for temp_index in if_frame.temp_locals.clone().into_iter().rev() {
+                    let ty = local_type(&locals, temp_index, "if temp local")?;
                     let last_ref = if_frame
-                        .pop_ref(&mut ref_stack)
+                        .pop_ref(&mut ref_stack, ty)
                         .context("if then-branch end: stack underflow")?;
-                    if_frame.emit(Node::LocalSet(temp_index, last_ref));
+                    if_frame.emit(Node::LocalSet(temp_index, last_ref.value));
                 }
 
                 if let BlockKind::If { cond_ref } = if_frame.kind {
@@ -398,7 +597,7 @@ fn parse_function(
                         temp_locals: if_frame.temp_locals,
                         insts: Vec::new(),
                         unreachable: false,
-                        dummy_ref: None,
+                        dummy_refs: Vec::new(),
                     });
                 } else {
                     bail!("Else without If");
@@ -407,17 +606,24 @@ fn parse_function(
             Operator::End => {
                 let mut frame = block_stack.pop().context("unexpected End")?;
                 for temp_local in frame.temp_locals.clone().into_iter().rev() {
+                    let ty = local_type(&locals, temp_local, "block temp local")?;
                     let last_ref = frame
-                        .pop_ref(&mut ref_stack)
+                        .pop_ref(&mut ref_stack, ty)
                         .context("block end: stack underflow")?;
-                    frame.emit(Node::LocalSet(temp_local, last_ref));
+                    frame.emit(Node::LocalSet(temp_local, last_ref.value));
                 }
                 match frame.kind {
                     BlockKind::Function => {
                         let ret_ref = if !signature.results().is_empty() {
-                            Some(frame.pop_ref(&mut ref_stack).with_context(
-                                || "Function End: popping return value (stack underflow)",
-                            )?)
+                            let result_ty = signature.results()[0];
+                            Some(
+                                frame
+                                    .pop_ref(&mut ref_stack, result_ty)
+                                    .with_context(
+                                        || "Function End: popping return value (stack underflow)",
+                                    )?
+                                    .value,
+                            )
                         } else {
                             None
                         };
@@ -483,8 +689,9 @@ fn parse_function(
                         let parent = current_frame_mut(&mut block_stack)?;
                         parent.emit(result_inst);
                         for &temp_index in temp_locals.iter() {
+                            let ty = local_type(&locals, temp_index, "block temp local")?;
                             let r = parent.emit(Node::LocalGet(temp_index));
-                            ref_stack.push(r);
+                            ref_stack.push(TypedAstRef::new(r, ty));
                         }
                     }
                 }
@@ -492,15 +699,17 @@ fn parse_function(
             Operator::Return => {
                 let frame = current_frame_mut(&mut block_stack)?;
                 let return_ref = if !signature.results().is_empty() {
+                    let result_ty = signature.results()[0];
                     Some(
                         frame
-                            .pop_ref(&mut ref_stack)
-                            .context("Return: popping return value (stack underflow)")?,
+                            .pop_ref(&mut ref_stack, result_ty)
+                            .context("Return: popping return value (stack underflow)")?
+                            .value,
                     )
                 } else {
                     None
                 };
-                frame.ensure_dummy();
+                frame.ensure_dummy(ValType::I32);
                 frame.unreachable = true;
                 frame.emit(Node::Return(return_ref));
             }
@@ -509,10 +718,11 @@ fn parse_function(
                 let temp_locals = block_stack[target_index].temp_locals.clone();
                 let current = current_frame_mut(&mut block_stack)?;
                 for temp_index in temp_locals.into_iter().rev() {
-                    let last_ref = current.pop_ref_or_dummy(&mut ref_stack)?;
-                    current.emit(Node::LocalSet(temp_index, last_ref));
+                    let ty = local_type(&locals, temp_index, "Br target temp local")?;
+                    let last_ref = current.pop_ref_or_dummy(&mut ref_stack, ty)?;
+                    current.emit(Node::LocalSet(temp_index, last_ref.value));
                 }
-                current.ensure_dummy();
+                current.ensure_dummy(ValType::I32);
                 current.unreachable = true;
                 current.emit(Node::Br(relative_depth));
             }
@@ -523,8 +733,9 @@ fn parse_function(
                 let target_return_types = block_stack[target_index].return_types.clone();
                 let current = current_frame_mut(&mut block_stack)?;
                 let condition = current
-                    .pop_ref(&mut ref_stack)
-                    .context("BrIf: missing condition")?;
+                    .pop_ref(&mut ref_stack, ValType::I32)
+                    .context("BrIf: missing condition")?
+                    .value;
 
                 if target_temp_locals.is_empty() {
                     current.emit(Node::BrIf(relative_depth, condition));
@@ -533,7 +744,12 @@ fn parse_function(
                     let return_types = target_return_types;
                     let n = temp_locals.len();
                     let mut values: Vec<AstRef> = (0..n)
-                        .map(|_| current.pop_ref_or_dummy(&mut ref_stack))
+                        .zip(return_types.iter().copied())
+                        .map(|(_, ty)| {
+                            current
+                                .pop_ref_or_dummy(&mut ref_stack, ty)
+                                .map(|typed| typed.value)
+                        })
                         .collect::<anyhow::Result<Vec<_>>>()?;
                     values.reverse();
 
@@ -563,9 +779,10 @@ fn parse_function(
                     });
 
                     for &stash_idx in stash_indices.iter() {
+                        let ty = local_type(&locals, stash_idx, "BrIf stash local")?;
                         let r =
                             current_frame_mut(&mut block_stack)?.emit(Node::LocalGet(stash_idx));
-                        ref_stack.push(r);
+                        ref_stack.push(TypedAstRef::new(r, ty));
                     }
                 }
             }
@@ -573,8 +790,9 @@ fn parse_function(
                 let index_ref = {
                     let current = current_frame_mut(&mut block_stack)?;
                     current
-                        .pop_ref(&mut ref_stack)
+                        .pop_ref(&mut ref_stack, ValType::I32)
                         .context("BrTable: missing index on stack")?
+                        .value
                 };
                 let mut target_depths = Vec::new();
                 for target in targets.targets() {
@@ -592,6 +810,7 @@ fn parse_function(
                         )
                     })?;
                 let n = block_stack[default_target_index].temp_locals.len();
+                let default_return_types = block_stack[default_target_index].return_types.clone();
                 let target_temp_locals: Vec<Vec<u32>> = target_depths
                     .iter()
                     .chain(std::iter::once(&default_depth))
@@ -603,7 +822,12 @@ fn parse_function(
 
                 let current = current_frame_mut(&mut block_stack)?;
                 let mut values: Vec<AstRef> = (0..n)
-                    .map(|_| current.pop_ref_or_dummy(&mut ref_stack))
+                    .zip(default_return_types.iter().copied())
+                    .map(|(_, ty)| {
+                        current
+                            .pop_ref_or_dummy(&mut ref_stack, ty)
+                            .map(|typed| typed.value)
+                    })
                     .collect::<anyhow::Result<Vec<_>>>()?;
                 values.reverse();
 
@@ -614,37 +838,44 @@ fn parse_function(
                 }
 
                 current.emit(Node::BrTable(target_depths, default_depth, index_ref));
-                current.ensure_dummy();
+                current.ensure_dummy(ValType::I32);
                 current.unreachable = true;
             }
             Operator::Unreachable => {
                 let frame = current_frame_mut(&mut block_stack)?;
-                frame.ensure_dummy();
+                frame.ensure_dummy(ValType::I32);
                 frame.unreachable = true;
                 frame.emit(Node::Unreachable);
             }
             Operator::Nop => {}
             Operator::Call { function_index } => {
-                let (arg_count, has_result) = call_shape_from_func(module, function_index, "Call")?;
-                let args = pop_call_args(&mut ref_stack, arg_count, "Call")?;
+                let (param_types, result_ty) =
+                    call_shape_from_func(module, function_index, "Call")?;
+                let args = pop_call_args(&mut ref_stack, param_types, "Call")?;
                 let frame = current_frame_mut(&mut block_stack)?;
                 emit_call(
                     frame,
                     &mut ref_stack,
                     Node::Call(function_index, args),
-                    has_result,
+                    result_ty,
                 );
             }
             Operator::CallIndirect {
                 type_index,
                 table_index,
             } => {
-                let (arg_count, has_result) =
+                let (param_types, result_ty) =
                     call_shape_from_type(module, type_index, "CallIndirect")?;
                 let table_ref = ref_stack
                     .pop()
                     .context("CallIndirect: missing table index on stack")?;
-                let args = pop_call_args(&mut ref_stack, arg_count, "CallIndirect")?;
+                if table_ref.ty != ValType::I32 {
+                    bail!(
+                        "CallIndirect: table index must be i32, got {:?}",
+                        table_ref.ty
+                    );
+                }
+                let args = pop_call_args(&mut ref_stack, param_types, "CallIndirect")?;
                 let frame = current_frame_mut(&mut block_stack)?;
                 emit_call(
                     frame,
@@ -652,48 +883,59 @@ fn parse_function(
                     Node::CallIndirect {
                         type_index,
                         table_index,
-                        index: table_ref,
+                        index: table_ref.value,
                         args,
                     },
-                    has_result,
+                    result_ty,
                 );
             }
             Operator::ReturnCall { function_index } => {
-                let (arg_count, has_result) =
+                let (param_types, result_ty) =
                     call_shape_from_func(module, function_index, "ReturnCall")?;
-                let args = pop_call_args(&mut ref_stack, arg_count, "ReturnCall")?;
+                let args = pop_call_args(&mut ref_stack, param_types, "ReturnCall")?;
                 let current_block = current_frame_mut(&mut block_stack)?;
-                emit_return_call(current_block, Node::Call(function_index, args), has_result);
+                emit_return_call(
+                    current_block,
+                    Node::Call(function_index, args),
+                    result_ty.is_some(),
+                );
             }
             Operator::ReturnCallIndirect {
                 type_index,
                 table_index,
             } => {
-                let (arg_count, has_result) =
+                let (param_types, result_ty) =
                     call_shape_from_type(module, type_index, "ReturnCallIndirect")?;
                 let table_ref = ref_stack
                     .pop()
                     .context("ReturnCallIndirect: missing table index on stack")?;
-                let args = pop_call_args(&mut ref_stack, arg_count, "ReturnCallIndirect")?;
+                if table_ref.ty != ValType::I32 {
+                    bail!(
+                        "ReturnCallIndirect: table index must be i32, got {:?}",
+                        table_ref.ty
+                    );
+                }
+                let args = pop_call_args(&mut ref_stack, param_types, "ReturnCallIndirect")?;
                 let current_block = current_frame_mut(&mut block_stack)?;
                 emit_return_call(
                     current_block,
                     Node::CallIndirect {
                         type_index,
                         table_index,
-                        index: table_ref,
+                        index: table_ref.value,
                         args,
                     },
-                    has_result,
+                    result_ty.is_some(),
                 );
             }
             Operator::Catch { tag_index } => {
                 let mut frame = block_stack.pop().context("Catch without matching Try")?;
                 for temp_index in frame.temp_locals.clone().into_iter().rev() {
+                    let ty = local_type(&locals, temp_index, "Catch temp local")?;
                     let last_ref = frame
-                        .pop_ref(&mut ref_stack)
+                        .pop_ref(&mut ref_stack, ty)
                         .context("Catch: stack underflow at segment end")?;
-                    frame.emit(Node::LocalSet(temp_index, last_ref));
+                    frame.emit(Node::LocalSet(temp_index, last_ref.value));
                 }
                 ref_stack.clear();
                 let return_types = frame.return_types;
@@ -710,9 +952,8 @@ fn parse_function(
                         if catch_all_seen {
                             bail!("Catch after catch_all is not allowed");
                         }
-                        let prev_tag = current_tag.context(
-                            "ice: TryCatch expected current_tag before another Catch",
-                        )?;
+                        let prev_tag = current_tag
+                            .context("ice: TryCatch expected current_tag before another Catch")?;
                         prior_catches.push(Catch {
                             tag_index: prev_tag,
                             body: segment_insts,
@@ -732,23 +973,22 @@ fn parse_function(
                     temp_locals,
                     insts: Vec::new(),
                     unreachable: false,
-                    dummy_ref: None,
+                    dummy_refs: Vec::new(),
                 });
                 if tag_has_i32_payload(module, tag_index)? {
                     let frame = current_frame_mut(&mut block_stack)?;
                     let r = frame.emit(Node::ExcPayloadGet);
-                    ref_stack.push(r);
+                    ref_stack.push(TypedAstRef::new(r, ValType::I32));
                 }
             }
             Operator::CatchAll => {
-                let mut frame = block_stack
-                    .pop()
-                    .context("CatchAll without matching Try")?;
+                let mut frame = block_stack.pop().context("CatchAll without matching Try")?;
                 for temp_index in frame.temp_locals.clone().into_iter().rev() {
+                    let ty = local_type(&locals, temp_index, "CatchAll temp local")?;
                     let last_ref = frame
-                        .pop_ref(&mut ref_stack)
+                        .pop_ref(&mut ref_stack, ty)
                         .context("CatchAll: stack underflow at segment end")?;
-                    frame.emit(Node::LocalSet(temp_index, last_ref));
+                    frame.emit(Node::LocalSet(temp_index, last_ref.value));
                 }
                 ref_stack.clear();
                 let return_types = frame.return_types;
@@ -765,9 +1005,8 @@ fn parse_function(
                         if catch_all_seen {
                             bail!("Multiple catch_all clauses in the same try");
                         }
-                        let prev_tag = current_tag.context(
-                            "ice: TryCatch expected current_tag before CatchAll",
-                        )?;
+                        let prev_tag = current_tag
+                            .context("ice: TryCatch expected current_tag before CatchAll")?;
                         prior_catches.push(Catch {
                             tag_index: prev_tag,
                             body: segment_insts,
@@ -787,18 +1026,17 @@ fn parse_function(
                     temp_locals,
                     insts: Vec::new(),
                     unreachable: false,
-                    dummy_ref: None,
+                    dummy_refs: Vec::new(),
                 });
             }
             Operator::Delegate { relative_depth } => {
-                let mut frame = block_stack
-                    .pop()
-                    .context("Delegate without matching Try")?;
+                let mut frame = block_stack.pop().context("Delegate without matching Try")?;
                 for temp_index in frame.temp_locals.clone().into_iter().rev() {
+                    let ty = local_type(&locals, temp_index, "Delegate temp local")?;
                     let last_ref = frame
-                        .pop_ref(&mut ref_stack)
+                        .pop_ref(&mut ref_stack, ty)
                         .context("Delegate: stack underflow at try body end")?;
-                    frame.emit(Node::LocalSet(temp_index, last_ref));
+                    frame.emit(Node::LocalSet(temp_index, last_ref.value));
                 }
                 match frame.kind {
                     BlockKind::Try => {
@@ -812,8 +1050,9 @@ fn parse_function(
                         let parent = current_frame_mut(&mut block_stack)?;
                         parent.emit(result_inst);
                         for &temp_index in temp_locals.iter() {
+                            let ty = local_type(&locals, temp_index, "Delegate temp local")?;
                             let r = parent.emit(Node::LocalGet(temp_index));
-                            ref_stack.push(r);
+                            ref_stack.push(TypedAstRef::new(r, ty));
                         }
                     }
                     _ => bail!("Delegate is only valid inside a try block (not after catch)"),
@@ -823,12 +1062,12 @@ fn parse_function(
                 let has_payload = tag_has_i32_payload(module, tag_index)?;
                 let arg = if has_payload {
                     let frame = current_frame_mut(&mut block_stack)?;
-                    Some(frame.pop_ref(&mut ref_stack)?)
+                    Some(frame.pop_ref(&mut ref_stack, ValType::I32)?.value)
                 } else {
                     None
                 };
                 let frame = current_frame_mut(&mut block_stack)?;
-                frame.ensure_dummy();
+                frame.ensure_dummy(ValType::I32);
                 frame.unreachable = true;
                 frame.emit(Node::Throw {
                     tag: tag_index,
@@ -837,11 +1076,10 @@ fn parse_function(
             }
             Operator::Rethrow { relative_depth } => {
                 let frame = current_frame_mut(&mut block_stack)?;
-                frame.ensure_dummy();
+                frame.ensure_dummy(ValType::I32);
                 frame.unreachable = true;
                 frame.emit(Node::Rethrow(relative_depth));
             }
-            // TODO(i64): parser fallback still rejects unhandled i64 operators.
             _ => bail!("Unsupported operator: {:?}", op),
         }
     }

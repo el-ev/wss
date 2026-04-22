@@ -1,8 +1,9 @@
 use super::*;
-use crate::ir8::RET;
+use crate::ir8::{RET_HI, RET_LO, ValueWords};
+use wasmparser::ValType;
 
 pub(super) struct FuncAlloc {
-    pub(super) local_vregs: Vec<Word>,
+    pub(super) local_vregs: Vec<ValueWords>,
 }
 
 pub(super) fn prealloc_locals(module: &IrModule) -> (Vec<FuncAlloc>, u16) {
@@ -11,20 +12,16 @@ pub(super) fn prealloc_locals(module: &IrModule) -> (Vec<FuncAlloc>, u16) {
         .bodies()
         .iter()
         .map(|body| {
-            let n = body.as_ref().map_or(0, |b| b.locals().len());
-            let local_vregs = (0..n)
-                .map(|_| {
-                    // TODO(i64): each local is currently represented as one 4-byte word.
-                    let w = Word::new(
-                        Val8::reg(counter),
-                        Val8::reg(counter + 1),
-                        Val8::reg(counter + 2),
-                        Val8::reg(counter + 3),
-                    );
-                    counter += 4;
-                    w
+            let local_vregs = body
+                .as_ref()
+                .map(|b| {
+                    b.locals()
+                        .iter()
+                        .copied()
+                        .map(|ty| alloc_value_for_type(&mut counter, ty))
+                        .collect()
                 })
-                .collect();
+                .unwrap_or_default();
             FuncAlloc { local_vregs }
         })
         .collect();
@@ -32,22 +29,30 @@ pub(super) fn prealloc_locals(module: &IrModule) -> (Vec<FuncAlloc>, u16) {
 }
 
 pub(super) fn alloc_builtin_div_params(counter: &mut u16) -> FuncAlloc {
-    let word0 = Word::new(
-        Val8::reg(*counter),
-        Val8::reg(*counter + 1),
-        Val8::reg(*counter + 2),
-        Val8::reg(*counter + 3),
-    );
-    *counter += 4;
-    let word1 = Word::new(
-        Val8::reg(*counter),
-        Val8::reg(*counter + 1),
-        Val8::reg(*counter + 2),
-        Val8::reg(*counter + 3),
-    );
-    *counter += 4;
+    let word0 = alloc_word_from_counter(counter);
+    let word1 = alloc_word_from_counter(counter);
     FuncAlloc {
-        local_vregs: vec![word0, word1],
+        local_vregs: vec![ValueWords::one(word0), ValueWords::one(word1)],
+    }
+}
+
+fn alloc_word_from_counter(counter: &mut u16) -> Word {
+    let word = Word::new(
+        Val8::reg(*counter),
+        Val8::reg(*counter + 1),
+        Val8::reg(*counter + 2),
+        Val8::reg(*counter + 3),
+    );
+    *counter += 4;
+    word
+}
+
+fn alloc_value_for_type(counter: &mut u16, ty: ValType) -> ValueWords {
+    let lo = alloc_word_from_counter(counter);
+    match ty {
+        ValType::I32 => ValueWords::one(lo),
+        ValType::I64 => ValueWords::two(lo, alloc_word_from_counter(counter)),
+        other => unreachable!("unsupported local type {:?}", other),
     }
 }
 
@@ -55,8 +60,8 @@ pub(super) struct FuncBuilder {
     pub(super) func_id: u32,
     pub(super) is_entry: bool,
     pub(super) vreg_counter: u16,
-    pub(super) local_vregs: Vec<Word>,
-    pub(super) inst_map: HashMap<IrNode, Word>,
+    pub(super) local_vregs: Vec<ValueWords>,
+    pub(super) inst_map: HashMap<IrNode, ValueWords>,
     pub(super) block_pc_map: HashMap<BlockId, Pc>,
     pub(super) curr_blk: Pc,
     pub(super) curr_insts: Vec<Inst8>,
@@ -69,7 +74,7 @@ impl FuncBuilder {
         func_id: u32,
         is_entry: bool,
         vreg_counter: u16,
-        local_vregs: Vec<Word>,
+        local_vregs: Vec<ValueWords>,
     ) -> Self {
         Self {
             func_id,
@@ -98,6 +103,15 @@ impl FuncBuilder {
             self.alloc_reg(),
             self.alloc_reg(),
         )
+    }
+
+    pub(super) fn alloc_value(&mut self, ty: ValType) -> ValueWords {
+        let lo = self.alloc_word();
+        match ty {
+            ValType::I32 => ValueWords::one(lo),
+            ValType::I64 => ValueWords::two(lo, self.alloc_word()),
+            other => unreachable!("unsupported value type {:?}", other),
+        }
     }
 
     pub(super) fn alloc_block(&mut self) -> Pc {
@@ -130,22 +144,34 @@ impl FuncBuilder {
         });
     }
 
+    pub(super) fn get_value(&self, iref: IrNode) -> ValueWords {
+        self.inst_map[&iref]
+    }
+
     pub(super) fn get_word(&self, iref: IrNode) -> Word {
-        if let Some(v) = iref.imm_i32_value() {
-            // TODO(i64): immediate materialization assumes i32 literals.
-            Word::from_u32_imm(v as u32)
-        } else {
-            self.inst_map[&iref]
-        }
+        self.get_value(iref).lo
+    }
+
+    pub(super) fn set_value(&mut self, iref: IrNode, value: ValueWords) {
+        self.inst_map.insert(iref, value);
     }
 
     pub(super) fn set_word(&mut self, iref: IrNode, word: Word) {
-        self.inst_map.insert(iref, word);
+        self.set_value(iref, ValueWords::one(word));
     }
 
     pub(super) fn copy_word(&mut self, dst: Word, src: Word) {
         for (dst_lane, src_lane) in dst.bytes().into_iter().zip(src.bytes()) {
             self.emit(Inst8::with_dst(dst_lane, Inst8Kind::Copy(src_lane)));
+        }
+    }
+
+    pub(super) fn copy_value(&mut self, dst: ValueWords, src: ValueWords) {
+        self.copy_word(dst.lo, src.lo);
+        match (dst.hi, src.hi) {
+            (Some(dst_hi), Some(src_hi)) => self.copy_word(dst_hi, src_hi),
+            (None, None) => {}
+            _ => unreachable!("mismatched value widths in copy_value"),
         }
     }
 
@@ -157,12 +183,20 @@ impl FuncBuilder {
         }
     }
 
+    pub(super) fn copy_ret_to_value(&mut self, dst: ValueWords) {
+        self.copy_word(dst.lo, RET_LO);
+        if let Some(dst_hi) = dst.hi {
+            self.copy_word(dst_hi, RET_HI);
+        }
+    }
+
     pub(super) fn copy_ret_to_word(&mut self, dst: Word) {
-        self.copy_word(dst, RET);
+        self.copy_word(dst, RET_LO);
     }
 
     pub(super) fn set_ret_from_byte(&mut self, src: Val8) {
-        self.set_word_from_byte(RET, src);
+        self.set_word_from_byte(RET_LO, src);
+        self.copy_word(RET_HI, Word::from_u32_imm(0));
     }
 
     pub(super) fn load_global_word(&mut self, global_idx: u32) -> Word {
@@ -209,16 +243,16 @@ impl FuncBuilder {
         }
     }
 
-    pub(super) fn local_get(&mut self, local_index: u32) -> Word {
+    pub(super) fn local_get(&mut self, local_index: u32) -> ValueWords {
         let src = self.local_vregs[local_index as usize];
-        let dst = self.alloc_word();
-        self.copy_word(dst, src);
+        let dst = self.alloc_value(src.val_type());
+        self.copy_value(dst, src);
         dst
     }
 
-    pub(super) fn local_set(&mut self, local_index: u32, val: Word) {
+    pub(super) fn local_set(&mut self, local_index: u32, val: ValueWords) {
         let dst = self.local_vregs[local_index as usize];
-        self.copy_word(dst, val);
+        self.copy_value(dst, val);
     }
 
     pub(super) fn pc_of(&self, ir_block: BlockId) -> Pc {
@@ -226,17 +260,19 @@ impl FuncBuilder {
     }
 
     /// Number of call stack slots needed for saving all locals.
-    // TODO(i64): call-stack sizing assumes each local is a 32-bit value.
-    /// Each i32 local uses two 16-bit slots.
+    /// Each word (4 bytes) uses two 16-bit slots.
     pub(super) fn cs_locals_slots(&self) -> u16 {
-        self.local_vregs.len() as u16 * 2
+        self.local_vregs
+            .iter()
+            .map(|value| u16::from(value.word_count()) * 2)
+            .sum()
     }
 
     /// Emit CsStore instructions to save locals, live spill words, and RA,
     /// then CsAlloc.
     ///
     /// Frame layout (slot-indexed, each slot = one 16-bit CSS property):
-    ///   cs[cs_sp + 0 .. 2*N-1]          = saved locals (packed: two bytes/slot)
+    ///   cs[cs_sp + 0 .. locals_bytes-1] = saved locals (packed: two bytes/slot)
     ///   cs[cs_sp + 2*N .. +2*N+2*S-1]   = saved spill words
     ///   cs[cs_sp + 2*N + 2*S]           = RA (Pc)
     /// CsAlloc advances cs_sp by 2*N + 2*S + 1 slots.
@@ -244,8 +280,15 @@ impl FuncBuilder {
     /// RA is at the top so the callee can always pop it with CsFree(1) +
     /// CsLoadPc(0) regardless of the caller's local count.
     pub(super) fn emit_cs_save(&mut self, cont: Pc, spill_words: &[Word]) {
+        let mut local_base_bytes = 0u16;
         for i in 0..self.local_vregs.len() {
-            self.emit_cs_store_word((i as u16) * 4, self.local_vregs[i]);
+            let value = self.local_vregs[i];
+            self.emit_cs_store_word(local_base_bytes, value.lo);
+            local_base_bytes += 4;
+            if let Some(hi) = value.hi {
+                self.emit_cs_store_word(local_base_bytes, hi);
+                local_base_bytes += 4;
+            }
         }
 
         let spill_base_bytes = self.cs_locals_slots() * 2;
@@ -271,8 +314,15 @@ impl FuncBuilder {
         let frame_slots = locals_slots + spill_slots;
         self.emit(Inst8::no_dst(Inst8Kind::CsFree(frame_slots)));
 
+        let mut local_base_bytes = 0u16;
         for i in 0..self.local_vregs.len() {
-            self.emit_cs_load_word((i as u16) * 4, self.local_vregs[i]);
+            let value = self.local_vregs[i];
+            self.emit_cs_load_word(local_base_bytes, value.lo);
+            local_base_bytes += 4;
+            if let Some(hi) = value.hi {
+                self.emit_cs_load_word(local_base_bytes, hi);
+                local_base_bytes += 4;
+            }
         }
 
         let spill_base_bytes = locals_slots * 2;

@@ -96,6 +96,41 @@ impl Word {
 }
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub struct ValueWords {
+    pub lo: Word,
+    pub hi: Option<Word>,
+}
+
+impl ValueWords {
+    pub const fn one(lo: Word) -> Self {
+        Self { lo, hi: None }
+    }
+
+    pub const fn two(lo: Word, hi: Word) -> Self {
+        Self { lo, hi: Some(hi) }
+    }
+
+    pub const fn word_count(self) -> u8 {
+        if self.hi.is_some() { 2 } else { 1 }
+    }
+
+    pub const fn val_type(self) -> wasmparser::ValType {
+        if self.hi.is_some() {
+            wasmparser::ValType::I64
+        } else {
+            wasmparser::ValType::I32
+        }
+    }
+
+    pub const fn from_i64_imm(value: i64) -> Self {
+        let v = value as u64;
+        let lo = Word::from_u32_imm(v as u32);
+        let hi = Word::from_u32_imm((v >> 32) as u32);
+        Self::two(lo, hi)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct Addr {
     pub lo: Val8,
     pub hi: Val8,
@@ -122,14 +157,25 @@ pub const RET_B0: Val8 = Val8::reg(0);
 pub const RET_B1: Val8 = Val8::reg(1);
 pub const RET_B2: Val8 = Val8::reg(2);
 pub const RET_B3: Val8 = Val8::reg(3);
-pub const RET: Word = Word {
+pub const RET_LO: Word = Word {
     b0: RET_B0,
     b1: RET_B1,
     b2: RET_B2,
     b3: RET_B3,
 };
+pub const RET_B4: Val8 = Val8::reg(4);
+pub const RET_B5: Val8 = Val8::reg(5);
+pub const RET_B6: Val8 = Val8::reg(6);
+pub const RET_B7: Val8 = Val8::reg(7);
+pub const RET_HI: Word = Word {
+    b0: RET_B4,
+    b1: RET_B5,
+    b2: RET_B6,
+    b3: RET_B7,
+};
+pub const RET_I64: ValueWords = ValueWords::two(RET_LO, RET_HI);
 
-pub const VREG_START: u16 = 4;
+pub const VREG_START: u16 = 8;
 pub const PC_STRIDE: u16 = 1_000;
 
 #[repr(u8)]
@@ -454,17 +500,29 @@ pub enum Inst8Kind {
     // These live in dedicated CSS properties that are independent of user
     // globals, so they do not collide with module global indices.
     /// Write the exception flag byte.
-    ExcFlagSet { val: Val8 },
+    ExcFlagSet {
+        val: Val8,
+    },
     /// Read the exception flag byte.
     ExcFlagGet,
     /// Write one byte lane of the exception tag index.
-    ExcTagSet { lane: u8, val: Val8 },
+    ExcTagSet {
+        lane: u8,
+        val: Val8,
+    },
     /// Read one byte lane of the exception tag index.
-    ExcTagGet { lane: u8 },
+    ExcTagGet {
+        lane: u8,
+    },
     /// Write one byte lane of the exception payload word.
-    ExcPayloadSet { lane: u8, val: Val8 },
+    ExcPayloadSet {
+        lane: u8,
+        val: Val8,
+    },
     /// Read one byte lane of the exception payload word.
-    ExcPayloadGet { lane: u8 },
+    ExcPayloadGet {
+        lane: u8,
+    },
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -504,11 +562,11 @@ pub enum Terminator8 {
     /// Non-main return: copy `val` to RET, load RA from the call stack
     /// (via CsFree + CsLoadPc emitted before this terminator), jump to it.
     Return {
-        val: Option<Word>,
+        val: Option<ValueWords>,
     },
     /// Main exit: halt the CSS clock.
     Exit {
-        val: Option<Word>,
+        val: Option<ValueWords>,
     },
 
     Trap(TrapCode),
@@ -538,10 +596,15 @@ impl Terminator8 {
                 out
             }
             Terminator8::Return { val } | Terminator8::Exit { val } => {
-                if let Some(w) = val {
+                if let Some(value) = val {
                     let mut out = Vec::new();
-                    for r in w.bytes() {
+                    for r in value.lo.bytes() {
                         push_vreg(&mut out, r);
+                    }
+                    if let Some(hi) = value.hi {
+                        for r in hi.bytes() {
+                            push_vreg(&mut out, r);
+                        }
                     }
                     out
                 } else {
@@ -556,9 +619,11 @@ impl Terminator8 {
         match self {
             Terminator8::CallSetup {
                 callee_arg_vregs, ..
-            } => RET
+            } => RET_I64
+                .lo
                 .bytes()
                 .into_iter()
+                .chain(RET_I64.hi.into_iter().flat_map(|w| w.bytes()))
                 .chain(callee_arg_vregs.iter().flat_map(|w| w.bytes()))
                 .collect(),
             _ => vec![],
