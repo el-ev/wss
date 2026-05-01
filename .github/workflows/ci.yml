@@ -118,7 +118,7 @@ jobs:
 
   blackbox-lengthy:
     name: Blackbox (Lengthy)
-    needs: blackbox
+    needs: rust
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
