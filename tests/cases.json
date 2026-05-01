@@ -887,6 +887,10 @@
   {
     "id": "division_hazard_small_u24_remonly",
     "source": "tests/cases/division_hazard_small_u24_remonly.c",
+    "tags": [
+      "lengthy"
+    ],
+    "virtual_time_budget_ms": 30000,
     "expect": {
       "pc": -1,
       "ra": "0x0000374d",
