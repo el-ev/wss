@@ -120,7 +120,7 @@ jobs:
           WSS_DUMP_TIMEOUT_BUFFER_MS: "60000"
         run: |
           set -euo pipefail
-          cargo run --release --manifest-path tests/blackbox-runner/Cargo.toml --target-dir target -- --retries=3 --jobs=3
+          cargo run --release --manifest-path tests/blackbox-runner/Cargo.toml --target-dir target -- --retries=3 --jobs=2
 
   blackbox-lengthy:
     name: Blackbox (Lengthy)
