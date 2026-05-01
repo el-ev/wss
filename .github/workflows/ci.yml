@@ -26,6 +26,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: blackbox
+          workspaces: |
+            . -> target
+            tests/blackbox-runner -> target
 
       - name: Lint (rustfmt)
         run: cargo fmt --all -- --check
@@ -64,6 +67,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: blackbox
+          workspaces: |
+            . -> target
+            tests/blackbox-runner -> target
 
       - name: Install LLVM/Clang 22
         shell: bash
@@ -135,6 +141,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: blackbox
+          workspaces: |
+            . -> target
+            tests/blackbox-runner -> target
 
       - name: Install LLVM/Clang 22
         shell: bash
