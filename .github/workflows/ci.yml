@@ -10,6 +10,8 @@ jobs:
     name: Rust
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    env:
+      CARGO_TARGET_DIR: target
 
     steps:
       - name: Checkout
@@ -22,6 +24,8 @@ jobs:
 
       - name: Cache Cargo artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: blackbox
 
       - name: Lint (rustfmt)
         run: cargo fmt --all -- --check
@@ -34,6 +38,12 @@ jobs:
 
       - name: Test
         run: cargo test --verbose
+
+      - name: Build release artifacts
+        run: |
+          set -euo pipefail
+          cargo build --release --verbose
+          cargo build --release --manifest-path tests/blackbox-runner/Cargo.toml --target-dir target
 
   blackbox:
     name: Blackbox
