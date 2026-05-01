@@ -69,6 +69,14 @@ jobs:
           clang++ --version | tee /tmp/clangxx-version.txt
           grep -q "clang version 22" /tmp/clangxx-version.txt
 
+      - name: Install WABT
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y wabt
+          wat2wasm --version
+
       - name: Install Chrome
         id: chrome
         uses: browser-actions/setup-chrome@v1
@@ -131,6 +139,14 @@ jobs:
           grep -q "clang version 22" /tmp/clang-version.txt
           clang++ --version | tee /tmp/clangxx-version.txt
           grep -q "clang version 22" /tmp/clangxx-version.txt
+
+      - name: Install WABT
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y wabt
+          wat2wasm --version
 
       - name: Install Chrome
         id: chrome
