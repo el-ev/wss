@@ -10,8 +10,6 @@ jobs:
     name: Rust
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    env:
-      CARGO_TARGET_DIR: target
 
     steps:
       - name: Checkout
@@ -46,15 +44,13 @@ jobs:
         run: |
           set -euo pipefail
           cargo build --release --verbose
-          cargo build --release --manifest-path tests/blackbox-runner/Cargo.toml --target-dir target
+          cargo build --release --manifest-path tests/blackbox-runner/Cargo.toml
 
   blackbox:
     name: Blackbox
     needs: rust
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    env:
-      CARGO_TARGET_DIR: target
 
     steps:
       - name: Checkout
@@ -120,15 +116,13 @@ jobs:
           WSS_DUMP_TIMEOUT_BUFFER_MS: "60000"
         run: |
           set -euo pipefail
-          cargo run --release --manifest-path tests/blackbox-runner/Cargo.toml --target-dir target -- --retries=3 --jobs=2
+          cargo run --release --manifest-path tests/blackbox-runner/Cargo.toml -- --retries=3 --jobs=2
 
   blackbox-lengthy:
     name: Blackbox (Lengthy)
     needs: rust
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    env:
-      CARGO_TARGET_DIR: target
 
     steps:
       - name: Checkout
@@ -194,4 +188,4 @@ jobs:
           WSS_DUMP_TIMEOUT_BUFFER_MS: "60000"
         run: |
           set -euo pipefail
-          cargo run --release --manifest-path tests/blackbox-runner/Cargo.toml --target-dir target -- --only-lengthy --retries=3 --jobs=3
+          cargo run --release --manifest-path tests/blackbox-runner/Cargo.toml -- --only-lengthy --retries=3 --jobs=3
