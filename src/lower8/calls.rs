@@ -13,6 +13,7 @@ pub(super) struct CallIndirectInst<'a> {
     pub(super) index: IrNode,
     pub(super) args: &'a [IrNode],
     pub(super) live_after: &'a [IrNode],
+    pub(super) live_locals_after: &'a [u32],
     pub(super) result_ref: IrNode,
 }
 
@@ -36,6 +37,7 @@ struct IndirectEmitContext<'a> {
     allocs: &'a [FuncAlloc],
     op_name: &'a str,
     mode: IndirectLoweringMode,
+    live_locals: &'a [u32],
     spill_words: &'a [Word],
     join_pc: Option<Pc>,
 }
@@ -135,7 +137,7 @@ fn emit_indirect_target_case(
                         )
                     })?;
                     let cont = b.alloc_block();
-                    b.emit_cs_save(cont, emit_ctx.spill_words);
+                    b.emit_cs_save(cont, emit_ctx.live_locals, emit_ctx.spill_words);
                     b.finish(Terminator8::CallSetup {
                         callee_entry: CallTarget::Pc(callee_entry),
                         cont,
@@ -143,7 +145,7 @@ fn emit_indirect_target_case(
                         callee_arg_vregs,
                     });
                     b.switch_to(cont);
-                    b.emit_cs_restore(emit_ctx.spill_words);
+                    b.emit_cs_restore(emit_ctx.live_locals, emit_ctx.spill_words);
                     b.finish(Terminator8::Goto(join_pc));
                 }
                 IndirectLoweringMode::TailCall => {
@@ -218,6 +220,7 @@ pub(super) fn lower_call_indirect_inst(
         allocs: ctx.allocs,
         op_name: "call_indirect",
         mode: IndirectLoweringMode::Call,
+        live_locals: inst.live_locals_after,
         spill_words: &spill_words,
         join_pc: Some(join_pc),
     };
@@ -270,6 +273,7 @@ pub(super) fn lower_tail_call_indirect(
         allocs,
         op_name: "tail_call_indirect",
         mode: IndirectLoweringMode::TailCall,
+        live_locals: &[],
         spill_words: &[],
         join_pc: None,
     };

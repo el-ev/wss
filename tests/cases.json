@@ -936,10 +936,6 @@
   {
     "id": "return_negative",
     "source": "tests/cases/return_negative.c",
-    "tags": [
-      "lengthy"
-    ],
-    "virtual_time_budget_ms": 60000,
     "expect": {
       "pc": -1,
       "ra": "0xffffff85",

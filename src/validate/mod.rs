@@ -7,6 +7,12 @@ mod operators;
 
 use operators::validate_operator;
 
+fn func_signature(module: &ModuleInfo, func_index: u32) -> anyhow::Result<&FuncType> {
+    module
+        .func_type_at(func_index)
+        .with_context(|| format!("function index {} out of bounds", func_index))
+}
+
 pub fn validate(module: &ModuleInfo, wasm_bytes: &[u8]) -> anyhow::Result<()> {
     validate_imports_exports(module)?;
     validate_types(module)?;
@@ -182,10 +188,4 @@ mod tests {
             "expected floating point validation failure, got: {msg}"
         );
     }
-}
-
-fn func_signature(module: &ModuleInfo, func_index: u32) -> anyhow::Result<&FuncType> {
-    module
-        .func_type_at(func_index)
-        .with_context(|| format!("function index {} out of bounds", func_index))
 }

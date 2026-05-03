@@ -16,7 +16,9 @@ mod builder;
 mod calls;
 mod ops;
 
-use analysis::{collect_spill_words, compute_live_after_by_block};
+use analysis::{
+    collect_spill_words, compute_live_after_by_block, compute_local_live_after_by_block,
+};
 use builder::{FuncAlloc, FuncBuilder, alloc_builtin_div_params, prealloc_locals};
 use ops::lower_load_fill_byte;
 
@@ -366,7 +368,7 @@ fn lower_eqz64(b: &mut FuncBuilder, value: ValueWords) -> Word {
     bool_to_word(b, bit)
 }
 
-pub(super) fn lower_extend_i32_to_i64(
+fn lower_extend_i32_to_i64(
     b: &mut FuncBuilder,
     value: Word,
     signed: bool,
@@ -791,12 +793,14 @@ fn lower_divrem_const_s32(
     None
 }
 
+#[allow(clippy::too_many_arguments)]
 fn lower_divrem_call_via_function(
     b: &mut FuncBuilder,
     op: BinOp,
     lhs: Word,
     rhs: Word,
     live_after: &[IrNode],
+    live_locals_after: &[u32],
     allocs: &[FuncAlloc],
     div_builtins: Option<DivBuiltinFuncs>,
 ) -> anyhow::Result<Word> {
@@ -809,7 +813,7 @@ fn lower_divrem_call_via_function(
     let callee_entry = Pc::new(callee_id as u16 * PC_STRIDE);
     let cont = b.alloc_block();
     let spill_words = collect_spill_words(live_after, &b.inst_map, &b.local_vregs);
-    b.emit_cs_save(cont, &spill_words);
+    b.emit_cs_save(cont, live_locals_after, &spill_words);
 
     b.finish(Terminator8::CallSetup {
         callee_entry: CallTarget::Pc(callee_entry),
@@ -818,7 +822,7 @@ fn lower_divrem_call_via_function(
         callee_arg_vregs,
     });
     b.switch_to(cont);
-    b.emit_cs_restore(&spill_words);
+    b.emit_cs_restore(live_locals_after, &spill_words);
 
     let dst = b.alloc_word();
     b.copy_ret_to_word(dst);
@@ -1354,6 +1358,7 @@ fn lower_function(
     let mut b = FuncBuilder::new(func_id, is_entry, vreg_start, local_vregs);
 
     let live_after_by_block = compute_live_after_by_block(body);
+    let local_live_after_by_block = compute_local_live_after_by_block(body);
 
     for ir_block in body.blocks() {
         let pc = b.alloc_block();
@@ -1372,6 +1377,7 @@ fn lower_function(
                 inst,
                 ref_base + i,
                 &live_after_by_block[block_idx][i],
+                &local_live_after_by_block[block_idx][i],
             )?;
         }
 
