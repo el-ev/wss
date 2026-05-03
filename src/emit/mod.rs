@@ -313,6 +313,7 @@ struct Emitter<'a> {
     uses_exc_payload: bool,
     max_mem_store_slots: usize,
     max_mem_read_slots: usize,
+    max_mem_addr_slots: usize,
     max_cs_store_slots: usize,
     max_cs_read_slots: usize,
 }
@@ -397,6 +398,7 @@ impl<'a> Emitter<'a> {
 
         let mut max_mem_store_slots = 0usize;
         let mut max_mem_read_slots = 0usize;
+        let mut max_mem_addr_slots = 0usize;
         let mut max_cs_store_slots = 0usize;
         let mut max_cs_read_slots = 0usize;
         for cycle in &program.cycles {
@@ -404,17 +406,26 @@ impl<'a> Emitter<'a> {
             let mut mem_reads = 0usize;
             let mut cs_stores = 0usize;
             let mut cs_reads = 0usize;
+            let mut addr_counts: HashMap<crate::ir8::Addr, usize> = HashMap::new();
             for op in &cycle.ops {
                 match op.kind {
-                    Inst8Kind::StoreMem { .. } => mem_stores += 1,
-                    Inst8Kind::LoadMem { .. } => mem_reads += 1,
+                    Inst8Kind::StoreMem { addr, .. } => {
+                        mem_stores += 1;
+                        *addr_counts.entry(addr).or_insert(0) += 1;
+                    }
+                    Inst8Kind::LoadMem { addr, .. } => {
+                        mem_reads += 1;
+                        *addr_counts.entry(addr).or_insert(0) += 1;
+                    }
                     Inst8Kind::CsStore { .. } | Inst8Kind::CsStorePc { .. } => cs_stores += 1,
                     Inst8Kind::CsLoad { .. } | Inst8Kind::CsLoadPc { .. } => cs_reads += 1,
                     _ => {}
                 }
             }
+            let addr_slots = addr_counts.values().filter(|&&n| n >= 2).count();
             max_mem_store_slots = max_mem_store_slots.max(mem_stores.div_ceil(2));
             max_mem_read_slots = max_mem_read_slots.max(mem_reads);
+            max_mem_addr_slots = max_mem_addr_slots.max(addr_slots);
             max_cs_store_slots = max_cs_store_slots.max(cs_stores);
             max_cs_read_slots = max_cs_read_slots.max(cs_reads);
         }
@@ -446,6 +457,7 @@ impl<'a> Emitter<'a> {
             uses_exc_payload,
             max_mem_store_slots,
             max_mem_read_slots,
+            max_mem_addr_slots,
             max_cs_store_slots,
             max_cs_read_slots,
         })
