@@ -259,30 +259,35 @@ impl FuncBuilder {
         self.block_pc_map[&ir_block]
     }
 
-    /// Number of call stack slots needed for saving all locals.
+    /// Number of call stack slots needed for saving the given live locals.
     /// Each word (4 bytes) uses two 16-bit slots.
-    pub(super) fn cs_locals_slots(&self) -> u16 {
-        self.local_vregs
+    fn live_locals_slots(&self, live_locals: &[u32]) -> u16 {
+        live_locals
             .iter()
-            .map(|value| u16::from(value.word_count()) * 2)
+            .map(|&i| u16::from(self.local_vregs[i as usize].word_count()) * 2)
             .sum()
     }
 
-    /// Emit CsStore instructions to save locals, live spill words, and RA,
-    /// then CsAlloc.
+    /// Emit CsStore instructions to save live locals, live spill words, and
+    /// RA, then CsAlloc.
     ///
-    /// Frame layout (slot-indexed, each slot = one 16-bit CSS property):
-    ///   cs[cs_sp + 0 .. locals_bytes-1] = saved locals (packed: two bytes/slot)
-    ///   cs[cs_sp + 2*N .. +2*N+2*S-1]   = saved spill words
-    ///   cs[cs_sp + 2*N + 2*S]           = RA (Pc)
-    /// CsAlloc advances cs_sp by 2*N + 2*S + 1 slots.
+    /// Frame layout (slot-indexed, each slot = one 16-bit CSS property),
+    /// where N = live-locals slot count, S = spill word count:
+    ///   cs[cs_sp + 0 .. N-1]            = saved live locals (packed)
+    ///   cs[cs_sp + N .. N+2*S-1]        = saved spill words
+    ///   cs[cs_sp + N + 2*S]             = RA (Pc)
+    /// CsAlloc advances cs_sp by N + 2*S + 1 slots.
+    ///
+    /// Locals dead across this call are skipped on both save and restore;
+    /// each call site decides its own frame layout, so callers and callees
+    /// stay independent.
     ///
     /// RA is at the top so the callee can always pop it with CsFree(1) +
-    /// CsLoadPc(0) regardless of the caller's local count.
-    pub(super) fn emit_cs_save(&mut self, cont: Pc, spill_words: &[Word]) {
+    /// CsLoadPc(0) regardless of the caller's frame size.
+    pub(super) fn emit_cs_save(&mut self, cont: Pc, live_locals: &[u32], spill_words: &[Word]) {
         let mut local_base_bytes = 0u16;
-        for i in 0..self.local_vregs.len() {
-            let value = self.local_vregs[i];
+        for &i in live_locals {
+            let value = self.local_vregs[i as usize];
             self.emit_cs_store_word(local_base_bytes, value.lo);
             local_base_bytes += 4;
             if let Some(hi) = value.hi {
@@ -291,13 +296,14 @@ impl FuncBuilder {
             }
         }
 
-        let spill_base_bytes = self.cs_locals_slots() * 2;
+        let locals_slots = self.live_locals_slots(live_locals);
+        let spill_base_bytes = locals_slots * 2;
         for (i, word) in spill_words.iter().copied().enumerate() {
             self.emit_cs_store_word(spill_base_bytes + (i as u16) * 4, word);
         }
 
         let spill_slots = (spill_words.len() as u16) * 2;
-        let ra_slot = self.cs_locals_slots() + spill_slots;
+        let ra_slot = locals_slots + spill_slots;
         self.emit(Inst8::no_dst(Inst8Kind::CsStorePc {
             offset: ra_slot,
             val: cont,
@@ -305,18 +311,18 @@ impl FuncBuilder {
         self.emit(Inst8::no_dst(Inst8Kind::CsAlloc(ra_slot + 1)));
     }
 
-    /// Emit CsFree + CsLoad to restore locals from the call stack.
+    /// Emit CsFree + CsLoad to restore live locals from the call stack.
     /// Called in the caller's cont block after the callee has already
     /// popped the RA slot via its Return sequence.
-    pub(super) fn emit_cs_restore(&mut self, spill_words: &[Word]) {
-        let locals_slots = self.cs_locals_slots();
+    pub(super) fn emit_cs_restore(&mut self, live_locals: &[u32], spill_words: &[Word]) {
+        let locals_slots = self.live_locals_slots(live_locals);
         let spill_slots = (spill_words.len() as u16) * 2;
         let frame_slots = locals_slots + spill_slots;
         self.emit(Inst8::no_dst(Inst8Kind::CsFree(frame_slots)));
 
         let mut local_base_bytes = 0u16;
-        for i in 0..self.local_vregs.len() {
-            let value = self.local_vregs[i];
+        for &i in live_locals {
+            let value = self.local_vregs[i as usize];
             self.emit_cs_load_word(local_base_bytes, value.lo);
             local_base_bytes += 4;
             if let Some(hi) = value.hi {

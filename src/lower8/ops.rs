@@ -48,17 +48,18 @@ pub(super) fn lower_inst(
     inst: &Inst,
     iref: IrNode,
     live_after: &[IrNode],
+    live_locals_after: &[u32],
 ) -> anyhow::Result<()> {
     if lower_locals_globals_inst(b, ctx, inst, iref)? {
         return Ok(());
     }
-    if lower_numeric_inst(b, ctx, inst, iref, live_after)? {
+    if lower_numeric_inst(b, ctx, inst, iref, live_after, live_locals_after)? {
         return Ok(());
     }
     if lower_memory_inst(b, inst, iref)? {
         return Ok(());
     }
-    if lower_call_io_inst(b, ctx, inst, iref, live_after)? {
+    if lower_call_io_inst(b, ctx, inst, iref, live_after, live_locals_after)? {
         return Ok(());
     }
     match inst {
@@ -207,6 +208,7 @@ fn lower_numeric_inst(
     inst: &Inst,
     iref: IrNode,
     live_after: &[IrNode],
+    live_locals_after: &[u32],
 ) -> anyhow::Result<bool> {
     match inst {
         Inst::Unary { op, ty, val } => {
@@ -289,6 +291,7 @@ fn lower_numeric_inst(
                                     lhs_word,
                                     rhs_word,
                                     live_after,
+                                    live_locals_after,
                                     ctx.allocs,
                                     ctx.div_builtins,
                                 )?
@@ -300,6 +303,7 @@ fn lower_numeric_inst(
                                 lhs_word,
                                 rhs_word,
                                 live_after,
+                                live_locals_after,
                                 ctx.allocs,
                                 ctx.div_builtins,
                             )?
@@ -619,6 +623,7 @@ fn lower_call_io_inst(
     inst: &Inst,
     iref: IrNode,
     live_after: &[IrNode],
+    live_locals_after: &[u32],
 ) -> anyhow::Result<bool> {
     match inst {
         Inst::Putchar(val_ref) => {
@@ -657,7 +662,7 @@ fn lower_call_io_inst(
             let cont = b.alloc_block();
             let spill_words =
                 analysis::collect_spill_words(live_after, &b.inst_map, &b.local_vregs);
-            b.emit_cs_save(cont, &spill_words);
+            b.emit_cs_save(cont, live_locals_after, &spill_words);
 
             b.finish(Terminator8::CallSetup {
                 callee_entry: CallTarget::Pc(callee_entry),
@@ -666,7 +671,7 @@ fn lower_call_io_inst(
                 callee_arg_vregs,
             });
             b.switch_to(cont);
-            b.emit_cs_restore(&spill_words);
+            b.emit_cs_restore(live_locals_after, &spill_words);
 
             if let Some(result_ty) = ctx
                 .module
@@ -694,6 +699,7 @@ fn lower_call_io_inst(
                     index: *index,
                     args,
                     live_after,
+                    live_locals_after,
                     result_ref: iref,
                 },
             )?;

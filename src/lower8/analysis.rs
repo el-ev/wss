@@ -92,6 +92,88 @@ pub(super) fn collect_spill_words(
     out
 }
 
+pub(super) fn compute_local_live_after_by_block(
+    body: &crate::module::IrFuncBody,
+) -> Vec<Vec<Vec<u32>>> {
+    let mut block_idx_by_id = HashMap::new();
+    for (i, blk) in body.blocks().iter().enumerate() {
+        block_idx_by_id.insert(blk.id, i);
+    }
+
+    let mut block_uses: Vec<HashSet<u32>> = vec![HashSet::new(); body.blocks().len()];
+    let mut block_kills: Vec<HashSet<u32>> = vec![HashSet::new(); body.blocks().len()];
+    for (block_idx, ir_block) in body.blocks().iter().enumerate() {
+        let mut killed: HashSet<u32> = HashSet::new();
+        for inst in &ir_block.insts {
+            match inst {
+                Inst::LocalGet(l) if !killed.contains(l) => {
+                    block_uses[block_idx].insert(*l);
+                }
+                Inst::LocalSet(l, _) | Inst::LocalTee(l, _) => {
+                    killed.insert(*l);
+                }
+                _ => {}
+            }
+        }
+        block_kills[block_idx] = killed;
+    }
+
+    let mut live_in: Vec<HashSet<u32>> = vec![HashSet::new(); body.blocks().len()];
+    let mut live_out: Vec<HashSet<u32>> = vec![HashSet::new(); body.blocks().len()];
+    loop {
+        let mut changed = false;
+        for (block_idx, ir_block) in body.blocks().iter().enumerate().rev() {
+            let mut out_new: HashSet<u32> = HashSet::new();
+            for succ in ir_block.successors() {
+                if let Some(&succ_idx) = block_idx_by_id.get(&succ) {
+                    out_new.extend(live_in[succ_idx].iter().copied());
+                }
+            }
+            let mut in_new = block_uses[block_idx].clone();
+            in_new.extend(
+                out_new
+                    .iter()
+                    .filter(|l| !block_kills[block_idx].contains(l))
+                    .copied(),
+            );
+            if out_new != live_out[block_idx] {
+                live_out[block_idx] = out_new;
+                changed = true;
+            }
+            if in_new != live_in[block_idx] {
+                live_in[block_idx] = in_new;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    let mut live_after_by_block = vec![Vec::new(); body.blocks().len()];
+    for (block_idx, ir_block) in body.blocks().iter().enumerate() {
+        let mut live = live_out[block_idx].clone();
+        let mut per_inst = vec![Vec::new(); ir_block.insts.len()];
+        for i in (0..ir_block.insts.len()).rev() {
+            let mut here: Vec<u32> = live.iter().copied().collect();
+            here.sort_unstable();
+            per_inst[i] = here;
+            match &ir_block.insts[i] {
+                Inst::LocalGet(l) => {
+                    live.insert(*l);
+                }
+                Inst::LocalSet(l, _) | Inst::LocalTee(l, _) => {
+                    live.remove(l);
+                }
+                _ => {}
+            }
+        }
+        live_after_by_block[block_idx] = per_inst;
+    }
+
+    live_after_by_block
+}
+
 pub(super) fn compute_live_after_by_block(
     body: &crate::module::IrFuncBody,
 ) -> Vec<Vec<Vec<IrNode>>> {
