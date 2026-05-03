@@ -190,14 +190,14 @@ body { margin: 0; background: #f5f5f5; font-family: ui-monospace, SFMono-Regular
 @function --eqz(--a <number>) returns <integer> { result: if(style(--a: 0): 1; else: 0); }
 /*__WSS_KEEP_FN_EQZ_END__*/
 /*__WSS_KEEP_FN_NEZ_START__*/
-@function --nez(--a <number>) returns <integer> { result: calc(1 - --eqz(var(--a))); }
+@function --nez(--a <number>) returns <integer> { result: if(style(--a: 0): 0; else: 1); }
 /*__WSS_KEEP_FN_NEZ_END__*/
 /*__WSS_KEEP_FN_EQ_START__*/
-@function --eq(--a <number>, --b <number>) returns <integer> { result: --eqz(round(down, calc(var(--a) - var(--b)))); }
+@function --eq(--a <number>, --b <number>) returns <integer> { result: calc(1 - abs(sign(round(down, calc(var(--a) - var(--b)))))); }
 /*__WSS_KEEP_FN_EQ_END__*/
 @function --eq1(--a <number>) returns <integer> { result: if(style(--a: 1): 1; else: 0); }
 /*__WSS_KEEP_FN_NE_START__*/
-@function --ne(--a <number>, --b <number>) returns <integer> { result: --nez(calc(var(--a) - var(--b))); }
+@function --ne(--a <number>, --b <number>) returns <integer> { result: abs(sign(calc(var(--a) - var(--b)))); }
 /*__WSS_KEEP_FN_NE_END__*/
 /*__WSS_KEEP_FN_LT_START__*/
 @function --lt(--a <number>, --b <number>) returns <integer> { result: round(down, calc((1 - sign(calc(var(--a) - var(--b)))) / 2)); }
