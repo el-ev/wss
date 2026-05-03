@@ -368,11 +368,7 @@ fn lower_eqz64(b: &mut FuncBuilder, value: ValueWords) -> Word {
     bool_to_word(b, bit)
 }
 
-fn lower_extend_i32_to_i64(
-    b: &mut FuncBuilder,
-    value: Word,
-    signed: bool,
-) -> ValueWords {
+fn lower_extend_i32_to_i64(b: &mut FuncBuilder, value: Word, signed: bool) -> ValueWords {
     if signed {
         let fill = lower_load_fill_byte(b, value.bytes()[3], true);
         let hi = Word::new(fill, fill, fill, fill);
