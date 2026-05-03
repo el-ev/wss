@@ -1,3 +1,4 @@
+// tail_call_void_multi.c
 static int g_state = 3;
 
 __attribute__((noinline)) static void add_bias(int x) { g_state += x + 1; }

@@ -1,3 +1,4 @@
+// bitcount_chain.c
 __attribute__((optnone)) int _start(void) {
     volatile unsigned int x = 0x12345678u;
     volatile unsigned int y = 0x87654321u;

@@ -1,3 +1,4 @@
+// tail_call_indirect.c
 typedef int (*binop_t)(int a, int b);
 
 static volatile int g_idx = 2;

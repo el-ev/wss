@@ -1,3 +1,4 @@
+// memory_mixed_sizes.c
 __attribute__((optnone)) int _start(void) {
     volatile int *mem = (volatile int *)(unsigned int)0x200;
     volatile signed short *h = (volatile signed short *)(unsigned int)0x204;

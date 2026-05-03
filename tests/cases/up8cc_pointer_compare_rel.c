@@ -1,3 +1,4 @@
+// up8cc_pointer_compare_rel.c
 // Upstream reference: rui314/8cc@b480958 test/pointer.c (compare)
 int _start(void) {
   char buf[8];

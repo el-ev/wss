@@ -1,3 +1,4 @@
+// indirect_halfword_guard.c
 typedef int (*unop_t)(int);
 
 static volatile int g = 0x55aa33cc;

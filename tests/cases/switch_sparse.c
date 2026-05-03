@@ -1,3 +1,4 @@
+// switch_sparse.c
 static int map_sparse(int x) {
   switch (x) {
   case -100:

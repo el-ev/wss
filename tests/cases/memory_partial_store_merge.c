@@ -1,3 +1,4 @@
+// memory_partial_store_merge.c
 int _start(void) {
   volatile unsigned int *w = (volatile unsigned int *)(unsigned int)0x30;
   volatile unsigned short *h = (volatile unsigned short *)(unsigned int)0x32;

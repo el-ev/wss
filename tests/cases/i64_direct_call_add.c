@@ -1,3 +1,4 @@
+// i64_direct_call_add.c
 __attribute__((noinline)) long long plus16(long long x) {
     return x + 16;
 }

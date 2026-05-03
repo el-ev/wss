@@ -1,3 +1,4 @@
+;; exception_indirect_call_catch.wat
 (module
   (type $void (func))
   (tag $e (param))

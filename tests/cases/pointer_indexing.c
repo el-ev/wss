@@ -1,3 +1,4 @@
+// pointer_indexing.c
 int _start(void) {
   volatile int *base = (volatile int *)0x60;
   for (int i = 0; i < 6; i++) {

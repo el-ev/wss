@@ -1,3 +1,4 @@
+// indirect_dispatch_switch.c
 typedef int (*op_t)(int, int);
 
 __attribute__((noinline)) static int add2(int a, int b) { return a + b; }

@@ -1,3 +1,4 @@
+;; i64_globals.wat
 (module
   (global $g0 (mut i64) (i64.const 0))
   (global $g1 (mut i64) (i64.const 0xDEADBEEF12345678))

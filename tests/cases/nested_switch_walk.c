@@ -1,3 +1,4 @@
+// nested_switch_walk.c
 static volatile unsigned seed10 = 0x2au;
 
 __attribute__((optnone, noinline)) static int walk(unsigned s) {

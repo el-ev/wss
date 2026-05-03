@@ -1,3 +1,4 @@
+;; exception_after_catch_continues.wat
 (module
   (tag $e (param))
   (func $_start (export "_start") (result i32)

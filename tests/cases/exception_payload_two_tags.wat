@@ -1,3 +1,4 @@
+;; exception_payload_two_tags.wat
 (module
   (tag $a (param i32))
   (tag $b (param i32))

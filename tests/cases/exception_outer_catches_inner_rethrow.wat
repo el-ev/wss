@@ -1,3 +1,4 @@
+;; exception_outer_catches_inner_rethrow.wat
 (module
   (tag $a (param))
   (tag $b (param))

@@ -1,3 +1,4 @@
+// narrow_load16_u.c
 int _start(void) {
   volatile unsigned short *p16 = (volatile unsigned short *)0x40;
   p16[0] = (unsigned short)0x8001;

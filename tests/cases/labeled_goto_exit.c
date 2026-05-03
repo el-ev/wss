@@ -1,3 +1,4 @@
+// labeled_goto_exit.c
 __attribute__((optnone)) int _start(void) {
     int result = 0;
 

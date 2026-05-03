@@ -1,3 +1,4 @@
+;; exception_no_throw_try_returns.wat
 (module
   (tag $e (param))
   (func $_start (export "_start") (result i32)

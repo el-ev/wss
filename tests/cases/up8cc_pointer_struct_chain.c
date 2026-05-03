@@ -1,3 +1,4 @@
+// up8cc_pointer_struct_chain.c
 // Upstream reference: rui314/8cc@b480958 test/pointer.c (t6)
 struct Node {
   int val;

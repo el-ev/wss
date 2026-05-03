@@ -1,3 +1,4 @@
+// narrow_memory_signext.c
 static volatile unsigned char buf[16];
 
 int _start(void) {

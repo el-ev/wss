@@ -1,3 +1,4 @@
+// tail_call_indirect_putchar.c
 extern int putchar(int c);
 
 typedef int (*putchar_fn_t)(int);

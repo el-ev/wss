@@ -1,3 +1,4 @@
+// up8cc_pointer_ptrdiff_lp64.c
 // Upstream reference: rui314/8cc@b480958 test/pointer.c (subtract)
 // This case intentionally encodes LP64 assumptions from upstream.
 int _start(void) {

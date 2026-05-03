@@ -1,3 +1,4 @@
+// bitcount_rotate_eqz_chain.c
 static volatile unsigned seed = 0x89abcdefu;
 
 __attribute__((noinline)) static int f1(int x) {

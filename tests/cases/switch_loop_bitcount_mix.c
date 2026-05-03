@@ -1,3 +1,4 @@
+// switch_loop_bitcount_mix.c
 static volatile unsigned seed = 0x13579bdfu;
 
 __attribute__((optnone, noinline)) static int walk(unsigned x) {

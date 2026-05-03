@@ -1,3 +1,4 @@
+// up8cc_control_duff27.c
 // Upstream reference: rui314/8cc@b480958 test/control.c (Duff's-device style switch)
 int _start(void) {
   int acc = 0;

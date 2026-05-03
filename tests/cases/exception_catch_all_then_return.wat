@@ -1,3 +1,4 @@
+;; exception_catch_all_then_return.wat
 (module
   (tag $e (param))
   (func $thrower

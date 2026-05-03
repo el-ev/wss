@@ -1,3 +1,4 @@
+;; i64_spill_call.wat
 (module
   (func $helper (param i32) (result i64)
     ;; return 0x0000000100000000 * param (shifts are unsupported, use add loop)

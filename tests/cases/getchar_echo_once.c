@@ -1,3 +1,4 @@
+// getchar_echo_once.c
 extern int getchar(void);
 extern int putchar(int c);
 

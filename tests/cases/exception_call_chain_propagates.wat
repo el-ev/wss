@@ -1,3 +1,4 @@
+;; exception_call_chain_propagates.wat
 (module
   (tag $e (param))
   (func $leaf (throw $e))

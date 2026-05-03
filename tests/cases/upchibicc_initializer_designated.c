@@ -1,3 +1,4 @@
+// upchibicc_initializer_designated.c
 // Upstream reference: rui314/chibicc@90d1f7f test/initializer.c
 int _start(void) {
   int a[3] = {1, 2, 3, [0] = 4, 5};

@@ -1,3 +1,4 @@
+;; exception_recursive_throw.wat
 (module
   (tag $e (param))
   (func $rec (param $n i32)

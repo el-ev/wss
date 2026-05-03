@@ -1,3 +1,4 @@
+// early_return_paths.c
 static volatile int g = 27;
 
 __attribute__((noinline, optnone)) static int classify(int x) {

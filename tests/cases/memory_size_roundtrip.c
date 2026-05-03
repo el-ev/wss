@@ -1,3 +1,4 @@
+// memory_size_roundtrip.c
 static volatile int sink;
 
 int _start(void) {

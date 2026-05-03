@@ -1,3 +1,4 @@
+;; exception_delegate_cross_function.wat
 (module
   (tag $e (param))
   (func $inner
