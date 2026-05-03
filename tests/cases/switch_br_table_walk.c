@@ -1,3 +1,4 @@
+// switch_br_table_walk.c
 static volatile unsigned seed = 9;
 
 __attribute__((optnone, noinline)) static int jumpy(unsigned x) {

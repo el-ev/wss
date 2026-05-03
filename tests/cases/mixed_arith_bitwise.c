@@ -1,3 +1,4 @@
+// mixed_arith_bitwise.c
 __attribute__((optnone)) int _start(void) {
     volatile int x = 5;
     volatile int y = 3;

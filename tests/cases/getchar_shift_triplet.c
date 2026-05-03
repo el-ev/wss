@@ -1,3 +1,4 @@
+// getchar_shift_triplet.c
 extern int getchar(void);
 extern int putchar(int c);
 

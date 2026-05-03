@@ -1,3 +1,4 @@
+;; i64_eqz_wrap.wat
 (module
   (func $start (export "_start") (result i64)
     ;; i32.wrap_i64(0x0000000100000002) = 0x00000002

@@ -1,3 +1,4 @@
+// putchar_banner.c
 extern int putchar(int c);
 
 int _start(void) {

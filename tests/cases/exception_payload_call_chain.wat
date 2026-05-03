@@ -1,3 +1,4 @@
+;; exception_payload_call_chain.wat
 (module
   (tag $e (param i32))
   (func $leaf

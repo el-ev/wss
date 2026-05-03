@@ -1,3 +1,4 @@
+// select_narrow_memory_mix.c
 static volatile unsigned seed = 0x6d5a1f23u;
 
 int _start(void) {

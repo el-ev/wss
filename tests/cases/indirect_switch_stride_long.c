@@ -1,3 +1,4 @@
+// indirect_switch_stride_long.c
 typedef unsigned (*binop_t)(unsigned, unsigned);
 
 static volatile unsigned seed = 0x31415926u;

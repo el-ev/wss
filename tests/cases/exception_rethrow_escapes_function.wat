@@ -1,3 +1,4 @@
+;; exception_rethrow_escapes_function.wat
 (module
   (tag $e (param))
   (func $helper

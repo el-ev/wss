@@ -1,3 +1,4 @@
+// switch_fallthrough_default.c
 static int classify(int x) {
   int out = 0;
   switch (x) {

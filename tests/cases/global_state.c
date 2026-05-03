@@ -1,3 +1,4 @@
+// global_state.c
 static int g = 5;
 
 static int bump(void) {

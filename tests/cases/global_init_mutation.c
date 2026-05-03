@@ -1,3 +1,4 @@
+// global_init_mutation.c
 static int g_seed = 9;
 static int g_data[4] = {3, 1, 4, 1};
 

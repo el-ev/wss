@@ -1,3 +1,4 @@
+// short_circuit_side_effects.c
 static int g_counter = 0;
 
 static int bump(int v) {

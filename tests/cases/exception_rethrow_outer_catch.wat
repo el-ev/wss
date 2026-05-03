@@ -1,3 +1,4 @@
+;; exception_rethrow_outer_catch.wat
 (module
   (tag $e (param))
   (func $_start (export "_start") (result i32)

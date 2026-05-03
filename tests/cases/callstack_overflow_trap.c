@@ -1,3 +1,4 @@
+// callstack_overflow_trap.c
 __attribute__((noinline)) static int dive_b(int n);
 
 __attribute__((noinline)) static int dive_a(int n) {

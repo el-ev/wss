@@ -1,3 +1,4 @@
+;; exception_counter_before_throw.wat
 (module
   (tag $e (param))
   (func $_start (export "_start") (result i32)

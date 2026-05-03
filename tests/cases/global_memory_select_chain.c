@@ -1,3 +1,4 @@
+// global_memory_select_chain.c
 static volatile int g0 = 0x00102030;
 static volatile int g1 = -77;
 

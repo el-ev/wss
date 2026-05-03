@@ -1,3 +1,4 @@
+;; i64_call_indirect.wat
 (module
   (type $sig (func (param i64 i32) (result i64)))
 

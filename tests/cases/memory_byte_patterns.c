@@ -1,3 +1,4 @@
+// memory_byte_patterns.c
 __attribute__((optnone)) int _start(void) {
     volatile unsigned char *p = (volatile unsigned char *)(unsigned int)0x100;
 

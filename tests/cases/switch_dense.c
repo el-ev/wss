@@ -1,3 +1,4 @@
+// switch_dense.c
 static int map_value(int x) {
   switch (x) {
   case 0:

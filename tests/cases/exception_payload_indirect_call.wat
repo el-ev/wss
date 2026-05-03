@@ -1,3 +1,4 @@
+;; exception_payload_indirect_call.wat
 (module
   (type $void (func))
   (tag $e (param i32))

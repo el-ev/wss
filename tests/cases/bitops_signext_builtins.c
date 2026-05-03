@@ -1,3 +1,4 @@
+// bitops_signext_builtins.c
 static volatile unsigned seed = 0x12345678u;
 
 int _start(void) {

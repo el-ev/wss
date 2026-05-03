@@ -1,3 +1,4 @@
+// indirect_memory_rotmix.c
 typedef int (*op_t)(int, int);
 
 static volatile unsigned seed = 0x2468ace1u;

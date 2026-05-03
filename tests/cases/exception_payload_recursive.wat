@@ -1,3 +1,4 @@
+;; exception_payload_recursive.wat
 (module
   (tag $e (param i32))
   (func $rec (param $n i32)

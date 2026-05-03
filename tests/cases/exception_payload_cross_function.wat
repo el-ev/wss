@@ -1,3 +1,4 @@
+;; exception_payload_cross_function.wat
 (module
   (tag $e (param i32))
   (func $thrower

@@ -1,3 +1,4 @@
+;; exception_uncaught_cross_function.wat
 (module
   (tag $e (param))
   (func $throwee

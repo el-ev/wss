@@ -1,3 +1,4 @@
+// upchibicc_pointer_array_index.c
 // Upstream reference: rui314/chibicc@90d1f7f test/pointer.c
 int _start(void) {
   int x[3];

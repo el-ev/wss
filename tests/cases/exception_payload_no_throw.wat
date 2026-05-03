@@ -1,3 +1,4 @@
+;; exception_payload_no_throw.wat
 (module
   (tag $e (param i32))
   (func $_start (export "_start") (result i32)

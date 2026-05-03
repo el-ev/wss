@@ -1,4 +1,4 @@
-source_filename = "if_else_nop_inlineasm"
+source_filename = "if_else_nop_inlineasm.ll"
 target triple = "wasm32-unknown-unknown"
 
 define i32 @_start() #0 {

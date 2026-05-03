@@ -1,3 +1,4 @@
+// up8cc_arith_ternary_elvis.c
 // Upstream reference: rui314/8cc@b480958 test/arith.c (test_ternary)
 static volatile int g_zero = 0;
 

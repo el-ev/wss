@@ -1,3 +1,4 @@
+// tail_call_direct.c
 static volatile int g_seed = 17;
 
 __attribute__((noinline)) static int leaf(int x) { return (x * 5) - 9; }

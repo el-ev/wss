@@ -1,3 +1,4 @@
+;; exception_catch_second_of_two.wat
 (module
   (tag $a (param))
   (tag $b (param))

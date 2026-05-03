@@ -1,3 +1,4 @@
+;; exception_nested_inner_catch.wat
 (module
   (tag $a (param))
   (func $_start (export "_start") (result i32)

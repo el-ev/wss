@@ -1,3 +1,4 @@
+// array_memory_interop.c
 __attribute__((optnone)) int _start(void) {
     volatile int data[16];
     for (int i = 0; i < 16; i++) {

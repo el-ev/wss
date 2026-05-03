@@ -1,3 +1,4 @@
+// tail_call_direct_negative.c
 __attribute__((noinline)) static int leaf(int x) { return x - 100; }
 
 __attribute__((noinline)) static int hop_two(int x) { return leaf(x * 3); }

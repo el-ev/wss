@@ -1,3 +1,4 @@
+;; exception_nested_outer_catch.wat
 (module
   (tag $a (param))
   (tag $b (param))

@@ -1,3 +1,4 @@
+// call_indirect.c
 typedef int (*binop_t)(int, int);
 
 static int add(int a, int b) { return a + b; }

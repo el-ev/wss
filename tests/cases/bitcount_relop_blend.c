@@ -1,3 +1,4 @@
+// bitcount_relop_blend.c
 static volatile unsigned va = 0x01020304u;
 static volatile unsigned vb = 0x80010001u;
 

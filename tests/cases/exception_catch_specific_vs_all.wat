@@ -1,3 +1,4 @@
+;; exception_catch_specific_vs_all.wat
 (module
   (tag $a (param))
   (tag $b (param))

@@ -1,3 +1,4 @@
+;; i64_narrow_memory.wat
 (module
   (func $start (export "_start") (result i64)
     ;; Store 0xFEDCBA9876543210 at offset 0

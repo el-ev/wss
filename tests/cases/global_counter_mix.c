@@ -1,3 +1,4 @@
+// global_counter_mix.c
 static volatile int g_counter = 0;
 
 __attribute__((optnone)) static int count(int delta) {

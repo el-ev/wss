@@ -1,3 +1,4 @@
+;; i64_select.wat
 (module
   (func $start (export "_start") (result i64)
     i64.const 0x1111111122222222

@@ -1,3 +1,4 @@
+;; exception_payload_negative.wat
 (module
   (tag $e (param i32))
   (func $_start (export "_start") (result i32)

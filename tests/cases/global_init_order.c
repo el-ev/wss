@@ -1,3 +1,4 @@
+// global_init_order.c
 static volatile int g_a = 10;
 static volatile int g_b = 20;
 static volatile int g_c = 30;

@@ -1,3 +1,4 @@
+// pointer_fold_loop.c
 static volatile int arr[8] = {3, 5, 7, 11, 13, 17, 19, 23};
 
 __attribute__((noinline, optnone)) static int fold(volatile int *p, int n) {

@@ -1,3 +1,4 @@
+// memory_halfword_extract.c
 __attribute__((optnone)) int _start(void) {
     volatile unsigned int *p = (volatile unsigned int *)(unsigned int)0x80;
 

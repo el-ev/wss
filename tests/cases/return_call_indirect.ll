@@ -1,4 +1,4 @@
-source_filename = "return_call_indirect"
+source_filename = "return_call_indirect.ll"
 target triple = "wasm32-unknown-unknown"
 
 @seed = internal global i32 11, align 4
