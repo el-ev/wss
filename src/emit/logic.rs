@@ -37,10 +37,22 @@ impl<'a> Emitter<'a> {
         let mut csr_idx_arms = vec![String::new(); self.max_cs_read_slots];
         let mut csr_par_arms = vec![String::new(); self.max_cs_read_slots];
         let mut csr_ok_arms = vec![String::new(); self.max_cs_read_slots];
+        let mut mb_arms = vec![String::new(); self.max_mem_addr_slots];
 
         for cycle in &self.program.cycles {
             let pc = cycle.pc.index();
             let mut reg_now = HashMap::new();
+            let mut addr_counts: HashMap<crate::ir8::Addr, usize> = HashMap::new();
+            for op in &cycle.ops {
+                match op.kind {
+                    Inst8Kind::LoadMem { addr, .. } | Inst8Kind::StoreMem { addr, .. } => {
+                        *addr_counts.entry(addr).or_insert(0) += 1;
+                    }
+                    _ => {}
+                }
+            }
+            let mut addr_slot: HashMap<crate::ir8::Addr, usize> = HashMap::new();
+            let mut next_addr_slot: usize = 0;
             let mut global_sets = HashMap::new();
             let mut mem_stores_raw = Vec::new();
             let mut mem_reads = Vec::new();
@@ -271,11 +283,21 @@ impl<'a> Emitter<'a> {
                     }
                     Inst8Kind::LoadMem { base, addr, lane } => {
                         if let Some(dst) = op.dst {
+                            let slot = self.assign_addr_slot(
+                                addr,
+                                pc,
+                                &reg_now,
+                                &addr_counts,
+                                &mut addr_slot,
+                                &mut next_addr_slot,
+                                &mut mb_arms,
+                            );
                             let (addr, in_bounds) = self.mem_addr_bounds(
                                 &reg_now,
                                 addr,
                                 *base,
                                 *lane,
+                                slot,
                                 &mut trap_mem_parts,
                             );
                             mem_reads.push(MemRead {
@@ -296,8 +318,23 @@ impl<'a> Emitter<'a> {
                         lane,
                         val,
                     } => {
-                        let (byte_addr, in_bounds) =
-                            self.mem_addr_bounds(&reg_now, addr, *base, *lane, &mut trap_mem_parts);
+                        let slot = self.assign_addr_slot(
+                            addr,
+                            pc,
+                            &reg_now,
+                            &addr_counts,
+                            &mut addr_slot,
+                            &mut next_addr_slot,
+                            &mut mb_arms,
+                        );
+                        let (byte_addr, in_bounds) = self.mem_addr_bounds(
+                            &reg_now,
+                            addr,
+                            *base,
+                            *lane,
+                            slot,
+                            &mut trap_mem_parts,
+                        );
                         mem_stores_raw.push(MemStoreByte {
                             cell: format!("--mhalf({})", byte_addr),
                             parity: format!("--mpar({})", byte_addr),
@@ -730,6 +767,10 @@ impl<'a> Emitter<'a> {
             Self::emit_if_or_fallback(out, &format!("--mro{}", s), &mr_ok_arms[s], "0");
         }
 
+        for (s, arms) in mb_arms.iter().enumerate() {
+            Self::emit_if_or_fallback(out, &format!("--mb{}", s), arms, "0");
+        }
+
         if self.js_coprocessor {
             Self::emit_if_or_fallback(out, "--cop_op", &cop_op_arms, &format!("{}", COP_OP_NONE));
             for lane in 0..4usize {
@@ -1025,17 +1066,48 @@ impl<'a> Emitter<'a> {
         addr: &crate::ir8::Addr,
         base: u16,
         lane: u8,
+        slot: Option<usize>,
         trap_parts: &mut Vec<String>,
     ) -> (String, String) {
-        let byte_addr = format!(
-            "--addr16({}, {}, {})",
-            Self::val_expr(reg_now, addr.lo),
-            Self::val_expr(reg_now, addr.hi),
-            (base as u32) + (lane as u32)
-        );
+        let imm = (base as u32) + (lane as u32);
+        let byte_addr = match slot {
+            Some(s) => format!("calc(var(--mb{}) + {})", s, imm),
+            None => format!(
+                "--addr16({}, {}, {})",
+                Self::val_expr(reg_now, addr.lo),
+                Self::val_expr(reg_now, addr.hi),
+                imm
+            ),
+        };
         let in_bounds = format!("--lt({}, {})", byte_addr, self.memory_end);
         trap_parts.push(format!("calc(1 - ({}))", in_bounds));
         (byte_addr, in_bounds)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn assign_addr_slot(
+        &self,
+        addr: &crate::ir8::Addr,
+        pc: u16,
+        reg_now: &HashMap<u16, String>,
+        addr_counts: &HashMap<crate::ir8::Addr, usize>,
+        addr_slot: &mut HashMap<crate::ir8::Addr, usize>,
+        next_addr_slot: &mut usize,
+        mb_arms: &mut [String],
+    ) -> Option<usize> {
+        if addr_counts.get(addr).copied().unwrap_or(0) < 2 {
+            return None;
+        }
+        if let Some(&s) = addr_slot.get(addr) {
+            return Some(s);
+        }
+        let s = *next_addr_slot;
+        *next_addr_slot += 1;
+        addr_slot.insert(*addr, s);
+        let lo = Self::val_expr(reg_now, addr.lo);
+        let hi = Self::val_expr(reg_now, addr.hi);
+        let _ = write!(mb_arms[s], "style(--_1pc: {}): --m16({}, {}); ", pc, lo, hi);
+        Some(s)
     }
 
     fn cs_bounds_check(&self, idx: &str, extend: bool, trap_parts: &mut Vec<String>) -> String {
