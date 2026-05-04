@@ -1060,6 +1060,10 @@
     "source": "tests/cases/callstack_overflow_trap.c",
     "stack_slots": 48,
     "max_frames": 60000,
+    "tags": [
+      "lengthy"
+    ],
+    "virtual_time_budget_ms": 60000,
     "expect": {
       "pc": -5,
       "rendered_includes": [
