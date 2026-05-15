@@ -1017,3 +1017,49 @@ fn emit_html_return_falls_back_to_callstack_top_when_cs_load_pc_is_in_prior_cycl
     assert!(!html.contains("@function --csmerge("));
     assert!(!html.contains(" --csw_active: if("));
 }
+
+#[test]
+fn is_atomic_calc_term_recognizes_numerics() {
+    let f = Emitter::is_atomic_calc_term;
+    assert!(f("0"));
+    assert!(f("42"));
+    assert!(f("-1"));
+    assert!(f("+255"));
+    assert!(f("3.14"));
+    // Empty is trivially atomic — nothing to parenthesize.
+    assert!(f(""));
+    // A bare double hyphen isn't a number or a function call.
+    assert!(!f("--"));
+}
+
+#[test]
+fn is_atomic_calc_term_recognizes_function_calls() {
+    let f = Emitter::is_atomic_calc_term;
+    assert!(f("var(--x)"));
+    assert!(f("var(--x, 0)"));
+    assert!(f("calc(1 + 2)"));
+    assert!(f("calc(calc(1 + 2) + 3)"));
+    assert!(f("mod(var(--x), 256)"));
+    assert!(f("round(down, calc(var(--x) / 256))"));
+    assert!(f("--lt(1, 2)"));
+    assert!(f("--byte_ctz(mod(var(--x), 256))"));
+}
+
+#[test]
+fn is_atomic_calc_term_rejects_bare_operators() {
+    let f = Emitter::is_atomic_calc_term;
+    assert!(!f("a + b"));
+    assert!(!f("var(--x) + 1"));
+    assert!(!f("calc(1) + calc(2)"));
+    // Two atoms side by side are not one atom.
+    assert!(!f("var(--x)var(--y)"));
+}
+
+#[test]
+fn paren_if_needed_only_wraps_when_required() {
+    let f = Emitter::paren_if_needed;
+    assert_eq!(f("var(--x)"), "var(--x)");
+    assert_eq!(f("0"), "0");
+    assert_eq!(f("calc(1 + 2)"), "calc(1 + 2)");
+    assert_eq!(f("a + b"), "(a + b)");
+}
