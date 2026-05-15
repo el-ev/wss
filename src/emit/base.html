@@ -208,6 +208,9 @@ body { margin: 0; background: #f5f5f5; font-family: ui-monospace, SFMono-Regular
 /*__WSS_KEEP_FN_LT_START__*/
 @function --lt(--a <number>, --b <number>) returns <integer> { result: round(down, calc((1 - sign(calc(var(--a) - var(--b)))) / 2)); }
 /*__WSS_KEEP_FN_LT_END__*/
+/*__WSS_KEEP_FN_GE_START__*/
+@function --ge(--a <number>, --b <number>) returns <integer> { result: round(down, calc((1 + sign(calc(var(--a) - var(--b) + 0.5))) / 2)); }
+/*__WSS_KEEP_FN_GE_END__*/
 /*__WSS_KEEP_FN_ADDR16_START__*/
 @function --addr16(--lo <number>, --hi <number>, --imm <number>) returns <integer> { result: round(down, calc(var(--imm) + var(--lo) + 256 * var(--hi))); }
 /*__WSS_KEEP_FN_ADDR16_END__*/
@@ -301,6 +304,8 @@ Please try an up-to-date Chromium-based browser.
     /*__WSS_KEEP_JS_CLOCK_DEBUGGER_RUNTIME_START__*/
     let debugOpsList = null;
     let debugOpsHead = null;
+    let debugStickyKey = null;
+    let debugStickyKeyOut = null;
     const debuggerCycles = /*__WSS_DEBUGGER_CYCLES__*/;
     /*__WSS_KEEP_JS_CLOCK_DEBUGGER_RUNTIME_END__*/
 
@@ -358,6 +363,32 @@ Please try an up-to-date Chromium-based browser.
     }
 
     /*__WSS_KEEP_JS_CLOCK_DEBUGGER_RUNTIME_START__*/
+    function setStickyKey(code) {
+        debugStickyKey = code;
+        if (code == null) {
+            clkEl.style.removeProperty("--kb");
+        } else {
+            clkEl.style.setProperty("--kb", String(code), "important");
+        }
+        if (debugStickyKeyOut) {
+            debugStickyKeyOut.textContent =
+                code == null
+                    ? "none"
+                    : `${code} (${code >= 0x20 && code < 0x7f ? `'${String.fromCharCode(code)}'` : "ctrl"})`;
+        }
+    }
+
+    const KB_SHIFT_MAP = {
+        96: 126, 49: 33, 50: 64, 51: 35, 52: 36, 53: 37, 54: 94, 55: 38,
+        56: 42, 57: 40, 48: 41, 45: 95, 61: 43, 91: 123, 93: 125, 92: 124,
+        59: 58, 39: 34, 44: 60, 46: 62, 47: 63,
+    };
+    function decodeVirtualKey(dataKey, shifted) {
+        if (!shifted) return dataKey;
+        if (dataKey >= 97 && dataKey <= 122) return dataKey - 32;
+        return KB_SHIFT_MAP[dataKey] != null ? KB_SHIFT_MAP[dataKey] : dataKey;
+    }
+
     function annotateRegs(line, style) {
         return line.replace(/%r(\d+)/g, (_, n) => {
             const v = Number.parseInt(style.getPropertyValue(`--r${n}`), 10);
@@ -563,6 +594,11 @@ Please try an up-to-date Chromium-based browser.
             style = batch.style;
             pc = batch.pc;
             halted = batch.halted;
+            /*__WSS_KEEP_JS_CLOCK_DEBUGGER_RUNTIME_START__*/
+            // Sticky key is consumed once per step batch so the next batch
+            // doesn't accidentally re-deliver the same character.
+            if (debugStickyKey != null) setStickyKey(null);
+            /*__WSS_KEEP_JS_CLOCK_DEBUGGER_RUNTIME_END__*/
         }
 
         if (followScreenBottom) {
@@ -617,6 +653,7 @@ Please try an up-to-date Chromium-based browser.
                 <div class="wss-debug-stat"><dt>State</dt><dd data-wss-debug-state="1">paused</dd></div>
                 <div class="wss-debug-stat"><dt>PC</dt><dd data-wss-debug-pc="1">0</dd></div>
                 <div class="wss-debug-stat"><dt>CLK</dt><dd data-wss-debug-clock="1">0</dd></div>
+                <div class="wss-debug-stat" style="grid-column: span 3;"><dt>Sticky key</dt><dd data-wss-debug-sticky-key="1">none</dd></div>
             </dl>
         `;
 
@@ -632,6 +669,7 @@ Please try an up-to-date Chromium-based browser.
         debugClockOut = popup.querySelector("[data-wss-debug-clock='1']");
         debugOpsList = popup.querySelector("[data-wss-debug-ops='1']");
         debugOpsHead = popup.querySelector("[data-wss-debug-ops-head='1']");
+        debugStickyKeyOut = popup.querySelector("[data-wss-debug-sticky-key='1']");
         if (!(speedInput instanceof HTMLInputElement) || !closeBtn || !debugRunBtn || !debugStepBtn) {
             return;
         }
@@ -655,6 +693,7 @@ Please try an up-to-date Chromium-based browser.
         debugRunBtn.addEventListener("click", () => {
             if (halted) return;
             paused = !paused;
+            if (!paused && debugStickyKey != null) setStickyKey(null);
             refreshDebuggerLabels(getComputedStyle(terminalEl));
             if (!paused) {
                 scheduleAnimation();
@@ -667,6 +706,21 @@ Please try an up-to-date Chromium-based browser.
             refreshDebuggerLabels(getComputedStyle(terminalEl));
             scheduleAnimation();
         });
+        const kbEl = document.querySelector(".kb");
+        const shiftToggle = document.getElementById("shift-toggle");
+        if (kbEl) {
+            kbEl.addEventListener("pointerdown", (event) => {
+                if (halted || !paused) return;
+                if (!(event.target instanceof Element)) return;
+                const keyEl = event.target.closest(".key[data-key]");
+                if (!keyEl) return;
+                const dataKey = Number.parseInt(keyEl.getAttribute("data-key"), 10);
+                if (!Number.isFinite(dataKey)) return;
+                const code = decodeVirtualKey(dataKey, !!(shiftToggle && shiftToggle.checked));
+                setStickyKey(code);
+                event.preventDefault();
+            });
+        }
         /*__WSS_KEEP_JS_CLOCK_DEBUGGER_RUNTIME_END__*/
     }
 
