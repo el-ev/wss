@@ -192,10 +192,9 @@ impl<'a> Emitter<'a> {
                         if let Some(dst) = op.dst {
                             reg_now.insert(
                                 dst.expect_vreg(),
-                                format!(
-                                    "--eq({}, {})",
-                                    Self::val_expr(&reg_now, *l),
-                                    Self::val_expr(&reg_now, *r)
+                                Self::eq_expr(
+                                    &Self::val_expr(&reg_now, *l),
+                                    &Self::val_expr(&reg_now, *r),
                                 ),
                             );
                         }
@@ -204,10 +203,9 @@ impl<'a> Emitter<'a> {
                         if let Some(dst) = op.dst {
                             reg_now.insert(
                                 dst.expect_vreg(),
-                                format!(
-                                    "--ne({}, {})",
-                                    Self::val_expr(&reg_now, *l),
-                                    Self::val_expr(&reg_now, *r)
+                                Self::ne_expr(
+                                    &Self::val_expr(&reg_now, *l),
+                                    &Self::val_expr(&reg_now, *r),
                                 ),
                             );
                         }
@@ -229,7 +227,7 @@ impl<'a> Emitter<'a> {
                             reg_now.insert(
                                 dst.expect_vreg(),
                                 format!(
-                                    "calc(1 - --lt({}, {}))",
+                                    "--ge({}, {})",
                                     Self::val_expr(&reg_now, *l),
                                     Self::val_expr(&reg_now, *r)
                                 ),
@@ -520,8 +518,8 @@ impl<'a> Emitter<'a> {
                 term.pc_expr = Self::sel_expr(&getchar_ready, &term.pc_expr, &format!("{}", pc));
                 let _ = write!(
                     wait_input_arms,
-                    "style(--_1pc: {}): calc(1 - ({})); ",
-                    pc, getchar_ready
+                    "style(--_1pc: {}): --eq(var(--kb, -1), -1); ",
+                    pc
                 );
             }
 
@@ -940,7 +938,7 @@ impl<'a> Emitter<'a> {
                 let mut expr = format!("{}", default.index());
                 for (i, target) in targets.iter().enumerate().rev() {
                     expr = Self::sel_expr(
-                        &format!("--eq({}, {})", idx, i),
+                        &Self::eq_expr(&idx, &i.to_string()),
                         &format!("{}", target.index()),
                         &expr,
                     );
@@ -1032,6 +1030,21 @@ impl<'a> Emitter<'a> {
         now.get(&r.expect_vreg())
             .cloned()
             .unwrap_or_else(|| format!("var(--_1r{})", r.expect_vreg()))
+    }
+
+    pub(super) fn eq_expr(l: &str, r: &str) -> String {
+        match (l, r) {
+            (a, "0") | ("0", a) => format!("--eqz({})", a),
+            (a, "1") | ("1", a) => format!("--eq1({})", a),
+            _ => format!("--eq({}, {})", l, r),
+        }
+    }
+
+    pub(super) fn ne_expr(l: &str, r: &str) -> String {
+        match (l, r) {
+            (a, "0") | ("0", a) => format!("--nez({})", a),
+            _ => format!("--ne({}, {})", l, r),
+        }
     }
 
     /// Formats `var(name) + imm`, dropping the `calc()` wrapper and `+ 0`
@@ -1154,7 +1167,7 @@ impl<'a> Emitter<'a> {
             ),
         };
         let in_bounds = format!("--lt({}, {})", byte_addr, self.memory_end);
-        trap_parts.push(format!("calc(1 - ({}))", in_bounds));
+        trap_parts.push(format!("--ge({}, {})", byte_addr, self.memory_end));
         (byte_addr, in_bounds)
     }
 
@@ -1187,7 +1200,9 @@ impl<'a> Emitter<'a> {
     fn cs_bounds_check(&self, idx: &str, extend: bool, trap_parts: &mut Vec<String>) -> String {
         let limit = self.cs_names.len() + usize::from(extend);
         let ok = format!("calc(--lt(-1, {}) * --lt({}, {}))", idx, idx, limit);
-        trap_parts.push(format!("calc(1 - ({}))", ok));
+        // out-of-range = (idx < 0) + (idx >= limit); both bools, sum stays in {0, 1}.
+        trap_parts.push(format!("--lt({}, 0)", idx));
+        trap_parts.push(format!("--ge({}, {})", idx, limit));
         ok
     }
 

@@ -190,6 +190,7 @@ keep_pairs! {
         (FN_EQ, "FN_EQ"),
         (FN_NE, "FN_NE"),
         (FN_LT, "FN_LT"),
+        (FN_GE, "FN_GE"),
         (FN_ADDR16, "FN_ADDR16"),
         (FN_MHALF, "FN_MHALF"),
         (FN_MPAR, "FN_MPAR"),
@@ -239,6 +240,7 @@ bitflags! {
         const SP_INDICATOR = 1 << 16;
         const MEM_VISUALIZER = 1 << 17;
         const CS_VISUALIZER = 1 << 18;
+        const FN_GE = 1 << 19;
     }
 }
 
@@ -249,6 +251,7 @@ struct UsageScan {
     uses_memory_load: bool,
     uses_eq: bool,
     uses_ne: bool,
+    uses_ge: bool,
 }
 
 #[derive(Clone)]
@@ -620,6 +623,7 @@ impl<'a> Emitter<'a> {
                     Inst8Kind::StoreMem { .. } => usage.uses_memory_addr = true,
                     Inst8Kind::Eq(_, _) => usage.uses_eq = true,
                     Inst8Kind::Ne(_, _) => usage.uses_ne = true,
+                    Inst8Kind::GeU(_, _) => usage.uses_ge = true,
                     _ => {}
                 }
             }
@@ -661,7 +665,8 @@ impl<'a> Emitter<'a> {
         if usage.uses_memory_addr {
             features |= TemplateFeatures::FN_ADDR16
                 | TemplateFeatures::FN_MHALF
-                | TemplateFeatures::FN_MPAR;
+                | TemplateFeatures::FN_MPAR
+                | TemplateFeatures::FN_GE;
         }
         if usage.uses_memory_load {
             features |= TemplateFeatures::FN_MLOAD
@@ -681,9 +686,13 @@ impl<'a> Emitter<'a> {
             features |=
                 TemplateFeatures::FN_NE | TemplateFeatures::FN_NEZ | TemplateFeatures::FN_EQZ;
         }
+        if usage.uses_ge {
+            features |= TemplateFeatures::FN_GE;
+        }
         if uses_callstack {
             features |= TemplateFeatures::SP_INDICATOR;
             features |= TemplateFeatures::CS_VISUALIZER;
+            features |= TemplateFeatures::FN_GE;
         }
 
         features
@@ -776,6 +785,7 @@ impl<'a> Emitter<'a> {
         section!(f.contains(TemplateFeatures::FN_EQ), FN_EQ);
         section!(f.contains(TemplateFeatures::FN_NE), FN_NE);
         section!(f.contains(TemplateFeatures::FN_LT), FN_LT);
+        section!(f.contains(TemplateFeatures::FN_GE), FN_GE);
         section!(f.contains(TemplateFeatures::FN_ADDR16), FN_ADDR16);
         section!(f.contains(TemplateFeatures::FN_MHALF), FN_MHALF);
         section!(f.contains(TemplateFeatures::FN_MPAR), FN_MPAR);
