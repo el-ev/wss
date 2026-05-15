@@ -1,7 +1,6 @@
 use super::facts::{build_reg_facts, const_fact, imm_kind, is_bool_fact};
 use super::*;
 
-// Let's just pretend this is somewhat useful for now
 #[derive(Default)]
 pub(super) struct InstCombine {
     facts: HashMap<Val8, super::facts::RegFact>,

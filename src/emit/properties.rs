@@ -32,13 +32,15 @@ impl<'a> Emitter<'a> {
 
         for g in 0..self.global_count {
             let gv = self.global_init[g as usize];
-            let g_props_line = (0..4u8)
-                .map(|lane| {
-                    let init = (gv >> (u32::from(lane) * 8)) & 0xff;
+            for lane in 0..4u8 {
+                let init = (gv >> (u32::from(lane) * 8)) & 0xff;
+                let _ = write!(
+                    out,
+                    "{}",
                     Self::prop(&Self::global_lane_name(g, lane), init)
-                })
-                .collect::<String>();
-            let _ = writeln!(out, "{}", g_props_line);
+                );
+            }
+            let _ = writeln!(out);
         }
 
         Self::emit_chunked_entries(
