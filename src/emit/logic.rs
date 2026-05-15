@@ -1422,12 +1422,9 @@ impl<'a> Emitter<'a> {
             1 | 2 | 4 => {
                 let p = 1u32 << amount;
                 let q = 1u32 << (8 - amount);
-                let lo = |x: &str| {
-                    format!("mod(calc({} * {p}), 256)", Self::paren_if_needed(x))
-                };
-                let carry = |x: &str| {
-                    format!("round(down, calc({} / {q}))", Self::paren_if_needed(x))
-                };
+                let lo = |x: &str| format!("mod(calc({} * {p}), 256)", Self::paren_if_needed(x));
+                let carry =
+                    |x: &str| format!("round(down, calc({} / {q}))", Self::paren_if_needed(x));
                 let combine = |a: String, b: String| {
                     format!(
                         "mod(calc({} + {}), 256)",
@@ -1474,7 +1471,10 @@ impl<'a> Emitter<'a> {
                     Self::shr_byte_expr(&word[0], &carry(&word[1]), p),
                     Self::shr_byte_expr(&word[1], &carry(&word[2]), p),
                     Self::shr_byte_expr(&word[2], &carry(&word[3]), p),
-                    format!("round(down, calc({} / {p}))", Self::paren_if_needed(&word[3])),
+                    format!(
+                        "round(down, calc({} / {p}))",
+                        Self::paren_if_needed(&word[3])
+                    ),
                 ]
             }
             8 => [
@@ -1912,10 +1912,10 @@ impl<'a> Emitter<'a> {
         if v == "0" {
             return "0".to_string();
         }
-        if let Ok(n) = v.parse::<i64>() {
-            if modulus > 0 {
-                return n.rem_euclid(modulus).to_string();
-            }
+        if let Ok(n) = v.parse::<i64>()
+            && modulus > 0
+        {
+            return n.rem_euclid(modulus).to_string();
         }
         format!("mod({}, {})", value, modulus)
     }
