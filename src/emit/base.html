@@ -48,7 +48,13 @@ body { margin: 0; background: #f5f5f5; font-family: ui-monospace, SFMono-Regular
 /*__WSS_KEEP_JS_CLOCK_DEBUGGER_CSS_START__*/
 .wss-debug-trigger { position: fixed; right: 14px; bottom: 14px; z-index: 20; appearance: none; border: 1px solid #cfcfcf; border-radius: 999px; padding: 6px 12px; background: rgba(255, 255, 255, 0.96); color: #222; font: inherit; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.02em; cursor: pointer; box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1); }
 .wss-debug-trigger:hover { background: #fff; }
-.wss-debug-popup { position: fixed; right: 14px; bottom: 52px; z-index: 20; width: min(320px, calc(100vw - 24px)); padding: 10px; border: 1px solid #d4d4d4; border-radius: 10px; background: rgba(255, 255, 255, 0.98); box-shadow: 0 10px 22px rgba(0, 0, 0, 0.16); color: #222; }
+.wss-debug-popup { position: fixed; right: 14px; bottom: 52px; z-index: 20; width: min(420px, calc(100vw - 24px)); padding: 10px; border: 1px solid #d4d4d4; border-radius: 10px; background: rgba(255, 255, 255, 0.98); box-shadow: 0 10px 22px rgba(0, 0, 0, 0.16); color: #222; }
+.wss-debug-ops { margin-bottom: 8px; border: 1px solid #e1e1e1; border-radius: 7px; background: #fafafa; height: 220px; overflow-y: auto; font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.wss-debug-ops-head { padding: 4px 8px; font-size: 0.62rem; font-weight: 700; color: #666; text-transform: uppercase; letter-spacing: 0.04em; border-bottom: 1px solid #e1e1e1; background: #f1f1f1; position: sticky; top: 0; }
+.wss-debug-ops-list { margin: 0; padding: 4px 8px; list-style: none; }
+.wss-debug-ops-list li { padding: 1px 0; color: #222; white-space: pre; }
+.wss-debug-ops-list li.term { color: #0a4; font-weight: 700; }
+.wss-debug-ops-list li.empty { color: #999; font-style: italic; }
 .wss-debug-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
 .wss-debug-title { margin: 0; font-size: 0.78rem; font-weight: 800; letter-spacing: 0.02em; text-transform: uppercase; }
 .wss-debug-close { appearance: none; border: 1px solid #d5d5d5; border-radius: 6px; padding: 2px 7px; background: #fff; color: #555; font: inherit; font-size: 0.69rem; font-weight: 700; cursor: pointer; }
@@ -272,8 +278,10 @@ Please try an up-to-date Chromium-based browser.
     const phasesPerInstruction = 4;
     const terminalPcs = new Set([/*__WSS_TERMINAL_PCS__*/]);
     const followSlackPx = 4;
-    const minSpeedMultiplier = 0.25;
+    const minSpeedMultiplier = 0.01;
     const maxSpeedMultiplier = 16;
+    const minSpeedLog = Math.log10(minSpeedMultiplier);
+    const maxSpeedLog = Math.log10(maxSpeedMultiplier);
     let followScreenBottom = true;
     let speedMultiplier = 1;
     let speedCarry = 0;
@@ -290,6 +298,11 @@ Please try an up-to-date Chromium-based browser.
     let debugStateOut = null;
     let debugPcOut = null;
     let debugClockOut = null;
+    /*__WSS_KEEP_JS_CLOCK_DEBUGGER_RUNTIME_START__*/
+    let debugOpsList = null;
+    let debugOpsHead = null;
+    const debuggerCycles = /*__WSS_DEBUGGER_CYCLES__*/;
+    /*__WSS_KEEP_JS_CLOCK_DEBUGGER_RUNTIME_END__*/
 
     function isNearScreenBottom() {
         return screenEl.scrollHeight - screenEl.clientHeight - screenEl.scrollTop <= followSlackPx;
@@ -314,6 +327,8 @@ Please try an up-to-date Chromium-based browser.
     }
 
     function formatSpeedLabel(value) {
+        if (value < 0.1) return `${value.toFixed(3)}x`;
+        if (value < 1) return `${value.toFixed(2)}x`;
         const rounded = Math.round(value * 100) / 100;
         return `${rounded.toFixed(rounded % 1 === 0 ? 0 : 2)}x`;
     }
@@ -338,8 +353,42 @@ Please try an up-to-date Chromium-based browser.
         if (debugSpeedOut) {
             debugSpeedOut.textContent = formatSpeedLabel(speedMultiplier);
         }
+        renderDebuggerOps(pc, style);
         /*__WSS_KEEP_JS_CLOCK_DEBUGGER_RUNTIME_END__*/
     }
+
+    /*__WSS_KEEP_JS_CLOCK_DEBUGGER_RUNTIME_START__*/
+    function annotateRegs(line, style) {
+        return line.replace(/%r(\d+)/g, (_, n) => {
+            const v = Number.parseInt(style.getPropertyValue(`--r${n}`), 10);
+            const hex = Number.isFinite(v) ? (v & 0xff).toString(16).padStart(2, "0") : "??";
+            return `%r${n}(0x${hex})`;
+        });
+    }
+
+    function renderDebuggerOps(pc, style) {
+        if (!debugOpsList) return;
+        const key = Number.isNaN(pc) ? null : String(pc);
+        if (debugOpsHead) {
+            debugOpsHead.textContent = key != null ? `PC ${key}` : "PC ?";
+        }
+        const ops = key != null ? debuggerCycles[key] : null;
+        debugOpsList.textContent = "";
+        if (!ops || ops.length === 0) {
+            const li = document.createElement("li");
+            li.className = "empty";
+            li.textContent = "(no operations)";
+            debugOpsList.appendChild(li);
+            return;
+        }
+        for (let i = 0; i < ops.length; i++) {
+            const li = document.createElement("li");
+            if (i === ops.length - 1) li.className = "term";
+            li.textContent = annotateRegs(ops[i], style);
+            debugOpsList.appendChild(li);
+        }
+    }
+    /*__WSS_KEEP_JS_CLOCK_DEBUGGER_RUNTIME_END__*/
 
     function scheduleAnimation() {
         if (animationPending || halted) return;
@@ -551,9 +600,13 @@ Please try an up-to-date Chromium-based browser.
                 <h2 class="wss-debug-title">Step Debugger</h2>
                 <button type="button" class="wss-debug-close" data-wss-debug-close="1">Close</button>
             </div>
+            <div class="wss-debug-ops">
+                <div class="wss-debug-ops-head" data-wss-debug-ops-head="1">PC ?</div>
+                <ul class="wss-debug-ops-list" data-wss-debug-ops="1"></ul>
+            </div>
             <label class="wss-debug-speed">
                 Clock Speed
-                <input class="wss-debug-range" type="range" min="${minSpeedMultiplier}" max="${maxSpeedMultiplier}" step="0.25" value="1" data-wss-debug-speed="1">
+                <input class="wss-debug-range" type="range" min="${minSpeedLog}" max="${maxSpeedLog}" step="0.01" value="0" data-wss-debug-speed="1">
                 <span class="wss-debug-speed-readout" data-wss-debug-speed-value="1">1x</span>
             </label>
             <div class="wss-debug-actions">
@@ -577,6 +630,8 @@ Please try an up-to-date Chromium-based browser.
         debugStateOut = popup.querySelector("[data-wss-debug-state='1']");
         debugPcOut = popup.querySelector("[data-wss-debug-pc='1']");
         debugClockOut = popup.querySelector("[data-wss-debug-clock='1']");
+        debugOpsList = popup.querySelector("[data-wss-debug-ops='1']");
+        debugOpsHead = popup.querySelector("[data-wss-debug-ops-head='1']");
         if (!(speedInput instanceof HTMLInputElement) || !closeBtn || !debugRunBtn || !debugStepBtn) {
             return;
         }
@@ -588,7 +643,8 @@ Please try an up-to-date Chromium-based browser.
             popup.hidden = true;
         });
         speedInput.addEventListener("input", () => {
-            speedMultiplier = clampSpeed(Number.parseFloat(speedInput.value));
+            const logValue = Number.parseFloat(speedInput.value);
+            speedMultiplier = clampSpeed(Math.pow(10, logValue));
             if (debugSpeedOut) {
                 debugSpeedOut.textContent = formatSpeedLabel(speedMultiplier);
             }

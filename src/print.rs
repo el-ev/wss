@@ -675,6 +675,18 @@ fn fmt_bool_nary(op: &BoolNary8) -> String {
         .join(" ")
 }
 
+pub fn format_inst8(inst: &crate::ir8::Inst8) -> String {
+    let mut out = String::new();
+    print_inst8(&mut out, inst);
+    out
+}
+
+pub fn format_term8(term: &Terminator8) -> String {
+    let mut out = String::new();
+    print_term8(&mut out, term);
+    out
+}
+
 fn print_inst8(out: &mut String, inst: &crate::ir8::Inst8) {
     if let Some(dst) = inst.dst {
         write!(out, "{} = ", fmt_val8(dst)).unwrap();

@@ -24,9 +24,10 @@ impl<'a> Emitter<'a> {
             }
         }
 
-        Self::emit_chunked_entries(
+        Self::emit_chunked_prefixed(
             out,
             8,
+            "",
             (0..self.program.num_vregs).map(|r| Self::prop(&format!("--r{}", r), 0)),
         );
 
@@ -43,33 +44,37 @@ impl<'a> Emitter<'a> {
             let _ = writeln!(out);
         }
 
-        Self::emit_chunked_entries(
+        Self::emit_chunked_prefixed(
             out,
             8,
+            "",
             self.mem_names
                 .iter()
                 .enumerate()
                 .map(|(i, name)| Self::prop(name, self.mem_init.get(i).copied().unwrap_or(0))),
         );
         if self.max_mem_store_slots > 0 {
-            Self::emit_chunked_entries(
+            Self::emit_chunked_prefixed(
                 out,
                 8,
+                "",
                 (0..self.page_count()).map(|page| Self::prop(&format!("--mwdp{}", page), 0)),
             );
         }
 
         if self.uses_callstack {
             let _ = writeln!(out, "{}", Self::prop("--cs_sp", 0));
-            Self::emit_chunked_entries(
+            Self::emit_chunked_prefixed(
                 out,
                 8,
+                "",
                 self.cs_names.iter().map(|name| Self::prop(name, 0)),
             );
             if self.max_cs_store_slots > 0 {
-                Self::emit_chunked_entries(
+                Self::emit_chunked_prefixed(
                     out,
                     8,
+                    "",
                     (0..self.cs_page_count())
                         .map(|page| Self::prop(&format!("--cswdp{}", page), 0)),
                 );
@@ -86,24 +91,6 @@ impl<'a> Emitter<'a> {
             for lane in 0..4u8 {
                 let _ = writeln!(out, "{}", Self::prop(&format!("--exc_payload_{}", lane), 0));
             }
-        }
-    }
-
-    fn emit_chunked_entries(
-        out: &mut String,
-        chunk_size: usize,
-        entries: impl IntoIterator<Item = String>,
-    ) {
-        let mut line = String::new();
-        for (i, entry) in entries.into_iter().enumerate() {
-            line.push_str(&entry);
-            if (i + 1) % chunk_size == 0 {
-                let _ = writeln!(out, "{}", line);
-                line.clear();
-            }
-        }
-        if !line.is_empty() {
-            let _ = writeln!(out, "{}", line);
         }
     }
 }

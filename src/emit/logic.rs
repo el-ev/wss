@@ -1,5 +1,12 @@
 use super::*;
 
+#[derive(Clone, Copy)]
+pub(super) enum BitwiseOp {
+    And,
+    Or,
+    Xor,
+}
+
 impl<'a> Emitter<'a> {
     pub(super) fn emit_logic(&self, out: &mut String) {
         let nr = self.program.num_vregs as usize;
@@ -154,7 +161,7 @@ impl<'a> Emitter<'a> {
                     Inst8Kind::And8(l, r) => {
                         if let Some(dst) = op.dst {
                             let e = Self::bitwise_expr(
-                                "and",
+                                BitwiseOp::And,
                                 &Self::val_expr(&reg_now, *l),
                                 &Self::val_expr(&reg_now, *r),
                             );
@@ -164,7 +171,7 @@ impl<'a> Emitter<'a> {
                     Inst8Kind::Or8(l, r) => {
                         if let Some(dst) = op.dst {
                             let e = Self::bitwise_expr(
-                                "or",
+                                BitwiseOp::Or,
                                 &Self::val_expr(&reg_now, *l),
                                 &Self::val_expr(&reg_now, *r),
                             );
@@ -174,7 +181,7 @@ impl<'a> Emitter<'a> {
                     Inst8Kind::Xor8(l, r) => {
                         if let Some(dst) = op.dst {
                             let e = Self::bitwise_expr(
-                                "xor",
+                                BitwiseOp::Xor,
                                 &Self::val_expr(&reg_now, *l),
                                 &Self::val_expr(&reg_now, *r),
                             );
@@ -475,18 +482,12 @@ impl<'a> Emitter<'a> {
 
             let mut term = self.emit_terminator(cycle, &mut reg_now, loaded_pc_expr);
 
-            let trap_mem = if trap_mem_parts.is_empty() {
-                "0".to_string()
-            } else if trap_mem_parts.len() == 1 {
-                trap_mem_parts[0].clone()
-            } else {
-                format!("min(1, calc({}))", trap_mem_parts.join(" + "))
-            };
+            let trap_mem = Self::clamp_sum_or_zero(&trap_mem_parts);
 
             if trap_mem != "0" {
                 term.pc_expr = Self::sel_expr(
                     &trap_mem,
-                    &format!("{}", TrapCode::InvalidMemoryAccess as i32),
+                    &TrapCode::InvalidMemoryAccess.pc().to_string(),
                     &term.pc_expr,
                 );
             }
@@ -498,18 +499,12 @@ impl<'a> Emitter<'a> {
             };
 
             if self.uses_callstack {
-                let trap_cs = if trap_cs_parts.is_empty() {
-                    "0".to_string()
-                } else if trap_cs_parts.len() == 1 {
-                    trap_cs_parts[0].clone()
-                } else {
-                    format!("min(1, calc({}))", trap_cs_parts.join(" + "))
-                };
+                let trap_cs = Self::clamp_sum_or_zero(&trap_cs_parts);
 
                 if trap_cs != "0" {
                     term.pc_expr = Self::sel_expr(
                         &trap_cs,
-                        &format!("{}", TrapCode::CallstackOverflow as i32),
+                        &TrapCode::CallstackOverflow.pc().to_string(),
                         &term.pc_expr,
                     );
                 }
@@ -1023,7 +1018,7 @@ impl<'a> Emitter<'a> {
                 }
             }
             Terminator8::Trap(code) => TermResult {
-                pc_expr: format!("{}", *code as i32),
+                pc_expr: code.pc().to_string(),
                 trap_expr: "0".to_string(),
                 exit_code_expr: None,
             },
@@ -1818,17 +1813,16 @@ impl<'a> Emitter<'a> {
         (ret, trap)
     }
 
-    pub(super) fn bitwise_expr(op: &str, l: &str, r: &str) -> String {
+    pub(super) fn bitwise_expr(op: BitwiseOp, l: &str, r: &str) -> String {
         let mut terms = Vec::with_capacity(8);
         for k in 0..8u32 {
             let p2 = 1u32 << k;
             let lb = Self::byte_bit_expr(l, k as u8);
             let rb = Self::byte_bit_expr(r, k as u8);
             let bit = match op {
-                "and" => Self::fold_mul(&lb, &rb),
-                "or" => Self::fold_or_bit(&lb, &rb),
-                "xor" => Self::fold_xor_bit(&lb, &rb),
-                _ => "0".to_string(),
+                BitwiseOp::And => Self::fold_mul(&lb, &rb),
+                BitwiseOp::Or => Self::fold_or_bit(&lb, &rb),
+                BitwiseOp::Xor => Self::fold_xor_bit(&lb, &rb),
             };
             terms.push(Self::fold_mul_by_int(&bit, p2));
         }
