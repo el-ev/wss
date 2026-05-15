@@ -174,6 +174,8 @@ fn combine_kind(
         Inst8Kind::Xor8(lhs, rhs) => match (const_of(lhs), const_of(rhs)) {
             (Some(0), _) => Inst8Kind::Copy(rhs),
             (_, Some(0)) => Inst8Kind::Copy(lhs),
+            (Some(1), _) if is_bool(rhs) => Inst8Kind::BoolNot(rhs),
+            (_, Some(1)) if is_bool(lhs) => Inst8Kind::BoolNot(lhs),
             _ if lhs == rhs => imm_kind(0),
             _ => kind,
         },
