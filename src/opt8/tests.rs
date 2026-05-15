@@ -1355,6 +1355,110 @@ fn opt8_stlf_forwards_immediate_value() {
 }
 
 #[test]
+fn opt8_simplifies_u8_boundary_comparisons_against_zero() {
+    let mut prog = mk_prog(vec![BasicBlock8 {
+        id: Pc::new(0),
+        insts: vec![
+            Inst8::with_dst(r(20), Inst8Kind::LtU(r(8), Val8::imm(0))),
+            Inst8::with_dst(r(21), Inst8Kind::GeU(r(9), Val8::imm(0))),
+            Inst8::with_dst(r(22), Inst8Kind::LtU(Val8::imm(0), r(10))),
+            Inst8::with_dst(r(23), Inst8Kind::GeU(Val8::imm(0), r(11))),
+        ],
+        terminator: Terminator8::Exit {
+            val: Some(ValueWords::one(Word::new(r(20), r(21), r(22), r(23)))),
+        },
+    }]);
+
+    run(&mut prog);
+
+    let bb = &prog.func_blocks[0][0];
+    assert!(
+        !bb.insts
+            .iter()
+            .any(|i| matches!(i.kind, Inst8Kind::LtU(_, _) | Inst8Kind::GeU(_, _))),
+        "LtU/GeU against u8 0 should all fold away, got {:?}",
+        bb.insts.iter().map(|i| i.kind).collect::<Vec<_>>(),
+    );
+    let Terminator8::Exit {
+        val: Some(ref words),
+    } = bb.terminator
+    else {
+        panic!("expected Exit with value");
+    };
+    let word = words.lo;
+    assert_eq!(word.b0, Val8::imm(0), "LtU(r8, 0) should fold to 0");
+    assert_eq!(word.b1, Val8::imm(1), "GeU(r9, 0) should fold to 1");
+    // word.b2 and word.b3 should be Ne/Eq results referencing r10/r11.
+    let ne_eq_found = bb.insts.iter().any(|i| {
+        matches!(
+            i.kind,
+            Inst8Kind::Ne(reg, imm) if reg == r(10) && imm == Val8::imm(0),
+        )
+    });
+    assert!(ne_eq_found, "LtU(0, r10) should fold to Ne(r10, 0)");
+    let eq_found = bb.insts.iter().any(|i| {
+        matches!(
+            i.kind,
+            Inst8Kind::Eq(reg, imm) if reg == r(11) && imm == Val8::imm(0),
+        )
+    });
+    assert!(eq_found, "GeU(0, r11) should fold to Eq(r11, 0)");
+}
+
+#[test]
+fn opt8_canonicalizes_commutative_ops_with_constant_on_right() {
+    let mut prog = mk_prog(vec![BasicBlock8 {
+        id: Pc::new(0),
+        insts: vec![
+            Inst8::with_dst(r(20), Inst8Kind::Add(Val8::imm(5), r(8))),
+            Inst8::with_dst(r(21), Inst8Kind::And8(Val8::imm(0x0f), r(9))),
+            Inst8::with_dst(r(22), Inst8Kind::Eq(Val8::imm(7), r(10))),
+        ],
+        terminator: Terminator8::Exit {
+            val: Some(ValueWords::one(Word::new(r(20), r(21), r(22), r(8)))),
+        },
+    }]);
+
+    run(&mut prog);
+
+    let insts = &prog.func_blocks[0][0].insts;
+    let def_of = |dst: Val8| insts.iter().find(|i| i.dst == Some(dst)).map(|i| i.kind);
+    assert_eq!(def_of(r(20)), Some(Inst8Kind::Add(r(8), Val8::imm(5))));
+    assert_eq!(def_of(r(21)), Some(Inst8Kind::And8(r(9), Val8::imm(0x0f))));
+    assert_eq!(def_of(r(22)), Some(Inst8Kind::Eq(r(10), Val8::imm(7))));
+}
+
+#[test]
+fn opt8_xor_one_with_bool_becomes_bool_not() {
+    let mut prog = mk_prog(vec![BasicBlock8 {
+        id: Pc::new(0),
+        insts: vec![
+            Inst8::with_dst(r(20), Inst8Kind::Eq(r(8), r(9))),
+            Inst8::with_dst(r(21), Inst8Kind::Xor8(r(20), Val8::imm(1))),
+        ],
+        terminator: Terminator8::Exit {
+            val: Some(ValueWords::one(Word::new(r(21), r(8), r(8), r(8)))),
+        },
+    }]);
+
+    run(&mut prog);
+
+    let bb = &prog.func_blocks[0][0];
+    assert!(
+        !bb.insts
+            .iter()
+            .any(|i| matches!(i.kind, Inst8Kind::Xor8(_, _))),
+        "Xor8(bool, 1) should fold away, got {:?}",
+        bb.insts.iter().map(|i| i.kind).collect::<Vec<_>>(),
+    );
+    // r21 should now be the negation of Eq(r8, r9), i.e. Ne(r8, r9).
+    let has_ne = bb.insts.iter().any(|i| {
+        i.dst == Some(r(21)) && matches!(i.kind, Inst8Kind::Ne(a, b) if a == r(8) && b == r(9))
+    });
+    assert!(has_ne, "Xor8(Eq(r8,r9), 1) should fold to Ne(r8, r9)");
+}
+
+#[test]
 fn opt8_stlf_clears_on_store_to_different_addr() {
     let addr1 = Addr::new(r(10), r(11));
     let addr2 = Addr::new(r(12), r(13));

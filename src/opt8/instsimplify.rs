@@ -87,6 +87,14 @@ fn simplify_bool_nary(op: BoolOp, vals: &BoolNary8, facts: &HashMap<Val8, RegFac
     make_bool_kind(op, &kept).expect("non-empty bool op inputs should fit IR8 nary limit")
 }
 
+fn canon_comm(l: Val8, r: Val8) -> (Val8, Val8) {
+    if l.is_imm() && !r.is_imm() {
+        (r, l)
+    } else {
+        (l, r)
+    }
+}
+
 fn const_word_prefix(word: Word, lane: u8, facts: &HashMap<Val8, RegFact>) -> Option<u32> {
     let mut out = 0u32;
     for (idx, byte) in word
@@ -140,66 +148,89 @@ fn simplify_kind(kind: Inst8Kind, facts: &HashMap<Val8, RegFact>) -> Inst8Kind {
             (Some(a), Some(b)) => imm_kind((a < b) as u8),
             _ => kind,
         },
-        Inst8Kind::Add(l, r) => match (const_of(l), const_of(r)) {
-            (Some(a), Some(b)) => imm_kind(a.wrapping_add(b)),
-            _ => kind,
-        },
-        Inst8Kind::Carry(l, r) => match (const_of(l), const_of(r)) {
-            (Some(a), Some(b)) => imm_kind((((a as u16) + (b as u16)) >> 8) as u8),
-            _ => kind,
-        },
+        Inst8Kind::Add(l, r) => {
+            let (l, r) = canon_comm(l, r);
+            match (const_of(l), const_of(r)) {
+                (Some(a), Some(b)) => imm_kind(a.wrapping_add(b)),
+                _ => Inst8Kind::Add(l, r),
+            }
+        }
+        Inst8Kind::Carry(l, r) => {
+            let (l, r) = canon_comm(l, r);
+            match (const_of(l), const_of(r)) {
+                (Some(a), Some(b)) => imm_kind((((a as u16) + (b as u16)) >> 8) as u8),
+                _ => Inst8Kind::Carry(l, r),
+            }
+        }
         Inst8Kind::Sub(l, r) => match (const_of(l), const_of(r)) {
             (Some(a), Some(b)) => imm_kind(a.wrapping_sub(b)),
             _ => kind,
         },
-        Inst8Kind::MulLo(l, r) => match (const_of(l), const_of(r)) {
-            (Some(a), Some(b)) => imm_kind(((a as u16 * b as u16) & 0xff) as u8),
-            _ => kind,
-        },
-        Inst8Kind::MulHi(l, r) => match (const_of(l), const_of(r)) {
-            (Some(a), Some(b)) => imm_kind(((a as u16 * b as u16) >> 8) as u8),
-            _ => kind,
-        },
-        Inst8Kind::And8(l, r) => simplify_and8(facts, l, r),
-        Inst8Kind::Or8(l, r) => simplify_or8(facts, l, r),
-        Inst8Kind::Xor8(l, r) => match (const_of(l), const_of(r)) {
-            (Some(a), Some(b)) => imm_kind(a ^ b),
-            _ => kind,
-        },
+        Inst8Kind::MulLo(l, r) => {
+            let (l, r) = canon_comm(l, r);
+            match (const_of(l), const_of(r)) {
+                (Some(a), Some(b)) => imm_kind(((a as u16 * b as u16) & 0xff) as u8),
+                _ => Inst8Kind::MulLo(l, r),
+            }
+        }
+        Inst8Kind::MulHi(l, r) => {
+            let (l, r) = canon_comm(l, r);
+            match (const_of(l), const_of(r)) {
+                (Some(a), Some(b)) => imm_kind(((a as u16 * b as u16) >> 8) as u8),
+                _ => Inst8Kind::MulHi(l, r),
+            }
+        }
+        Inst8Kind::And8(l, r) => {
+            let (l, r) = canon_comm(l, r);
+            simplify_and8(facts, l, r)
+        }
+        Inst8Kind::Or8(l, r) => {
+            let (l, r) = canon_comm(l, r);
+            simplify_or8(facts, l, r)
+        }
+        Inst8Kind::Xor8(l, r) => {
+            let (l, r) = canon_comm(l, r);
+            match (const_of(l), const_of(r)) {
+                (Some(a), Some(b)) => imm_kind(a ^ b),
+                _ => Inst8Kind::Xor8(l, r),
+            }
+        }
         Inst8Kind::Eq(l, r) => {
+            let (l, r) = canon_comm(l, r);
             if l == r {
                 return imm_kind(1);
             }
             match (const_of(l), const_of(r)) {
                 (Some(a), Some(b)) => imm_kind((a == b) as u8),
-                (Some(0), _) if is_bool(r) => Inst8Kind::BoolNot(r),
-                (Some(1), _) if is_bool(r) => Inst8Kind::Copy(r),
                 (_, Some(0)) if is_bool(l) => Inst8Kind::BoolNot(l),
                 (_, Some(1)) if is_bool(l) => Inst8Kind::Copy(l),
-                _ => kind,
+                _ => Inst8Kind::Eq(l, r),
             }
         }
         Inst8Kind::Ne(l, r) => {
+            let (l, r) = canon_comm(l, r);
             if l == r {
                 return imm_kind(0);
             }
             match (const_of(l), const_of(r)) {
                 (Some(a), Some(b)) => imm_kind((a != b) as u8),
-                (Some(0), _) if is_bool(r) => Inst8Kind::Copy(r),
-                (Some(1), _) if is_bool(r) => Inst8Kind::BoolNot(r),
                 (_, Some(0)) if is_bool(l) => Inst8Kind::Copy(l),
                 (_, Some(1)) if is_bool(l) => Inst8Kind::BoolNot(l),
-                _ => kind,
+                _ => Inst8Kind::Ne(l, r),
             }
         }
         Inst8Kind::LtU(l, r) => match (const_of(l), const_of(r)) {
             _ if l == r => imm_kind(0),
             (Some(a), Some(b)) => imm_kind((a < b) as u8),
+            (_, Some(0)) => imm_kind(0),
+            (Some(0), _) => Inst8Kind::Ne(r, Val8::imm(0)),
             _ => kind,
         },
         Inst8Kind::GeU(l, r) => match (const_of(l), const_of(r)) {
             _ if l == r => imm_kind(1),
             (Some(a), Some(b)) => imm_kind((a >= b) as u8),
+            (_, Some(0)) => imm_kind(1),
+            (Some(0), _) => Inst8Kind::Eq(r, Val8::imm(0)),
             _ => kind,
         },
         Inst8Kind::BoolAnd(op) => simplify_bool_nary(BoolOp::And, &op, facts),
@@ -317,9 +348,8 @@ fn simplify_or8(facts: &HashMap<Val8, RegFact>, lhs: Val8, rhs: Val8) -> Inst8Ki
     let const_of = |r: Val8| const_fact(facts, r);
     match (const_of(lhs), const_of(rhs)) {
         (Some(a), Some(b)) => imm_kind(a | b),
-        (Some(0), _) => Inst8Kind::Copy(rhs),
         (_, Some(0)) => Inst8Kind::Copy(lhs),
-        (Some(0xff), _) | (_, Some(0xff)) => imm_kind(0xff),
+        (_, Some(0xff)) => imm_kind(0xff),
         _ => Inst8Kind::Or8(lhs, rhs),
     }
 }
@@ -328,8 +358,7 @@ fn simplify_and8(facts: &HashMap<Val8, RegFact>, lhs: Val8, rhs: Val8) -> Inst8K
     let const_of = |r: Val8| const_fact(facts, r);
     match (const_of(lhs), const_of(rhs)) {
         (Some(a), Some(b)) => imm_kind(a & b),
-        (Some(0), _) | (_, Some(0)) => imm_kind(0),
-        (Some(0xff), _) => Inst8Kind::Copy(rhs),
+        (_, Some(0)) => imm_kind(0),
         (_, Some(0xff)) => Inst8Kind::Copy(lhs),
         _ => Inst8Kind::And8(lhs, rhs),
     }
