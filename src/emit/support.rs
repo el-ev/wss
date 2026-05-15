@@ -407,6 +407,7 @@ impl<'a> Emitter<'a> {
         prev: &str,
     ) -> String {
         let parity_fn = if par == 0 { "--eqz" } else { "--eq1" };
+        let consts = self.mem_slot_consts.get();
         let mut expr = prev.to_string();
         for s in 0..self.max_mem_store_slots {
             for suffix in ["", "b"] {
@@ -414,10 +415,26 @@ impl<'a> Emitter<'a> {
                     "calc(var(--mso{}{}) * --eq(var(--msc{}{}), {}) * {}(var(--msp{}{})))",
                     s, suffix, s, suffix, cell_expr, parity_fn, s, suffix
                 );
-                expr = format!(
-                    "calc(({}) * (var(--msv{}{})) + (1 - ({})) * ({}))",
-                    cond, s, suffix, cond, expr
-                );
+                let val_const = consts.and_then(|c| {
+                    let row = if suffix == "b" {
+                        &c.ms_val_b
+                    } else {
+                        &c.ms_val
+                    };
+                    row.get(s).cloned().flatten()
+                });
+                expr = match val_const.as_deref() {
+                    Some("0") => {
+                        format!("calc((1 - ({})) * ({}))", cond, expr)
+                    }
+                    Some(k) => {
+                        format!("calc(({}) * ({}) + (1 - ({})) * ({}))", cond, k, cond, expr)
+                    }
+                    None => format!(
+                        "calc(({}) * (var(--msv{}{})) + (1 - ({})) * ({}))",
+                        cond, s, suffix, cond, expr
+                    ),
+                };
             }
         }
         expr

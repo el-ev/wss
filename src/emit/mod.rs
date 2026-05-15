@@ -295,6 +295,18 @@ struct JsCoprocessorSetup {
     rhs: [String; 4],
 }
 
+/// Per-slot constancy info computed during logic emission, consumed by the
+/// support emitter to inline literals into the memory-merge helper.
+#[derive(Default)]
+pub(super) struct MemSlotConsts {
+    /// `ms_val[s]` (low byte of slot s) is Some(literal) when every PC writing
+    /// to slot s uses the same integer literal. None means the value depends
+    /// on PC (or on a non-literal expression).
+    pub(super) ms_val: Vec<Option<String>>,
+    /// Same as `ms_val` but for the high-byte half of paired stores.
+    pub(super) ms_val_b: Vec<Option<String>>,
+}
+
 struct Emitter<'a> {
     program: &'a Ir8Program,
     entry_pc: u16,
@@ -316,6 +328,7 @@ struct Emitter<'a> {
     max_mem_addr_slots: usize,
     max_cs_store_slots: usize,
     max_cs_read_slots: usize,
+    mem_slot_consts: std::cell::OnceCell<MemSlotConsts>,
 }
 
 pub fn emit_program(program: &Ir8Program, config: EmitConfig) -> anyhow::Result<String> {
@@ -460,6 +473,7 @@ impl<'a> Emitter<'a> {
             max_mem_addr_slots,
             max_cs_store_slots,
             max_cs_read_slots,
+            mem_slot_consts: std::cell::OnceCell::new(),
         })
     }
 
