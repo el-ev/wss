@@ -610,7 +610,7 @@ fn emit_html_includes_keyboard_ui_when_getchar_is_used() {
     assert!(html.contains("@property --kb"));
     assert!(html.contains("@property --wait_input"));
     assert!(html.contains(" --wait_input: if("));
-    assert!(html.contains("calc(1 - (--ne(var(--kb, -1), -1)))"));
+    assert!(html.contains("--eq(var(--kb, -1), -1)"));
     assert!(html.contains("@function --eqz(--a <number>) returns <integer>"));
     assert!(html.contains("@function --ne(--a <number>, --b <number>) returns <integer>"));
     assert!(html.contains("class=\"kb\""));
