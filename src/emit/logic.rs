@@ -102,51 +102,52 @@ impl<'a> Emitter<'a> {
                     }
                     Inst8Kind::Add(l, r) => {
                         if let Some(dst) = op.dst {
-                            let e = format!(
-                                "mod(calc(({}) + ({})), 256)",
-                                Self::val_expr(&reg_now, *l),
-                                Self::val_expr(&reg_now, *r)
-                            );
+                            let lhs = Self::val_expr(&reg_now, *l);
+                            let rhs = Self::val_expr(&reg_now, *r);
+                            let total = Self::fold_add(vec![lhs, rhs]);
+                            let e = Self::fold_mod(&total, 256);
                             reg_now.insert(dst.expect_vreg(), e);
                         }
                     }
                     Inst8Kind::Carry(l, r) => {
                         if let Some(dst) = op.dst {
-                            let e = format!(
-                                "--lt(255, calc(({}) + ({})))",
-                                Self::val_expr(&reg_now, *l),
-                                Self::val_expr(&reg_now, *r)
-                            );
+                            let lhs = Self::paren_if_needed(&Self::val_expr(&reg_now, *l));
+                            let rhs = Self::paren_if_needed(&Self::val_expr(&reg_now, *r));
+                            let e = format!("--lt(255, calc({lhs} + {rhs}))");
                             reg_now.insert(dst.expect_vreg(), e);
                         }
                     }
                     Inst8Kind::Sub(l, r) => {
                         if let Some(dst) = op.dst {
-                            let e = format!(
-                                "mod(calc(({}) - ({}) + 256), 256)",
-                                Self::val_expr(&reg_now, *l),
-                                Self::val_expr(&reg_now, *r)
-                            );
+                            let lhs = Self::val_expr(&reg_now, *l);
+                            let rhs = Self::val_expr(&reg_now, *r);
+                            // lhs - rhs + 256 with literal folding.
+                            let e = if let (Ok(ln), Ok(rn)) =
+                                (lhs.parse::<i64>(), rhs.parse::<i64>())
+                            {
+                                (ln - rn).rem_euclid(256).to_string()
+                            } else {
+                                let lp = Self::paren_if_needed(&lhs);
+                                let rp = Self::paren_if_needed(&rhs);
+                                let total = format!("calc({lp} - {rp} + 256)");
+                                Self::fold_mod(&total, 256)
+                            };
                             reg_now.insert(dst.expect_vreg(), e);
                         }
                     }
                     Inst8Kind::MulLo(l, r) => {
                         if let Some(dst) = op.dst {
-                            let e = format!(
-                                "mod(calc(({}) * ({})), 256)",
-                                Self::val_expr(&reg_now, *l),
-                                Self::val_expr(&reg_now, *r)
-                            );
+                            let lhs = Self::val_expr(&reg_now, *l);
+                            let rhs = Self::val_expr(&reg_now, *r);
+                            let e = Self::fold_mod(&Self::fold_mul(&lhs, &rhs), 256);
                             reg_now.insert(dst.expect_vreg(), e);
                         }
                     }
                     Inst8Kind::MulHi(l, r) => {
                         if let Some(dst) = op.dst {
-                            let e = format!(
-                                "mod(round(down, calc((({}) * ({})) / 256)), 256)",
-                                Self::val_expr(&reg_now, *l),
-                                Self::val_expr(&reg_now, *r)
-                            );
+                            let lhs = Self::paren_if_needed(&Self::val_expr(&reg_now, *l));
+                            let rhs = Self::paren_if_needed(&Self::val_expr(&reg_now, *r));
+                            let e = format!("mod(round(down, calc({lhs} * {rhs} / 256)), 256)");
                             reg_now.insert(dst.expect_vreg(), e);
                         }
                     }
@@ -221,7 +222,7 @@ impl<'a> Emitter<'a> {
                             reg_now.insert(
                                 dst.expect_vreg(),
                                 format!(
-                                    "calc(1 - (--lt({}, {})))",
+                                    "calc(1 - --lt({}, {}))",
                                     Self::val_expr(&reg_now, *l),
                                     Self::val_expr(&reg_now, *r)
                                 ),
@@ -248,7 +249,7 @@ impl<'a> Emitter<'a> {
                         if let Some(dst) = op.dst {
                             reg_now.insert(
                                 dst.expect_vreg(),
-                                format!("calc(1 - min(1, ({})))", Self::val_expr(&reg_now, *s)),
+                                format!("calc(1 - min(1, {}))", Self::val_expr(&reg_now, *s)),
                             );
                         }
                     }
@@ -338,7 +339,7 @@ impl<'a> Emitter<'a> {
                         mem_stores_raw.push(MemStoreByte {
                             cell: format!("--mhalf({})", byte_addr),
                             parity: format!("--mpar({})", byte_addr),
-                            val: format!("mod({}, 256)", Self::val_expr(&reg_now, *val)),
+                            val: Self::fold_mod(&Self::val_expr(&reg_now, *val), 256),
                             ok: in_bounds,
                         });
                     }
@@ -362,12 +363,12 @@ impl<'a> Emitter<'a> {
                     Inst8Kind::CsStore { offset, val } => {
                         let slot_off = (*offset) / 2;
                         let parity = (*offset) % 2;
-                        let idx = format!("calc(var(--_1cs_sp) + {})", slot_off);
+                        let idx = Self::var_with_offset("var(--_1cs_sp)", slot_off as i64);
                         let ok = self.cs_bounds_check(&idx, false, &mut trap_cs_parts);
                         cs_stores.push(CsStore {
                             idx,
                             parity: format!("{}", parity),
-                            val: format!("mod({}, 256)", Self::val_expr(&reg_now, *val)),
+                            val: Self::fold_mod(&Self::val_expr(&reg_now, *val), 256),
                             ok,
                         });
                     }
@@ -375,7 +376,7 @@ impl<'a> Emitter<'a> {
                         if let Some(dst) = op.dst {
                             let slot_off = (*offset) / 2;
                             let parity = (*offset) % 2;
-                            let idx = format!("calc(var(--_1cs_sp) + {})", slot_off);
+                            let idx = Self::var_with_offset("var(--_1cs_sp)", slot_off as i64);
                             let ok = self.cs_bounds_check(&idx, false, &mut trap_cs_parts);
                             cs_reads.push(CsRead {
                                 idx: idx.clone(),
@@ -399,7 +400,7 @@ impl<'a> Emitter<'a> {
                         }
                     }
                     Inst8Kind::CsStorePc { offset, val } => {
-                        let idx = format!("calc(var(--_1cs_sp) + {})", offset);
+                        let idx = Self::var_with_offset("var(--_1cs_sp)", *offset as i64);
                         let ok = self.cs_bounds_check(&idx, false, &mut trap_cs_parts);
                         cs_stores.push(CsStore {
                             idx,
@@ -409,7 +410,7 @@ impl<'a> Emitter<'a> {
                         });
                     }
                     Inst8Kind::CsLoadPc { offset } => {
-                        let idx = format!("calc(var(--_1cs_sp) + {})", offset);
+                        let idx = Self::var_with_offset("var(--_1cs_sp)", *offset as i64);
                         let ok = self.cs_bounds_check(&idx, false, &mut trap_cs_parts);
                         cs_reads.push(CsRead {
                             idx: idx.clone(),
@@ -423,12 +424,12 @@ impl<'a> Emitter<'a> {
                         ));
                     }
                     Inst8Kind::CsAlloc(size) => {
-                        let next_sp = format!("calc(var(--_1cs_sp) + {})", size);
+                        let next_sp = Self::var_with_offset("var(--_1cs_sp)", *size as i64);
                         let ok = self.cs_bounds_check(&next_sp, true, &mut trap_cs_parts);
                         cs_sp_expr = Some(Self::sel_expr(&ok, &next_sp, "var(--_1cs_sp)"));
                     }
                     Inst8Kind::CsFree(size) => {
-                        let next_sp = format!("calc(var(--_1cs_sp) - {})", size);
+                        let next_sp = Self::var_with_offset("var(--_1cs_sp)", -(*size as i64));
                         let ok = self.cs_bounds_check(&next_sp, true, &mut trap_cs_parts);
                         cs_sp_expr = Some(Self::sel_expr(&ok, &next_sp, "var(--_1cs_sp)"));
                     }
@@ -1032,6 +1033,77 @@ impl<'a> Emitter<'a> {
             .unwrap_or_else(|| format!("var(--_1r{})", r.expect_vreg()))
     }
 
+    /// Formats `var(name) + imm`, dropping the `calc()` wrapper and `+ 0`
+    /// when the offset is zero. Negative offsets use `- |imm|`.
+    pub(super) fn var_with_offset(var: &str, imm: i64) -> String {
+        if imm == 0 {
+            var.to_string()
+        } else if imm > 0 {
+            format!("calc({} + {})", var, imm)
+        } else {
+            format!("calc({} - {})", var, -imm)
+        }
+    }
+
+    pub(super) fn paren_if_needed(expr: &str) -> String {
+        if Self::is_atomic_calc_term(expr) {
+            expr.to_string()
+        } else {
+            format!("({})", expr)
+        }
+    }
+
+    pub(super) fn is_atomic_calc_term(expr: &str) -> bool {
+        let t = expr.trim();
+        let bytes = t.as_bytes();
+        if bytes.is_empty() {
+            return true;
+        }
+        {
+            let mut i = 0;
+            if bytes[0] == b'-' || bytes[0] == b'+' {
+                i += 1;
+            }
+            let digit_start = i;
+            while i < bytes.len() && bytes[i].is_ascii_digit() {
+                i += 1;
+            }
+            if i < bytes.len() && bytes[i] == b'.' {
+                i += 1;
+                while i < bytes.len() && bytes[i].is_ascii_digit() {
+                    i += 1;
+                }
+            }
+            if i == bytes.len() && i > digit_start {
+                return true;
+            }
+        }
+        let mut i = 0;
+        while i < bytes.len()
+            && (bytes[i].is_ascii_alphabetic()
+                || bytes[i] == b'-'
+                || bytes[i] == b'_'
+                || (i > 0 && bytes[i].is_ascii_digit()))
+        {
+            i += 1;
+        }
+        if i == 0 || i >= bytes.len() || bytes[i] != b'(' || *bytes.last().unwrap() != b')' {
+            return false;
+        }
+        let mut depth: i32 = 0;
+        for (idx, b) in bytes.iter().enumerate().skip(i) {
+            if *b == b'(' {
+                depth += 1;
+            } else if *b == b')' {
+                depth -= 1;
+                if depth == 0 && idx != bytes.len() - 1 {
+                    return false;
+                }
+            }
+        }
+        depth == 0
+    }
+
     pub(super) fn bool_nary_expr(
         now: &HashMap<u16, String>,
         op: &crate::ir8::BoolNary8,
@@ -1054,7 +1126,7 @@ impl<'a> Emitter<'a> {
         }
         let joined = terms
             .iter()
-            .map(|term| format!("({term})"))
+            .map(|term| Self::paren_if_needed(term))
             .collect::<Vec<_>>()
             .join(if and { " * " } else { " + " });
         format!("calc(min(1, {joined}))")
@@ -1071,6 +1143,7 @@ impl<'a> Emitter<'a> {
     ) -> (String, String) {
         let imm = (base as u32) + (lane as u32);
         let byte_addr = match slot {
+            Some(s) if imm == 0 => format!("var(--mb{})", s),
             Some(s) => format!("calc(var(--mb{}) + {})", s, imm),
             None => format!(
                 "--addr16({}, {}, {})",
@@ -1118,12 +1191,20 @@ impl<'a> Emitter<'a> {
     }
 
     pub(super) fn sel_expr(cond: &str, if_true: &str, if_false: &str) -> String {
+        match cond.trim() {
+            "0" => return if_false.to_string(),
+            "1" => return if_true.to_string(),
+            _ => {}
+        }
         if !cond.contains("--sel(") && !if_true.contains("--sel(") && !if_false.contains("--sel(") {
             return format!("--sel({}, {}, {})", cond, if_true, if_false);
         }
         format!(
-            "calc(({}) * ({}) + (1 - ({})) * ({}))",
-            cond, if_true, cond, if_false
+            "calc({} * {} + (1 - {}) * {})",
+            Self::paren_if_needed(cond),
+            Self::paren_if_needed(if_true),
+            Self::paren_if_needed(cond),
+            Self::paren_if_needed(if_false),
         )
     }
 
@@ -1137,19 +1218,57 @@ impl<'a> Emitter<'a> {
     }
 
     fn byte_add_total_expr(lhs: &str, rhs: &str, carry_in: &str) -> String {
-        if carry_in == "0" {
-            format!("calc(({lhs}) + ({rhs}))")
-        } else {
-            format!("calc(({lhs}) + ({rhs}) + ({carry_in}))")
+        let terms: Vec<String> = [lhs, rhs, carry_in]
+            .iter()
+            .filter(|t| t.trim() != "0")
+            .map(|t| t.to_string())
+            .collect();
+        if terms.is_empty() {
+            return "0".to_string();
         }
+        if terms.len() == 1 {
+            return terms.into_iter().next().unwrap();
+        }
+        // Try compile-time integer fold.
+        if let Some(sum) = terms
+            .iter()
+            .map(|t| t.parse::<i64>().ok())
+            .collect::<Option<Vec<_>>>()
+            .map(|v| v.iter().sum::<i64>())
+        {
+            return sum.to_string();
+        }
+        let joined = terms
+            .iter()
+            .map(|t| Self::paren_if_needed(t))
+            .collect::<Vec<_>>()
+            .join(" + ");
+        format!("calc({})", joined)
     }
 
     fn byte_sub_total_expr(lhs: &str, rhs: &str, borrow_in: &str) -> String {
-        if borrow_in == "0" {
-            format!("calc(({lhs}) - ({rhs}))")
-        } else {
-            format!("calc(({lhs}) - ({rhs}) - ({borrow_in}))")
+        let l_lit = lhs.trim().parse::<i64>().ok();
+        let r_lit = rhs.trim().parse::<i64>().ok();
+        let b_lit = borrow_in.trim().parse::<i64>().ok();
+        if let (Some(a), Some(b), Some(c)) = (l_lit, r_lit, b_lit) {
+            return (a - b - c).to_string();
         }
+        let l = Self::paren_if_needed(lhs);
+        let mut out = format!("calc({l}");
+        if rhs.trim() != "0" {
+            out.push_str(" - ");
+            out.push_str(&Self::paren_if_needed(rhs));
+        }
+        if borrow_in.trim() != "0" {
+            out.push_str(" - ");
+            out.push_str(&Self::paren_if_needed(borrow_in));
+        }
+        out.push(')');
+        // If we ended up with just `calc(lhs)`, return `lhs` directly.
+        if out == format!("calc({})", l) {
+            return lhs.to_string();
+        }
+        out
     }
 
     fn add32_carry_in_expr(now: &HashMap<u16, String>, lhs: Word, rhs: Word, lane: u8) -> String {
@@ -1158,9 +1277,36 @@ impl<'a> Emitter<'a> {
             let lhs_byte = Self::val_expr(now, lhs.byte(idx));
             let rhs_byte = Self::val_expr(now, rhs.byte(idx));
             let total = Self::byte_add_total_expr(&lhs_byte, &rhs_byte, &carry);
-            carry = format!("round(down, calc(({total}) / 256))");
+            carry = format!("round(down, calc({} / 256))", Self::paren_if_needed(&total));
         }
         carry
+    }
+
+    /// Computes the byte-level borrow-out for one subtraction step:
+    ///   round(down, (255 - lhs + rhs + borrow_in) / 256)
+    /// Drops literal-zero operands and folds when all operands are literals.
+    fn byte_borrow_step(lhs: &str, rhs: &str, borrow_in: &str) -> String {
+        if let (Some(l), Some(r), Some(b)) = (
+            lhs.trim().parse::<i64>().ok(),
+            rhs.trim().parse::<i64>().ok(),
+            borrow_in.trim().parse::<i64>().ok(),
+        ) {
+            return (255 - l + r + b).div_euclid(256).to_string();
+        }
+        let mut numerator = String::from("255");
+        if lhs.trim() != "0" {
+            numerator.push_str(" - ");
+            numerator.push_str(&Self::paren_if_needed(lhs));
+        }
+        if rhs.trim() != "0" {
+            numerator.push_str(" + ");
+            numerator.push_str(&Self::paren_if_needed(rhs));
+        }
+        if borrow_in.trim() != "0" {
+            numerator.push_str(" + ");
+            numerator.push_str(&Self::paren_if_needed(borrow_in));
+        }
+        format!("round(down, calc(({}) / 256))", numerator)
     }
 
     fn sub32_borrow_in_expr(now: &HashMap<u16, String>, lhs: Word, rhs: Word, lane: u8) -> String {
@@ -1168,9 +1314,7 @@ impl<'a> Emitter<'a> {
         for idx in 0..lane {
             let lhs_byte = Self::val_expr(now, lhs.byte(idx));
             let rhs_byte = Self::val_expr(now, rhs.byte(idx));
-            borrow = format!(
-                "round(down, calc((255 - ({lhs_byte}) + ({rhs_byte}) + ({borrow})) / 256))"
-            );
+            borrow = Self::byte_borrow_step(&lhs_byte, &rhs_byte, &borrow);
         }
         borrow
     }
@@ -1185,7 +1329,7 @@ impl<'a> Emitter<'a> {
         let rhs_byte = Self::val_expr(now, rhs.byte(lane));
         let carry_in = Self::add32_carry_in_expr(now, lhs, rhs, lane);
         let total = Self::byte_add_total_expr(&lhs_byte, &rhs_byte, &carry_in);
-        format!("mod({total}, 256)")
+        Self::fold_mod(&total, 256)
     }
 
     pub(super) fn sub32_byte_expr(
@@ -1198,7 +1342,13 @@ impl<'a> Emitter<'a> {
         let rhs_byte = Self::val_expr(now, rhs.byte(lane));
         let borrow_in = Self::sub32_borrow_in_expr(now, lhs, rhs, lane);
         let total = Self::byte_sub_total_expr(&lhs_byte, &rhs_byte, &borrow_in);
-        format!("mod(calc(({total}) + 256), 256)")
+        // total may be negative; "+ 256" then mod 256 normalises to a byte.
+        let shifted = if let Ok(n) = total.parse::<i64>() {
+            (n + 256).to_string()
+        } else {
+            format!("calc({} + 256)", Self::paren_if_needed(&total))
+        };
+        Self::fold_mod(&shifted, 256)
     }
 
     pub(super) fn sub32_borrow_expr(now: &HashMap<u16, String>, lhs: Word, rhs: Word) -> String {
@@ -1206,9 +1356,7 @@ impl<'a> Emitter<'a> {
         for idx in 0..4u8 {
             let lhs_byte = Self::val_expr(now, lhs.byte(idx));
             let rhs_byte = Self::val_expr(now, rhs.byte(idx));
-            borrow = format!(
-                "round(down, calc((255 - ({lhs_byte}) + ({rhs_byte}) + ({borrow})) / 256))"
-            );
+            borrow = Self::byte_borrow_step(&lhs_byte, &rhs_byte, &borrow);
         }
         borrow
     }
@@ -1237,7 +1385,17 @@ impl<'a> Emitter<'a> {
 
     pub(super) fn byte_bit_expr(byte: &str, bit: u8) -> String {
         let p2 = 1u32 << bit;
-        format!("mod(round(down, calc(({}) / {})), 2)", byte, p2)
+        // Constant-fold when the byte is a numeric literal — common when the
+        // builder is selecting bits of an immediate shift/rotate count.
+        if let Ok(v) = byte.trim().parse::<i64>() {
+            return ((v >> bit) & 1).to_string();
+        }
+        let b = Self::paren_if_needed(byte);
+        if p2 == 1 {
+            format!("mod({b}, 2)")
+        } else {
+            format!("mod(round(down, calc({b} / {p2})), 2)")
+        }
     }
 
     pub(super) fn byte_popcnt_expr(byte: &str) -> String {
@@ -1249,11 +1407,13 @@ impl<'a> Emitter<'a> {
     }
 
     pub(super) fn byte_ctz_expr(byte: &str) -> String {
-        format!("--byte_ctz(mod(calc(({}) + 256), 256))", byte)
+        let b = Self::paren_if_needed(byte);
+        format!("--byte_ctz(mod(calc({b} + 256), 256))")
     }
 
     pub(super) fn byte_clz_expr(byte: &str) -> String {
-        format!("--byte_clz(mod(calc(({}) + 256), 256))", byte)
+        let b = Self::paren_if_needed(byte);
+        format!("--byte_clz(mod(calc({b} + 256), 256))")
     }
 
     pub(super) fn shl_stage_expr(word: &[String; 4], amount: u8) -> [String; 4] {
@@ -1262,13 +1422,24 @@ impl<'a> Emitter<'a> {
             1 | 2 | 4 => {
                 let p = 1u32 << amount;
                 let q = 1u32 << (8 - amount);
-                let lo = |x: &str| format!("mod(calc(({}) * {}), 256)", x, p);
-                let carry = |x: &str| format!("round(down, calc(({}) / {}))", x, q);
+                let lo = |x: &str| {
+                    format!("mod(calc({} * {p}), 256)", Self::paren_if_needed(x))
+                };
+                let carry = |x: &str| {
+                    format!("round(down, calc({} / {q}))", Self::paren_if_needed(x))
+                };
+                let combine = |a: String, b: String| {
+                    format!(
+                        "mod(calc({} + {}), 256)",
+                        Self::paren_if_needed(&a),
+                        Self::paren_if_needed(&b)
+                    )
+                };
                 [
                     lo(&word[0]),
-                    format!("mod(calc(({}) + ({})), 256)", lo(&word[1]), carry(&word[0])),
-                    format!("mod(calc(({}) + ({})), 256)", lo(&word[2]), carry(&word[1])),
-                    format!("mod(calc(({}) + ({})), 256)", lo(&word[3]), carry(&word[2])),
+                    combine(lo(&word[1]), carry(&word[0])),
+                    combine(lo(&word[2]), carry(&word[1])),
+                    combine(lo(&word[3]), carry(&word[2])),
                 ]
             }
             8 => [
@@ -1288,10 +1459,9 @@ impl<'a> Emitter<'a> {
     }
 
     fn shr_byte_expr(byte: &str, carry: &str, p: u32) -> String {
-        format!(
-            "mod(round(down, calc((({}) + 256 * ({})) / {})), 256)",
-            byte, carry, p
-        )
+        let b = Self::paren_if_needed(byte);
+        let c = Self::paren_if_needed(carry);
+        format!("mod(round(down, calc(({b} + 256 * {c}) / {p})), 256)")
     }
 
     pub(super) fn shr_u_stage_expr(word: &[String; 4], amount: u8) -> [String; 4] {
@@ -1299,12 +1469,12 @@ impl<'a> Emitter<'a> {
             0 => word.clone(),
             1 | 2 | 4 => {
                 let p = 1u32 << amount;
-                let carry = |x: &str| format!("mod(({}), {})", x, p);
+                let carry = |x: &str| format!("mod({}, {p})", Self::paren_if_needed(x));
                 [
                     Self::shr_byte_expr(&word[0], &carry(&word[1]), p),
                     Self::shr_byte_expr(&word[1], &carry(&word[2]), p),
                     Self::shr_byte_expr(&word[2], &carry(&word[3]), p),
-                    format!("round(down, calc(({}) / {}))", word[3], p),
+                    format!("round(down, calc({} / {p}))", Self::paren_if_needed(&word[3])),
                 ]
             }
             8 => [
@@ -1646,16 +1816,107 @@ impl<'a> Emitter<'a> {
         let mut terms = Vec::with_capacity(8);
         for k in 0..8u32 {
             let p2 = 1u32 << k;
-            let lb = format!("mod(round(down, calc(({}) / {})), 2)", l, p2);
-            let rb = format!("mod(round(down, calc(({}) / {})), 2)", r, p2);
+            let lb = Self::byte_bit_expr(l, k as u8);
+            let rb = Self::byte_bit_expr(r, k as u8);
             let bit = match op {
-                "and" => format!("calc(({}) * ({}))", lb, rb),
-                "or" => format!("min(1, calc(({}) + ({})))", lb, rb),
-                "xor" => format!("mod(calc(({}) + ({})), 2)", lb, rb),
+                "and" => Self::fold_mul(&lb, &rb),
+                "or" => Self::fold_or_bit(&lb, &rb),
+                "xor" => Self::fold_xor_bit(&lb, &rb),
                 _ => "0".to_string(),
             };
-            terms.push(format!("calc(({}) * {})", bit, p2));
+            terms.push(Self::fold_mul_by_int(&bit, p2));
         }
-        format!("calc({})", terms.join(" + "))
+        Self::fold_add(terms)
+    }
+
+    fn fold_mul(a: &str, b: &str) -> String {
+        let at = a.trim();
+        let bt = b.trim();
+        if at == "0" || bt == "0" {
+            return "0".to_string();
+        }
+        if at == "1" {
+            return b.to_string();
+        }
+        if bt == "1" {
+            return a.to_string();
+        }
+        if let (Ok(an), Ok(bn)) = (at.parse::<i64>(), bt.parse::<i64>()) {
+            return (an * bn).to_string();
+        }
+        format!(
+            "calc({} * {})",
+            Self::paren_if_needed(a),
+            Self::paren_if_needed(b)
+        )
+    }
+
+    fn fold_or_bit(a: &str, b: &str) -> String {
+        match (a.trim(), b.trim()) {
+            ("0", _) => b.to_string(),
+            (_, "0") => a.to_string(),
+            ("1", _) | (_, "1") => "1".to_string(),
+            _ => format!(
+                "min(1, calc({} + {}))",
+                Self::paren_if_needed(a),
+                Self::paren_if_needed(b)
+            ),
+        }
+    }
+
+    /// Computes `a ^ b` on bit-valued expressions using `mod(a + b, 2)`.
+    fn fold_xor_bit(a: &str, b: &str) -> String {
+        match (a.trim(), b.trim()) {
+            ("0", _) => b.to_string(),
+            (_, "0") => a.to_string(),
+            ("1", "1") => "0".to_string(),
+            _ => format!(
+                "mod(calc({} + {}), 2)",
+                Self::paren_if_needed(a),
+                Self::paren_if_needed(b)
+            ),
+        }
+    }
+
+    /// Multiplies an expression by an integer constant, folding the trivial
+    /// `0 * x` and `1 * x` cases.
+    fn fold_mul_by_int(expr: &str, c: u32) -> String {
+        if c == 0 || expr.trim() == "0" {
+            return "0".to_string();
+        }
+        if c == 1 {
+            return expr.to_string();
+        }
+        if expr.trim() == "1" {
+            return c.to_string();
+        }
+        format!("calc({} * {c})", Self::paren_if_needed(expr))
+    }
+
+    /// Sums a list of expressions, dropping zero terms. If every term is
+    /// zero, returns `"0"`. A single non-zero term is returned without the
+    /// surrounding `calc(...)`.
+    fn fold_add(terms: Vec<String>) -> String {
+        let nz: Vec<String> = terms.into_iter().filter(|t| t.trim() != "0").collect();
+        match nz.len() {
+            0 => "0".to_string(),
+            1 => nz.into_iter().next().unwrap(),
+            _ => format!("calc({})", nz.join(" + ")),
+        }
+    }
+
+    /// Folds `mod(value, modulus)` when both arguments are integer literals,
+    /// and short-circuits `mod(0, _) -> 0`.
+    pub(super) fn fold_mod(value: &str, modulus: i64) -> String {
+        let v = value.trim();
+        if v == "0" {
+            return "0".to_string();
+        }
+        if let Ok(n) = v.parse::<i64>() {
+            if modulus > 0 {
+                return n.rem_euclid(modulus).to_string();
+            }
+        }
+        format!("mod({}, {})", value, modulus)
     }
 }

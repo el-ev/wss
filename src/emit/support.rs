@@ -176,32 +176,57 @@ impl<'a> Emitter<'a> {
             return;
         }
         let chunk_count = reads.len().div_ceil(READ_LOOKUP_CHUNK);
-        for (chunk, chunk_reads) in reads.chunks(READ_LOOKUP_CHUNK).enumerate() {
+        let chunked: Vec<&[(usize, String)]> = reads.chunks(READ_LOOKUP_CHUNK).collect();
+        let live_idx: Vec<usize> = (0..chunk_count)
+            .filter(|c| !chunked[*c].iter().all(|(_, v)| v.trim() == "0"))
+            .collect();
+
+        if live_idx.len() == 1 {
+            let arms = chunked[live_idx[0]];
             let _ = write!(
                 out,
-                "@function {}_{}(--i <integer>) returns <integer> {{ result: if(",
-                func, chunk
+                "@function {}(--i <integer>) returns <integer> {{ result: if(",
+                func
             );
-            for (idx, expr) in chunk_reads {
+            for (idx, expr) in arms {
+                if expr.trim() == "0" {
+                    continue;
+                }
                 let _ = write!(out, "style(--i: {}): {}; ", idx, expr);
             }
             out.push_str("else: 0); }\n");
+            return;
         }
-        if chunk_count == 1 {
+        if live_idx.is_empty() {
             let _ = writeln!(
                 out,
-                "@function {}(--i <integer>) returns <integer> {{ result: {}_0(var(--i)); }}",
-                func, func
+                "@function {}(--i <integer>) returns <integer> {{ result: 0; }}",
+                func
             );
             return;
+        }
+        for chunk_idx in &live_idx {
+            let chunk_reads = chunked[*chunk_idx];
+            let _ = write!(
+                out,
+                "@function {}_{}(--i <integer>) returns <integer> {{ result: if(",
+                func, chunk_idx
+            );
+            for (idx, expr) in chunk_reads {
+                if expr.trim() == "0" {
+                    continue;
+                }
+                let _ = write!(out, "style(--i: {}): {}; ", idx, expr);
+            }
+            out.push_str("else: 0); }\n");
         }
         let _ = write!(
             out,
             "@function {}(--i <integer>) returns <integer> {{ result: calc(",
             func
         );
-        for chunk in 0..chunk_count {
-            if chunk != 0 {
+        for (i, chunk) in live_idx.iter().enumerate() {
+            if i != 0 {
                 out.push_str(" + ");
             }
             let _ = write!(out, "{}_{}(var(--i))", func, chunk);
@@ -521,10 +546,57 @@ impl<'a> Emitter<'a> {
     }
 
     pub(super) fn if_or_fallback_decl(name: &str, arms: &str, fallback: &str) -> String {
-        if arms.is_empty() {
+        let pruned = Self::prune_redundant_arms(arms, fallback);
+        if pruned.is_empty() {
             format!(" {}: {};", name, fallback)
         } else {
-            format!(" {}: if({}else: {});", name, arms, fallback)
+            format!(" {}: if({}else: {});", name, pruned, fallback)
+        }
+    }
+
+    fn prune_redundant_arms(arms: &str, fallback: &str) -> String {
+        let fb = fallback.trim();
+        let mut kept: Vec<&str> = Vec::new();
+        let bytes = arms.as_bytes();
+        let mut start = 0usize;
+        let mut depth = 0i32;
+        let mut i = 0usize;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'(' => depth += 1,
+                b')' => depth -= 1,
+                b';' if depth == 0 => {
+                    let arm = arms[start..i].trim();
+                    if !arm.is_empty() {
+                        if let Some(idx) = arm.rfind("): ") {
+                            let value = arm[idx + 3..].trim();
+                            if value != fb {
+                                kept.push(arm);
+                            }
+                        } else {
+                            kept.push(arm);
+                        }
+                    }
+                    i += 1;
+                    while i < bytes.len() && bytes[i] == b' ' {
+                        i += 1;
+                    }
+                    start = i;
+                    continue;
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        if kept.is_empty() {
+            String::new()
+        } else {
+            let mut out = String::new();
+            for arm in kept {
+                out.push_str(arm);
+                out.push_str("; ");
+            }
+            out
         }
     }
 
