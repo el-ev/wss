@@ -1026,22 +1026,16 @@ fn lower_compare(b: &mut FuncBuilder, op: RelOp, lhs: Word, rhs: Word) -> anyhow
         RelOp::GtU => lower_gtu32(b, lhs, rhs),
         RelOp::LeU => lower_leu32(b, lhs, rhs),
         RelOp::GeU => lower_geu32(b, lhs, rhs),
-        // Signed: XOR sign bits to convert to unsigned order.
-        RelOp::LtS => {
+        // XOR sign bits to convert signed comparison to unsigned order.
+        RelOp::LtS | RelOp::GtS | RelOp::LeS | RelOp::GeS => {
             let (lhs2, rhs2) = (flip_sign(b, lhs), flip_sign(b, rhs));
-            lower_ltu32(b, lhs2, rhs2)
-        }
-        RelOp::GtS => {
-            let (lhs2, rhs2) = (flip_sign(b, lhs), flip_sign(b, rhs));
-            lower_gtu32(b, lhs2, rhs2)
-        }
-        RelOp::LeS => {
-            let (lhs2, rhs2) = (flip_sign(b, lhs), flip_sign(b, rhs));
-            lower_leu32(b, lhs2, rhs2)
-        }
-        RelOp::GeS => {
-            let (lhs2, rhs2) = (flip_sign(b, lhs), flip_sign(b, rhs));
-            lower_geu32(b, lhs2, rhs2)
+            match op {
+                RelOp::LtS => lower_ltu32(b, lhs2, rhs2),
+                RelOp::GtS => lower_gtu32(b, lhs2, rhs2),
+                RelOp::LeS => lower_leu32(b, lhs2, rhs2),
+                RelOp::GeS => lower_geu32(b, lhs2, rhs2),
+                _ => unreachable!(),
+            }
         }
     })
 }
@@ -1235,10 +1229,9 @@ pub fn lower8_module_with_config(
             div_s: user_func_count + 2,
             rem_s: user_func_count + 3,
         };
-        allocs.push(alloc_builtin_div_params(&mut vreg_counter));
-        allocs.push(alloc_builtin_div_params(&mut vreg_counter));
-        allocs.push(alloc_builtin_div_params(&mut vreg_counter));
-        allocs.push(alloc_builtin_div_params(&mut vreg_counter));
+        for _ in 0..4 {
+            allocs.push(alloc_builtin_div_params(&mut vreg_counter));
+        }
         Some(builtins)
     };
 

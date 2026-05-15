@@ -83,6 +83,9 @@ struct Cli {
     /// Max total physical regs (including reserved r0-r3) after register allocation.
     #[arg(long = "max-phys-regs", default_value_t = DEFAULT_MAX_PHYS_REGS)]
     max_phys_regs: u16,
+    /// Skip embedding the invoking compile command as an HTML comment at the top of the artifact.
+    #[arg(long = "no-embed-compile-command", action = ArgAction::SetTrue)]
+    no_embed_compile_command: bool,
     /// Dump all compiler stages to stdout.
     #[arg(long, action = ArgAction::SetTrue)]
     dump_all: bool,
@@ -188,11 +191,31 @@ fn main() -> Result<()> {
         print!("{}", print_program(&ir8));
     }
 
-    let result = emit_program(&ir8, emit_config)?;
+    let mut result = emit_program(&ir8, emit_config)?;
+    if !args.no_embed_compile_command {
+        let cmd = std::env::args()
+            .map(shell_quote)
+            .collect::<Vec<_>>()
+            .join(" ")
+            .replace("-->", "--&gt;");
+        result = format!("<!-- compile command: {cmd} -->\n{result}");
+    }
     std::fs::write(&output_file, result)
         .with_context(|| format!("failed to write output HTML '{}'", output_file.display()))?;
 
     Ok(())
+}
+
+fn shell_quote(arg: String) -> String {
+    if !arg.is_empty()
+        && arg.bytes().all(|b| {
+            b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b'/' | b'=' | b':' | b',')
+        })
+    {
+        arg
+    } else {
+        format!("'{}'", arg.replace('\'', "'\\''"))
+    }
 }
 
 #[cfg(test)]

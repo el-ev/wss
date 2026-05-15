@@ -101,7 +101,6 @@ pub(super) fn rw_addr(subst: &HashMap<Val8, Val8>, a: Addr) -> Addr {
 }
 
 pub(super) fn rw_word(subst: &HashMap<Val8, Val8>, w: Word) -> Word {
-    // TODO(i64): rewrite logic is currently specialized to 4-lane (32-bit) words.
     Word::new(
         rw(subst, w.b0),
         rw(subst, w.b1),
@@ -205,15 +204,7 @@ pub(super) fn rewrite_term(term: &mut Terminator8, subst: &HashMap<Val8, Val8>) 
         Terminator8::Goto(_) | Terminator8::Trap(_) => {}
         Terminator8::Branch { cond, .. } => *cond = rw(subst, *cond),
         Terminator8::Switch { index, .. } => *index = rw(subst, *index),
-        Terminator8::Return { val } => {
-            if let Some(w) = val {
-                w.lo = rw_word(subst, w.lo);
-                if let Some(hi) = &mut w.hi {
-                    *hi = rw_word(subst, *hi);
-                }
-            }
-        }
-        Terminator8::Exit { val } => {
+        Terminator8::Return { val } | Terminator8::Exit { val } => {
             if let Some(w) = val {
                 w.lo = rw_word(subst, w.lo);
                 if let Some(hi) = &mut w.hi {
