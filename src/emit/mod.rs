@@ -29,6 +29,7 @@ const PROPS_PLACEHOLDER: &str = "/*__WSS_PROPS__*/";
 const LOGIC_PLACEHOLDER: &str = "/*__WSS_LOGIC__*/";
 const SUPPORT_PLACEHOLDER: &str = "/*__WSS_SUPPORT__*/";
 const TERMINAL_PCS_PLACEHOLDER: &str = "/*__WSS_TERMINAL_PCS__*/";
+const DEBUGGER_CYCLES_PLACEHOLDER: &str = "/*__WSS_DEBUGGER_CYCLES__*/";
 const READ_LOOKUP_CHUNK: usize = 128;
 const VIS_SHADOW_CHUNK: usize = 8;
 const VIS_COLS: usize = 128;
@@ -36,6 +37,8 @@ const MEM_DIRTY_PAGE_CELLS: usize = 16;
 const CALLSTACK_DIRTY_PAGE_CELLS: usize = 16;
 const ACTIVE_FLAG_ARMS_CHUNK: usize = 64;
 const COP_OP_NONE: u8 = 0;
+// TODO(i64): exit-code display currently formats return values as 32-bit hex words.
+pub(super) const DEFAULT_RA_DISPLAY: &str = "0x00000000";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EmitConfig {
@@ -351,7 +354,33 @@ pub fn emit_program(program: &Ir8Program, config: EmitConfig) -> anyhow::Result<
         .collect::<Vec<_>>()
         .join(", ");
     let html = replace_placeholder_once(&html, TERMINAL_PCS_PLACEHOLDER, &terminal_pcs)?;
+    let debugger_cycles = if emitter.js_clock_debugger {
+        emitter.build_debugger_cycles_json()
+    } else {
+        String::from("{}")
+    };
+    let html = replace_placeholder_once(&html, DEBUGGER_CYCLES_PLACEHOLDER, &debugger_cycles)?;
     emitter.apply_template_features(html)
+}
+
+fn json_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 fn replace_placeholder_once(
@@ -359,14 +388,23 @@ fn replace_placeholder_once(
     placeholder: &str,
     replacement: &str,
 ) -> anyhow::Result<String> {
-    let matches = template.match_indices(placeholder).count();
+    let idx = template.find(placeholder).with_context(|| {
+        format!(
+            "template placeholder {} must appear exactly once (found 0)",
+            placeholder
+        )
+    })?;
+    let tail = &template[idx + placeholder.len()..];
     anyhow::ensure!(
-        matches == 1,
-        "template placeholder {} must appear exactly once (found {})",
-        placeholder,
-        matches
+        !tail.contains(placeholder),
+        "template placeholder {} must appear exactly once",
+        placeholder
     );
-    Ok(template.replacen(placeholder, replacement, 1))
+    let mut out = String::with_capacity(template.len() - placeholder.len() + replacement.len());
+    out.push_str(&template[..idx]);
+    out.push_str(replacement);
+    out.push_str(tail);
+    Ok(out)
 }
 
 impl<'a> Emitter<'a> {
@@ -393,8 +431,7 @@ impl<'a> Emitter<'a> {
             .collect::<Vec<_>>();
 
         let uses_callstack = Self::scan_uses_callstack(program);
-        let uses_exceptions = Self::scan_uses_exceptions(program);
-        let uses_exc_payload = Self::scan_uses_exc_payload(program);
+        let (uses_exceptions, uses_exc_payload) = Self::scan_exception_usage(program);
         let cs_names = if uses_callstack {
             let cs_slots = config.callstack_slots_cap();
             let cs_hex_width = Self::cell_offset_hex_width(cs_slots);
@@ -543,31 +580,28 @@ impl<'a> Emitter<'a> {
         })
     }
 
-    fn scan_uses_exceptions(program: &Ir8Program) -> bool {
-        program.cycles.iter().any(|cycle| {
-            cycle.ops.iter().any(|op| {
-                matches!(
-                    op.kind,
+    fn scan_exception_usage(program: &Ir8Program) -> (bool, bool) {
+        let mut uses = false;
+        let mut payload = false;
+        for cycle in &program.cycles {
+            for op in &cycle.ops {
+                match op.kind {
+                    Inst8Kind::ExcPayloadSet { .. } | Inst8Kind::ExcPayloadGet { .. } => {
+                        uses = true;
+                        payload = true;
+                    }
                     Inst8Kind::ExcFlagSet { .. }
-                        | Inst8Kind::ExcFlagGet
-                        | Inst8Kind::ExcTagSet { .. }
-                        | Inst8Kind::ExcTagGet { .. }
-                        | Inst8Kind::ExcPayloadSet { .. }
-                        | Inst8Kind::ExcPayloadGet { .. }
-                )
-            })
-        })
-    }
-
-    fn scan_uses_exc_payload(program: &Ir8Program) -> bool {
-        program.cycles.iter().any(|cycle| {
-            cycle.ops.iter().any(|op| {
-                matches!(
-                    op.kind,
-                    Inst8Kind::ExcPayloadSet { .. } | Inst8Kind::ExcPayloadGet { .. }
-                )
-            })
-        })
+                    | Inst8Kind::ExcFlagGet
+                    | Inst8Kind::ExcTagSet { .. }
+                    | Inst8Kind::ExcTagGet { .. } => uses = true,
+                    _ => {}
+                }
+                if uses && payload {
+                    return (true, true);
+                }
+            }
+        }
+        (uses, payload)
     }
 
     fn scan_usage(program: &Ir8Program) -> UsageScan {
@@ -697,6 +731,26 @@ impl<'a> Emitter<'a> {
             }
         }
         Ok(())
+    }
+
+    fn build_debugger_cycles_json(&self) -> String {
+        let mut out = String::from("{");
+        for (i, cycle) in self.program.cycles.iter().enumerate() {
+            if i > 0 {
+                out.push(',');
+            }
+            let _ = write!(out, "\"{}\":[", cycle.pc.index());
+            for op in &cycle.ops {
+                let _ = write!(out, "{},", json_string(&crate::print::format_inst8(op)));
+            }
+            let _ = write!(
+                out,
+                "{}]",
+                json_string(&crate::print::format_term8(&cycle.terminator))
+            );
+        }
+        out.push('}');
+        out
     }
 
     fn apply_template_features(&self, mut html: String) -> anyhow::Result<String> {

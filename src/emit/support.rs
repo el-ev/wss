@@ -57,15 +57,16 @@ impl<'a> Emitter<'a> {
             self.emit_callstack_visualizer(out);
         }
 
+        let codes: Vec<TrapCode> = terminal_codes(self.uses_callstack).collect();
         out.push_str(".screen::after { white-space: pre-wrap; word-break: break-all; ");
         out.push_str("content: if(");
-        // TODO(i64): exit-code display currently formats return values as 32-bit hex words.
-        for code in terminal_codes(self.uses_callstack) {
-            if code == TrapCode::Exited {
+        for code in &codes {
+            if *code == TrapCode::Exited {
                 let _ = write!(
                     out,
-                    "style(--pc: {}): var(--fb, \"\") \"\\a[Program exited with code \" var(--ra, \"0x00000000\") \"]\"; ",
-                    code.pc()
+                    "style(--pc: {}): var(--fb, \"\") \"\\a[Program exited with code \" var(--ra, \"{}\") \"]\"; ",
+                    code.pc(),
+                    DEFAULT_RA_DISPLAY
                 );
                 continue;
             }
@@ -78,20 +79,21 @@ impl<'a> Emitter<'a> {
         }
         out.push_str("else: var(--fb, \"\")); ");
         out.push_str("color: if(");
-        for code in terminal_codes(self.uses_callstack) {
-            if code == TrapCode::Exited {
+        for code in &codes {
+            if *code == TrapCode::Exited {
                 continue;
             }
             let _ = write!(out, "style(--pc: {}): #d00; ", code.pc());
         }
         out.push_str("else: #222); display: block; flex: 0 0 auto; }\n");
 
-        for code in terminal_codes(self.uses_callstack) {
-            if code == TrapCode::Exited {
+        for code in &codes {
+            if *code == TrapCode::Exited {
                 let _ = writeln!(
                     out,
-                    "@container style(--pc: {}) {{ .screen::after {{ content: var(--fb, \"\") \"\\a[Program exited with code \" var(--ra, \"0x00000000\") \"]\"; }} }}",
-                    code.pc()
+                    "@container style(--pc: {}) {{ .screen::after {{ content: var(--fb, \"\") \"\\a[Program exited with code \" var(--ra, \"{}\") \"]\"; }} }}",
+                    code.pc(),
+                    DEFAULT_RA_DISPLAY
                 );
                 continue;
             }
@@ -103,7 +105,7 @@ impl<'a> Emitter<'a> {
             );
         }
 
-        for code in terminal_codes(self.uses_callstack) {
+        for code in &codes {
             let _ = writeln!(
                 out,
                 ".clk:has(.terminal) {{ @container style(--pc: {}) {{ .terminal {{ animation-play-state: paused, paused !important; }} }} }}",
@@ -112,7 +114,7 @@ impl<'a> Emitter<'a> {
         }
     }
 
-    pub(super) fn emit_i2char(&self, out: &mut String) {
+    fn emit_i2char(&self, out: &mut String) {
         out.push_str("@function --i2char(--i <integer>) returns <string> { result: if(");
         out.push_str("style(--i: -1): \"\"; style(--i: 8): \"\"; style(--i: 9): \"    \"; style(--i: 10): \"\\a \"; ");
         for code in 32u8..=126u8 {
@@ -127,7 +129,7 @@ impl<'a> Emitter<'a> {
         out.push_str("else: \"?\"); }\n");
     }
 
-    pub(super) fn emit_hex_digit(&self, out: &mut String) {
+    fn emit_hex_digit(&self, out: &mut String) {
         out.push_str("@function --hex(--i <integer>) returns <string> { result: if(");
         for v in 0..=15u8 {
             let _ = write!(out, "style(--i: {}): \"{:x}\"; ", v, v);
@@ -145,13 +147,13 @@ impl<'a> Emitter<'a> {
         Self::emit_chunked_read_function(out, name, &reads);
     }
 
-    pub(super) fn emit_byte_clz_lookup(&self, out: &mut String) {
+    fn emit_byte_clz_lookup(&self, out: &mut String) {
         Self::emit_byte_lookup(out, "--byte_clz", |b| {
             if b == 0 { 8 } else { b.leading_zeros() as u8 }
         });
     }
 
-    pub(super) fn emit_byte_ctz_lookup(&self, out: &mut String) {
+    fn emit_byte_ctz_lookup(&self, out: &mut String) {
         Self::emit_byte_lookup(out, "--byte_ctz", |b| {
             if b == 0 { 8 } else { b.trailing_zeros() as u8 }
         });
@@ -518,6 +520,16 @@ impl<'a> Emitter<'a> {
         self.mem_names.len().div_ceil(MEM_DIRTY_PAGE_CELLS)
     }
 
+    /// Sums `parts` and clamps to 0/1: `0` when empty, the single term when len 1,
+    /// otherwise `min(1, calc(a + b + ...))`. Used to OR boolean (0/1) terms in CSS.
+    pub(super) fn clamp_sum_or_zero(parts: &[String]) -> String {
+        match parts.len() {
+            0 => "0".to_string(),
+            1 => parts[0].clone(),
+            _ => format!("min(1, calc({}))", parts.join(" + ")),
+        }
+    }
+
     pub(super) fn dirty_page_expr(&self, page: usize) -> String {
         if self.max_mem_store_slots == 0 {
             return "0".to_string();
@@ -532,11 +544,7 @@ impl<'a> Emitter<'a> {
                 })
             })
             .collect::<Vec<_>>();
-        if terms.len() == 1 {
-            terms[0].clone()
-        } else {
-            format!("min(1, calc({}))", terms.join(" + "))
-        }
+        Self::clamp_sum_or_zero(&terms)
     }
 
     pub(super) fn cs_page_count(&self) -> usize {
@@ -555,11 +563,7 @@ impl<'a> Emitter<'a> {
                 )
             })
             .collect::<Vec<_>>();
-        if terms.len() == 1 {
-            terms[0].clone()
-        } else {
-            format!("min(1, calc({}))", terms.join(" + "))
-        }
+        Self::clamp_sum_or_zero(&terms)
     }
 
     pub(super) fn if_or_fallback_decl(name: &str, arms: &str, fallback: &str) -> String {
@@ -653,7 +657,7 @@ impl<'a> Emitter<'a> {
         let _ = writeln!(out, " {}: min(1, calc({}));", name, joined);
     }
 
-    fn emit_chunked_prefixed(
+    pub(super) fn emit_chunked_prefixed(
         out: &mut String,
         chunk_size: usize,
         line_prefix: &str,
@@ -747,7 +751,7 @@ impl<'a> Emitter<'a> {
             }
         }
         let _ = writeln!(out, "    --_2fb: var(--_0fb, \"\");");
-        let _ = writeln!(out, "    --_2ra: var(--_0ra, \"0x00000000\");");
+        let _ = writeln!(out, "    --_2ra: var(--_0ra, \"{}\");", DEFAULT_RA_DISPLAY);
         let _ = writeln!(out, "  }}");
         let _ = writeln!(out, "}}");
 

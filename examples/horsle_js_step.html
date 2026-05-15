@@ -39,7 +39,13 @@ body { margin: 0; background: #f5f5f5; font-family: ui-monospace, SFMono-Regular
 .ind .v::before { content: "0"; }
 .wss-debug-trigger { position: fixed; right: 14px; bottom: 14px; z-index: 20; appearance: none; border: 1px solid #cfcfcf; border-radius: 999px; padding: 6px 12px; background: rgba(255, 255, 255, 0.96); color: #222; font: inherit; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.02em; cursor: pointer; box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1); }
 .wss-debug-trigger:hover { background: #fff; }
-.wss-debug-popup { position: fixed; right: 14px; bottom: 52px; z-index: 20; width: min(320px, calc(100vw - 24px)); padding: 10px; border: 1px solid #d4d4d4; border-radius: 10px; background: rgba(255, 255, 255, 0.98); box-shadow: 0 10px 22px rgba(0, 0, 0, 0.16); color: #222; }
+.wss-debug-popup { position: fixed; right: 14px; bottom: 52px; z-index: 20; width: min(420px, calc(100vw - 24px)); padding: 10px; border: 1px solid #d4d4d4; border-radius: 10px; background: rgba(255, 255, 255, 0.98); box-shadow: 0 10px 22px rgba(0, 0, 0, 0.16); color: #222; }
+.wss-debug-ops { margin-bottom: 8px; border: 1px solid #e1e1e1; border-radius: 7px; background: #fafafa; height: 220px; overflow-y: auto; font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.wss-debug-ops-head { padding: 4px 8px; font-size: 0.62rem; font-weight: 700; color: #666; text-transform: uppercase; letter-spacing: 0.04em; border-bottom: 1px solid #e1e1e1; background: #f1f1f1; position: sticky; top: 0; }
+.wss-debug-ops-list { margin: 0; padding: 4px 8px; list-style: none; }
+.wss-debug-ops-list li { padding: 1px 0; color: #222; white-space: pre; }
+.wss-debug-ops-list li.term { color: #0a4; font-weight: 700; }
+.wss-debug-ops-list li.empty { color: #999; font-style: italic; }
 .wss-debug-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
 .wss-debug-title { margin: 0; font-size: 0.78rem; font-weight: 800; letter-spacing: 0.02em; text-transform: uppercase; }
 .wss-debug-close { appearance: none; border: 1px solid #d5d5d5; border-radius: 6px; padding: 2px 7px; background: #fff; color: #555; font: inherit; font-size: 0.69rem; font-weight: 700; cursor: pointer; }
@@ -857,8 +863,10 @@ Please try an up-to-date Chromium-based browser.
     const phasesPerInstruction = 4;
     const terminalPcs = new Set([-1, -2, -3, -4, -5, -6]);
     const followSlackPx = 4;
-    const minSpeedMultiplier = 0.25;
+    const minSpeedMultiplier = 0.01;
     const maxSpeedMultiplier = 16;
+    const minSpeedLog = Math.log10(minSpeedMultiplier);
+    const maxSpeedLog = Math.log10(maxSpeedMultiplier);
     let followScreenBottom = true;
     let speedMultiplier = 1;
     let speedCarry = 0;
@@ -873,6 +881,9 @@ Please try an up-to-date Chromium-based browser.
     let debugStateOut = null;
     let debugPcOut = null;
     let debugClockOut = null;
+    let debugOpsList = null;
+    let debugOpsHead = null;
+    const debuggerCycles = {"2000":["%r4 = global.get g0[0]","%r5 = global.get g0[1]","%r6 = global.get g0[2]","%r7 = global.get g0[3]","goto $B2001"],"2001":["%r16 = sub32.b0 (%r4:%r65:%r66:%r67) (0x20:0x00:0x00:0x00)","%r17 = sub32.b1 (%r4:%r5:%r66:%r67) (0x20:0x00:0x00:0x00)","%r18 = sub32.b2 (%r4:%r5:%r6:%r67) (0x20:0x00:0x00:0x00)","%r19 = sub32.b3 (%r4:%r5:%r6:%r7) (0x20:0x00:0x00:0x00)","goto $B2002"],"2002":["%r12 = copy %r16","%r13 = copy %r17","%r14 = copy %r18","%r15 = copy %r19","goto $B2003"],"2003":["global.set g0[0] %r12","global.set g0[1] %r13","global.set g0[2] %r14","global.set g0[3] %r15","%r8 = copy 0xd5","%r9 = copy 0xff","%r10 = copy 0xff","%r11 = copy 0xff","goto $B2004"],"2004":["%r4 = add32.b0 (%r8:%r13:%r14:%r15) (0x64:0x00:0x00:0x00)","%r5 = add32.b1 (%r8:%r9:%r14:%r15) (0x64:0x00:0x00:0x00)","goto $B2005"],"2005":["%r16 = load.mem [0x0+%r4:%r5] lane=0","goto $B2006"],"2006":["putchar %r16","%r6 = add32.b0 (%r8:%r13:%r14:%r15) (0x01:0x00:0x00:0x00)","%r7 = add32.b1 (%r8:%r9:%r14:%r15) (0x01:0x00:0x00:0x00)","goto $B2007"],"2007":["%r16 = add32.b2 (%r8:%r9:%r10:%r15) (0x01:0x00:0x00:0x00)","%r17 = add32.b3 (%r8:%r9:%r10:%r11) (0x01:0x00:0x00:0x00)","goto $B2008"],"2008":["%r8 = copy %r6","%r9 = copy %r7","%r10 = copy %r16","%r11 = copy %r17","%r22 = ne  %r6 0x00","%r23 = ne  %r7 0x00","%r4 = ne  %r16 0x00","%r5 = ne  %r17 0x00","goto $B2009"],"2009":["%r6 = bool.or  %r22 %r23 %r4 %r5","branch %r6 $B2004 $B2010"],"2010":["%r4 = copy 0x00","%r5 = copy 0x00","%r6 = copy 0x00","%r7 = copy 0x00","goto $B2011"],"2011":["%r8 = copy 0xfe","%r9 = copy 0xff","%r10 = copy 0xff","%r11 = copy 0xff","goto $B2012"],"2012":["%r19 = add32.b0 (%r8:%r13:%r14:%r15) (0x26:0x00:0x00:0x00)","%r20 = add32.b1 (%r8:%r9:%r14:%r15) (0x26:0x00:0x00:0x00)","goto $B2013"],"2013":["%r23 = load.mem [0x0+%r19:%r20] lane=0","goto $B2014"],"2014":["putchar %r23","%r17 = add32.b0 (%r8:%r13:%r14:%r15) (0x01:0x00:0x00:0x00)","%r18 = add32.b1 (%r8:%r9:%r14:%r15) (0x01:0x00:0x00:0x00)","%r19 = add32.b2 (%r8:%r9:%r10:%r15) (0x01:0x00:0x00:0x00)","%r20 = add32.b3 (%r8:%r9:%r10:%r11) (0x01:0x00:0x00:0x00)","goto $B2015"],"2015":["%r8 = copy %r17","%r9 = copy %r18","%r10 = copy %r19","%r11 = copy %r20","%r25 = ne  %r17 0x00","%r26 = ne  %r18 0x00","%r27 = ne  %r19 0x00","%r16 = ne  %r20 0x00","goto $B2016"],"2016":["%r17 = bool.or  %r25 %r26 %r27 %r16","branch %r17 $B2012 $B2017"],"2017":["%r20 = copy 0x00","%r21 = copy 0x00","%r22 = copy 0x00","%r23 = copy 0x00","goto $B2018"],"2018":["%r18 = getchar","goto $B2019"],"2019":["%r8 = copy %r18","%r9 = copy 0x00","%r10 = copy 0x00","%r11 = copy 0x00","%r27 = lt_u %r18 0x00","branch %r27 $B2082 $B2020"],"2020":["%r19 = add32.b0 (%r8:%r13:%r14:%r15) (0xf6:0xff:0xff:0xff)","switch %r19 0:$B2021 1:$B2023 2:$B2023 3:$B2021 default:$B2023"],"2021":["%r19 = getchar","goto $B2022"],"2022":["%r8 = copy %r19","%r9 = copy 0x00","%r10 = copy 0x00","%r11 = copy 0x00","%r24 = lt_u %r19 0x00","branch %r24 $B2082 $B2020"],"2023":["%r16 = mul.lo %r20 0x04","%r17 = mul.lo %r21 0x04","%r18 = mul.hi %r20 0x04","goto $B2024"],"2024":["%r19 = or  %r17 %r18","%r26 = add32.b0 (%r12:%r9:%r10:%r11) (%r16:%r235:%r238:%r241)","goto $B2025"],"2025":["%r27 = add32.b1 (%r12:%r13:%r10:%r11) (%r16:%r19:%r238:%r241)","%r18 = or  %r8 0x20","%r30 = add32.b0 (%r8:%r13:%r14:%r15) (0xbf:0xff:0xff:0xff)","%r31 = add32.b1 (%r8:%r9:%r14:%r15) (0xbf:0xff:0xff:0xff)","%r32 = add32.b2 (%r8:%r9:%r10:%r15) (0xbf:0xff:0xff:0xff)","%r33 = add32.b3 (%r8:%r9:%r10:%r11) (0xbf:0xff:0xff:0xff)","goto $B2026"],"2026":["%r34 = lt_u %r33 0x00","%r35 = eq  %r33 0x00","%r36 = lt_u %r32 0x00","%r37 = eq  %r32 0x00","%r38 = lt_u %r31 0x00","%r39 = eq  %r31 0x00","%r40 = lt_u %r30 0x1a","goto $B2027"],"2027":["%r41 = bool.and %r35 %r36","%r42 = bool.and %r35 %r37","goto $B2028"],"2028":["%r43 = bool.and %r42 %r38","%r29 = bool.and %r42 %r39 %r40","goto $B2029"],"2029":["%r30 = bool.or  %r34 %r41 %r43 %r29","goto $B2030"],"2030":["%r32 = sel %r30 %r18 %r8","goto $B2031"],"2031":["store.mem [0x0+%r26:%r27] lane=0 %r32","store.mem [0x0+%r26:%r27] lane=1 %r9","store.mem [0x2+%r26:%r27] lane=0 %r10","store.mem [0x2+%r26:%r27] lane=1 %r11","goto $B2032"],"2032":["putchar %r32","%r16 = add32.b0 (%r20:%r21:%r22:%r23) (0x01:0x00:0x00:0x00)","%r17 = add32.b1 (%r20:%r21:%r22:%r23) (0x01:0x00:0x00:0x00)","%r18 = add32.b2 (%r20:%r21:%r22:%r23) (0x01:0x00:0x00:0x00)","%r19 = add32.b3 (%r20:%r21:%r22:%r23) (0x01:0x00:0x00:0x00)","goto $B2033"],"2033":["%r20 = copy %r16","%r21 = copy %r17","%r22 = copy %r18","%r23 = copy %r19","%r24 = ne  %r16 0x05","%r25 = ne  %r17 0x00","%r26 = ne  %r18 0x00","%r27 = ne  %r19 0x00","goto $B2034"],"2034":["%r16 = bool.or  %r24 %r25 %r26 %r27","branch %r16 $B2018 $B2035"],"2035":["%r18 = getchar","goto $B2036"],"2036":["%r8 = copy %r18","%r9 = copy 0x00","%r10 = copy 0x00","%r11 = copy 0x00","%r27 = lt_u %r18 0x00","branch %r27 $B2039 $B2037"],"2037":["%r19 = ne  %r8 0x0a","%r24 = ne  %r9 0x00","%r25 = ne  %r10 0x00","%r26 = ne  %r11 0x00","goto $B2038"],"2038":["%r27 = bool.or  %r19 %r24 %r25 %r26","branch %r27 $B2035 $B2039"],"2039":["putchar 0x0a","goto $B2040"],"2040":["putchar 0x20","goto $B2041"],"2041":["putchar 0x20","%r16 = copy 0x00","%r17 = copy 0x00","%r18 = copy 0x00","%r19 = copy 0x00","%r24 = copy 0x01","%r25 = copy 0x00","%r26 = copy 0x00","%r27 = copy 0x00","goto $B2042"],"2042":["%r29 = mul.lo %r16 0x04","%r30 = mul.lo %r17 0x04","%r31 = mul.hi %r16 0x04","goto $B2043"],"2043":["%r32 = or  %r30 %r31","%r39 = add32.b0 (%r12:%r9:%r10:%r11) (%r29:%r408:%r411:%r414)","goto $B2044"],"2044":["%r40 = add32.b1 (%r12:%r13:%r10:%r11) (%r29:%r32:%r411:%r414)","goto $B2045"],"2045":["%r43 = load.mem [0x0+%r39:%r40] lane=0","%r44 = load.mem [0x0+%r39:%r40] lane=1","%r45 = load.mem [0x2+%r39:%r40] lane=0","%r46 = load.mem [0x2+%r39:%r40] lane=1","goto $B2046"],"2046":["%r20 = copy %r43","%r21 = copy %r44","%r22 = copy %r45","%r23 = copy %r46","%r39 = load.mem [0x10+%r29:%r32] lane=0","%r47 = load.mem [0x10+%r29:%r32] lane=1","%r48 = load.mem [0x12+%r29:%r32] lane=0","%r49 = load.mem [0x12+%r29:%r32] lane=1","goto $B2047"],"2047":["%r50 = ne  %r43 %r39","%r28 = ne  %r44 %r47","%r29 = ne  %r45 %r48","%r30 = ne  %r46 %r49","goto $B2048"],"2048":["%r31 = bool.or  %r50 %r28 %r29 %r30","branch %r31 $B2050 $B2049"],"2049":["%r8 = copy 0x47","goto $B2060"],"2050":["%r8 = copy 0xec","%r9 = copy 0xff","%r10 = copy 0xff","%r11 = copy 0xff","goto $B2051"],"2051":["%r24 = copy 0x00","%r25 = copy 0x00","%r26 = copy 0x00","%r27 = copy 0x00","%r29 = add32.b0 (%r8:%r13:%r14:%r15) (0x24:0x00:0x00:0x00)","%r30 = add32.b1 (%r8:%r9:%r14:%r15) (0x24:0x00:0x00:0x00)","goto $B2052"],"2052":["%r33 = load.mem [0x0+%r29:%r30] lane=0","%r34 = load.mem [0x0+%r29:%r30] lane=1","%r35 = load.mem [0x2+%r29:%r30] lane=0","%r36 = load.mem [0x2+%r29:%r30] lane=1","goto $B2053"],"2053":["%r37 = eq  %r20 %r33","%r38 = eq  %r21 %r34","%r39 = eq  %r22 %r35","%r28 = eq  %r23 %r36","goto $B2054"],"2054":["%r29 = bool.and %r37 %r38 %r39 %r28","branch %r29 $B2059 $B2055"],"2055":["%r31 = add32.b0 (%r8:%r13:%r14:%r15) (0x04:0x00:0x00:0x00)","%r32 = add32.b1 (%r8:%r9:%r14:%r15) (0x04:0x00:0x00:0x00)","%r33 = add32.b2 (%r8:%r9:%r10:%r15) (0x04:0x00:0x00:0x00)","%r34 = add32.b3 (%r8:%r9:%r10:%r11) (0x04:0x00:0x00:0x00)","goto $B2056"],"2056":["%r8 = copy %r31","%r9 = copy %r32","%r10 = copy %r33","%r11 = copy %r34","%r39 = ne  %r31 0x00","%r28 = ne  %r32 0x00","%r29 = ne  %r33 0x00","%r30 = ne  %r34 0x00","goto $B2057"],"2057":["%r31 = bool.or  %r39 %r28 %r29 %r30","branch %r31 $B2051 $B2058"],"2058":["%r8 = copy 0x2e","goto $B2060"],"2059":["%r8 = copy 0x59","goto $B2060"],"2060":["putchar %r8","%r28 = add32.b0 (%r16:%r25:%r26:%r27) (0x01:0x00:0x00:0x00)","%r29 = add32.b1 (%r16:%r17:%r26:%r27) (0x01:0x00:0x00:0x00)","%r30 = add32.b2 (%r16:%r17:%r18:%r27) (0x01:0x00:0x00:0x00)","%r31 = add32.b3 (%r16:%r17:%r18:%r19) (0x01:0x00:0x00:0x00)","goto $B2061"],"2061":["%r16 = copy %r28","%r17 = copy %r29","%r18 = copy %r30","%r19 = copy %r31","%r32 = ne  %r28 0x05","%r33 = ne  %r29 0x00","%r34 = ne  %r30 0x00","%r35 = ne  %r31 0x00","goto $B2062"],"2062":["%r28 = bool.or  %r32 %r33 %r34 %r35","branch %r28 $B2042 $B2063"],"2063":["putchar 0x0a","%r18 = eq  %r24 0x00","%r19 = eq  %r25 0x00","%r28 = eq  %r26 0x00","%r29 = eq  %r27 0x00","goto $B2064"],"2064":["%r30 = bool.and %r18 %r19 %r28 %r29","branch %r30 $B2072 $B2065"],"2065":["%r8 = copy 0xfc","%r9 = copy 0xff","%r10 = copy 0xff","%r11 = copy 0xff","goto $B2066"],"2066":["%r16 = add32.b0 (%r8:%r13:%r14:%r15) (0x2b:0x00:0x00:0x00)","%r17 = add32.b1 (%r8:%r9:%r14:%r15) (0x2b:0x00:0x00:0x00)","goto $B2067"],"2067":["%r24 = load.mem [0x0+%r16:%r17] lane=0","goto $B2068"],"2068":["putchar %r24","%r18 = add32.b0 (%r8:%r13:%r14:%r15) (0x01:0x00:0x00:0x00)","%r19 = add32.b1 (%r8:%r9:%r14:%r15) (0x01:0x00:0x00:0x00)","goto $B2069"],"2069":["%r24 = add32.b2 (%r8:%r9:%r10:%r15) (0x01:0x00:0x00:0x00)","%r25 = add32.b3 (%r8:%r9:%r10:%r11) (0x01:0x00:0x00:0x00)","goto $B2070"],"2070":["%r8 = copy %r18","%r9 = copy %r19","%r10 = copy %r24","%r11 = copy %r25","%r30 = ne  %r18 0x00","%r31 = ne  %r19 0x00","%r16 = ne  %r24 0x00","%r17 = ne  %r25 0x00","goto $B2071"],"2071":["%r18 = bool.or  %r30 %r31 %r16 %r17","branch %r18 $B2066 $B2082"],"2072":["%r19 = add32.b0 (%r4:%r17:%r18:%r19) (0x01:0x00:0x00:0x00)","%r24 = add32.b1 (%r4:%r5:%r18:%r19) (0x01:0x00:0x00:0x00)","%r25 = add32.b2 (%r4:%r5:%r6:%r19) (0x01:0x00:0x00:0x00)","%r26 = add32.b3 (%r4:%r5:%r6:%r7) (0x01:0x00:0x00:0x00)","goto $B2073"],"2073":["%r4 = copy %r19","%r5 = copy %r24","%r6 = copy %r25","%r7 = copy %r26","%r31 = ne  %r19 0x06","%r16 = ne  %r24 0x00","%r17 = ne  %r25 0x00","%r18 = ne  %r26 0x00","goto $B2074"],"2074":["%r19 = bool.or  %r31 %r16 %r17 %r18","branch %r19 $B2011 $B2075"],"2075":["%r8 = copy 0xf4","%r9 = copy 0xff","%r10 = copy 0xff","%r11 = copy 0xff","goto $B2076"],"2076":["%r17 = add32.b0 (%r8:%r13:%r14:%r15) (0x38:0x00:0x00:0x00)","%r18 = add32.b1 (%r8:%r9:%r14:%r15) (0x38:0x00:0x00:0x00)","goto $B2077"],"2077":["%r25 = load.mem [0x0+%r17:%r18] lane=0","goto $B2078"],"2078":["putchar %r25","%r19 = add32.b0 (%r8:%r13:%r14:%r15) (0x01:0x00:0x00:0x00)","%r24 = add32.b1 (%r8:%r9:%r14:%r15) (0x01:0x00:0x00:0x00)","goto $B2079"],"2079":["%r25 = add32.b2 (%r8:%r9:%r10:%r15) (0x01:0x00:0x00:0x00)","%r26 = add32.b3 (%r8:%r9:%r10:%r11) (0x01:0x00:0x00:0x00)","goto $B2080"],"2080":["%r8 = copy %r19","%r9 = copy %r24","%r10 = copy %r25","%r11 = copy %r26","%r31 = ne  %r19 0x00","%r16 = ne  %r24 0x00","%r17 = ne  %r25 0x00","%r18 = ne  %r26 0x00","goto $B2081"],"2081":["%r19 = bool.or  %r31 %r16 %r17 %r18","branch %r19 $B2076 $B2082"],"2082":["%r4 = add32.b0 (%r12:%r9:%r10:%r11) (0x20:0x00:0x00:0x00)","%r5 = add32.b1 (%r12:%r13:%r10:%r11) (0x20:0x00:0x00:0x00)","%r6 = add32.b2 (%r12:%r13:%r14:%r11) (0x20:0x00:0x00:0x00)","%r7 = add32.b3 (%r12:%r13:%r14:%r15) (0x20:0x00:0x00:0x00)","goto $B2083"],"2083":["global.set g0[0] %r4","global.set g0[1] %r5","global.set g0[2] %r6","global.set g0[3] %r7","exit (0x00:0x00:0x00:0x00)"]};
 
     function isNearScreenBottom() {
         return screenEl.scrollHeight - screenEl.clientHeight - screenEl.scrollTop <= followSlackPx;
@@ -897,6 +908,8 @@ Please try an up-to-date Chromium-based browser.
     }
 
     function formatSpeedLabel(value) {
+        if (value < 0.1) return `${value.toFixed(3)}x`;
+        if (value < 1) return `${value.toFixed(2)}x`;
         const rounded = Math.round(value * 100) / 100;
         return `${rounded.toFixed(rounded % 1 === 0 ? 0 : 2)}x`;
     }
@@ -919,6 +932,38 @@ Please try an up-to-date Chromium-based browser.
         }
         if (debugSpeedOut) {
             debugSpeedOut.textContent = formatSpeedLabel(speedMultiplier);
+        }
+        renderDebuggerOps(pc, style);
+    }
+
+    function annotateRegs(line, style) {
+        return line.replace(/%r(\d+)/g, (_, n) => {
+            const v = Number.parseInt(style.getPropertyValue(`--r${n}`), 10);
+            const hex = Number.isFinite(v) ? (v & 0xff).toString(16).padStart(2, "0") : "??";
+            return `%r${n}(0x${hex})`;
+        });
+    }
+
+    function renderDebuggerOps(pc, style) {
+        if (!debugOpsList) return;
+        const key = Number.isNaN(pc) ? null : String(pc);
+        if (debugOpsHead) {
+            debugOpsHead.textContent = key != null ? `PC ${key}` : "PC ?";
+        }
+        const ops = key != null ? debuggerCycles[key] : null;
+        debugOpsList.textContent = "";
+        if (!ops || ops.length === 0) {
+            const li = document.createElement("li");
+            li.className = "empty";
+            li.textContent = "(no operations)";
+            debugOpsList.appendChild(li);
+            return;
+        }
+        for (let i = 0; i < ops.length; i++) {
+            const li = document.createElement("li");
+            if (i === ops.length - 1) li.className = "term";
+            li.textContent = annotateRegs(ops[i], style);
+            debugOpsList.appendChild(li);
         }
     }
 
@@ -1010,9 +1055,13 @@ Please try an up-to-date Chromium-based browser.
                 <h2 class="wss-debug-title">Step Debugger</h2>
                 <button type="button" class="wss-debug-close" data-wss-debug-close="1">Close</button>
             </div>
+            <div class="wss-debug-ops">
+                <div class="wss-debug-ops-head" data-wss-debug-ops-head="1">PC ?</div>
+                <ul class="wss-debug-ops-list" data-wss-debug-ops="1"></ul>
+            </div>
             <label class="wss-debug-speed">
                 Clock Speed
-                <input class="wss-debug-range" type="range" min="${minSpeedMultiplier}" max="${maxSpeedMultiplier}" step="0.25" value="1" data-wss-debug-speed="1">
+                <input class="wss-debug-range" type="range" min="${minSpeedLog}" max="${maxSpeedLog}" step="0.01" value="0" data-wss-debug-speed="1">
                 <span class="wss-debug-speed-readout" data-wss-debug-speed-value="1">1x</span>
             </label>
             <div class="wss-debug-actions">
@@ -1036,6 +1085,8 @@ Please try an up-to-date Chromium-based browser.
         debugStateOut = popup.querySelector("[data-wss-debug-state='1']");
         debugPcOut = popup.querySelector("[data-wss-debug-pc='1']");
         debugClockOut = popup.querySelector("[data-wss-debug-clock='1']");
+        debugOpsList = popup.querySelector("[data-wss-debug-ops='1']");
+        debugOpsHead = popup.querySelector("[data-wss-debug-ops-head='1']");
         if (!(speedInput instanceof HTMLInputElement) || !closeBtn || !debugRunBtn || !debugStepBtn) {
             return;
         }
@@ -1047,7 +1098,8 @@ Please try an up-to-date Chromium-based browser.
             popup.hidden = true;
         });
         speedInput.addEventListener("input", () => {
-            speedMultiplier = clampSpeed(Number.parseFloat(speedInput.value));
+            const logValue = Number.parseFloat(speedInput.value);
+            speedMultiplier = clampSpeed(Math.pow(10, logValue));
             if (debugSpeedOut) {
                 debugSpeedOut.textContent = formatSpeedLabel(speedMultiplier);
             }
