@@ -744,6 +744,9 @@ impl<'a> Emitter<'a> {
         let _ = writeln!(out, " --_1fb: var(--_2fb, \"\");");
         let _ = writeln!(out, " --_1ra: var(--_2ra, \"0x00000000\");");
 
+        let mut slot_consts = MemSlotConsts::default();
+        slot_consts.ms_val.resize(self.max_mem_store_slots, None);
+        slot_consts.ms_val_b.resize(self.max_mem_store_slots, None);
         for s in 0..self.max_mem_store_slots {
             Self::emit_if_or_fallback(out, &format!("--msc{}", s), &ms_cell_arms[s], "-1");
             Self::emit_if_or_fallback(out, &format!("--msp{}", s), &ms_par_arms[s], "-1");
@@ -753,7 +756,10 @@ impl<'a> Emitter<'a> {
             Self::emit_if_or_fallback(out, &format!("--msp{}b", s), &ms_par_arms_b[s], "-1");
             Self::emit_if_or_fallback(out, &format!("--msv{}b", s), &ms_val_arms_b[s], "0");
             Self::emit_if_or_fallback(out, &format!("--mso{}b", s), &ms_ok_arms_b[s], "0");
+            slot_consts.ms_val[s] = Self::arms_active_constant(&ms_val_arms[s], "0");
+            slot_consts.ms_val_b[s] = Self::arms_active_constant(&ms_val_arms_b[s], "0");
         }
+        let _ = self.mem_slot_consts.set(slot_consts);
         Self::emit_partitioned_active_flag(out, "--mw_active", &mw_active_pcs);
 
         if self.max_mem_store_slots > 0 {
@@ -1903,6 +1909,58 @@ impl<'a> Emitter<'a> {
             1 => nz.into_iter().next().unwrap(),
             _ => format!("calc({})", nz.join(" + ")),
         }
+    }
+
+    /// Returns Some(K) when every dispatch arm in `arms` has the same integer
+    /// literal value K. Returns Some(fallback) if `arms` is empty (the slot
+    /// is never written) and the fallback parses as an integer. Otherwise
+    /// returns None. Only considers literal values — arms with calc/var
+    /// expressions disqualify the slot.
+    pub(super) fn arms_active_constant(arms: &str, fallback: &str) -> Option<String> {
+        let mut common: Option<String> = None;
+        let mut saw_arm = false;
+        let bytes = arms.as_bytes();
+        let mut start = 0usize;
+        let mut depth = 0i32;
+        let mut i = 0usize;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'(' => depth += 1,
+                b')' => depth -= 1,
+                b';' if depth == 0 => {
+                    let arm = arms[start..i].trim();
+                    if !arm.is_empty() {
+                        saw_arm = true;
+                        let value_start = arm.rfind("): ").map(|idx| idx + 3);
+                        let val = match value_start {
+                            Some(p) => arm[p..].trim(),
+                            None => return None,
+                        };
+                        if val.parse::<i64>().is_err() {
+                            return None;
+                        }
+                        match &common {
+                            None => common = Some(val.to_string()),
+                            Some(c) if c == val => {}
+                            _ => return None,
+                        }
+                    }
+                    i += 1;
+                    while i < bytes.len() && bytes[i] == b' ' {
+                        i += 1;
+                    }
+                    start = i;
+                    continue;
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        if !saw_arm {
+            let fb = fallback.trim();
+            return fb.parse::<i64>().ok().map(|_| fb.to_string());
+        }
+        common
     }
 
     /// Folds `mod(value, modulus)` when both arguments are integer literals,
