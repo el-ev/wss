@@ -35,7 +35,6 @@ const VIS_SHADOW_CHUNK: usize = 8;
 const VIS_COLS: usize = 128;
 const MEM_DIRTY_PAGE_CELLS: usize = 16;
 const CALLSTACK_DIRTY_PAGE_CELLS: usize = 16;
-const ACTIVE_FLAG_ARMS_CHUNK: usize = 64;
 const COP_OP_NONE: u8 = 0;
 // TODO(i64): exit-code display currently formats return values as 32-bit hex words.
 pub(super) const DEFAULT_RA_DISPLAY: &str = "0x00000000";
@@ -191,6 +190,7 @@ keep_pairs! {
         (FN_NE, "FN_NE"),
         (FN_LT, "FN_LT"),
         (FN_GE, "FN_GE"),
+        (FN_INRANGE, "FN_INRANGE"),
         (FN_ADDR16, "FN_ADDR16"),
         (FN_MHALF, "FN_MHALF"),
         (FN_MPAR, "FN_MPAR"),
@@ -241,6 +241,7 @@ bitflags! {
         const MEM_VISUALIZER = 1 << 17;
         const CS_VISUALIZER = 1 << 18;
         const FN_GE = 1 << 19;
+        const FN_INRANGE = 1 << 20;
     }
 }
 
@@ -329,6 +330,7 @@ struct Emitter<'a> {
     global_init: Vec<u32>,
     uses_exceptions: bool,
     uses_exc_payload: bool,
+    uses_bitcount: bool,
     max_mem_store_slots: usize,
     max_mem_read_slots: usize,
     max_mem_addr_slots: usize,
@@ -347,6 +349,10 @@ pub fn emit_program(program: &Ir8Program, config: EmitConfig) -> anyhow::Result<
     emitter.emit_properties(&mut props_css);
     emitter.emit_logic(&mut logic_css);
     emitter.emit_support(&mut support_css);
+
+    let mut group_arms = String::new();
+    Emitter::dedupe_pc_groups(&mut logic_css, &mut props_css, &mut group_arms);
+    logic_css.push_str(&group_arms);
 
     let html = replace_placeholder_once(BASE_HTML, PROPS_PLACEHOLDER, &props_css)?;
     let html = replace_placeholder_once(&html, LOGIC_PLACEHOLDER, &logic_css)?;
@@ -508,6 +514,7 @@ impl<'a> Emitter<'a> {
             global_init,
             uses_exceptions,
             uses_exc_payload,
+            uses_bitcount: Self::scan_uses_bitcount(program),
             max_mem_store_slots,
             max_mem_read_slots,
             max_mem_addr_slots,
@@ -565,6 +572,18 @@ impl<'a> Emitter<'a> {
 
     fn staged_global_lane_name(stage: u8, global_idx: u32, lane: u8) -> String {
         format!("--_{}{}_{}", stage, Self::global_name(global_idx), lane)
+    }
+
+    fn scan_uses_bitcount(program: &Ir8Program) -> bool {
+        program.cycles.iter().any(|cycle| {
+            matches!(
+                cycle.terminator,
+                Terminator8::CallSetup {
+                    callee_entry: CallTarget::Builtin(BuiltinId::Clz32 | BuiltinId::Ctz32),
+                    ..
+                }
+            )
+        })
     }
 
     fn scan_uses_callstack(program: &Ir8Program) -> bool {
@@ -693,6 +712,7 @@ impl<'a> Emitter<'a> {
             features |= TemplateFeatures::SP_INDICATOR;
             features |= TemplateFeatures::CS_VISUALIZER;
             features |= TemplateFeatures::FN_GE;
+            features |= TemplateFeatures::FN_INRANGE;
         }
 
         features
@@ -786,6 +806,7 @@ impl<'a> Emitter<'a> {
         section!(f.contains(TemplateFeatures::FN_NE), FN_NE);
         section!(f.contains(TemplateFeatures::FN_LT), FN_LT);
         section!(f.contains(TemplateFeatures::FN_GE), FN_GE);
+        section!(f.contains(TemplateFeatures::FN_INRANGE), FN_INRANGE);
         section!(f.contains(TemplateFeatures::FN_ADDR16), FN_ADDR16);
         section!(f.contains(TemplateFeatures::FN_MHALF), FN_MHALF);
         section!(f.contains(TemplateFeatures::FN_MPAR), FN_MPAR);

@@ -209,8 +209,11 @@ body { margin: 0; background: #f5f5f5; font-family: ui-monospace, SFMono-Regular
 @function --lt(--a <number>, --b <number>) returns <integer> { result: round(down, calc((1 - sign(calc(var(--a) - var(--b)))) / 2)); }
 /*__WSS_KEEP_FN_LT_END__*/
 /*__WSS_KEEP_FN_GE_START__*/
-@function --ge(--a <number>, --b <number>) returns <integer> { result: round(down, calc((1 + sign(calc(var(--a) - var(--b) + 0.5))) / 2)); }
+@function --ge(--a <number>, --b <number>) returns <integer> { result: calc(1 - --lt(var(--a), var(--b))); }
 /*__WSS_KEEP_FN_GE_END__*/
+/*__WSS_KEEP_FN_INRANGE_START__*/
+@function --inrange(--x <number>, --k <number>) returns <integer> { result: calc(--lt(-1, var(--x)) * --lt(var(--x), var(--k))); }
+/*__WSS_KEEP_FN_INRANGE_END__*/
 /*__WSS_KEEP_FN_ADDR16_START__*/
 @function --addr16(--lo <number>, --hi <number>, --imm <number>) returns <integer> { result: round(down, calc(var(--imm) + var(--lo) + 256 * var(--hi))); }
 /*__WSS_KEEP_FN_ADDR16_END__*/
