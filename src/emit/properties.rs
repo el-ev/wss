@@ -10,6 +10,7 @@ impl<'a> Emitter<'a> {
 
     pub(super) fn emit_properties(&self, out: &mut String) {
         let _ = writeln!(out, "{}", Self::prop("--pc", self.entry_pc));
+        let _ = writeln!(out, "{}", Self::prop("--trap_pc", 0));
         let _ = writeln!(out, "{}", Self::prop("--wait_input", 0));
         if self.js_coprocessor {
             let _ = writeln!(out, "{}", Self::prop("--cop_op", 0));

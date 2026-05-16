@@ -13,6 +13,7 @@ impl<'a> Emitter<'a> {
         let mut r_arms = vec![String::new(); nr];
         let mut g_arms: BTreeMap<(u32, u8), String> = BTreeMap::new();
         let mut pc_arms = String::new();
+        let mut trap_pc_arms = String::new();
         let mut wait_input_arms = String::new();
         let mut fb_arms = String::new();
         let mut ra_arms = String::new();
@@ -498,11 +499,17 @@ impl<'a> Emitter<'a> {
             Self::dedupe_bounds_checks(&mut trap_mem_parts);
             let trap_mem = Self::clamp_sum_or_zero(&trap_mem_parts);
 
+            // Build the per-cycle trap PC value. Traps used to be folded into
+            // pc_expr via nested --sel calls (one wrap per trap kind); now we
+            // keep pc_expr trap-free and emit the trap PC into a dedicated
+            // --trap_pc arm. Priority matches the original wrap order:
+            // callstack trap > memory trap, so cs is selected last (outer).
+            let mut cycle_trap_pc = "0".to_string();
             if trap_mem != "0" {
-                term.pc_expr = Self::sel_expr(
+                cycle_trap_pc = Self::sel_expr(
                     &trap_mem,
                     &TrapCode::InvalidMemoryAccess.pc().to_string(),
-                    &term.pc_expr,
+                    &cycle_trap_pc,
                 );
             }
             term.trap_expr = match (term.trap_expr.as_str(), trap_mem.as_str()) {
@@ -517,10 +524,10 @@ impl<'a> Emitter<'a> {
                 let trap_cs = Self::clamp_sum_or_zero(&trap_cs_parts);
 
                 if trap_cs != "0" {
-                    term.pc_expr = Self::sel_expr(
+                    cycle_trap_pc = Self::sel_expr(
                         &trap_cs,
                         &TrapCode::CallstackOverflow.pc().to_string(),
-                        &term.pc_expr,
+                        &cycle_trap_pc,
                     );
                 }
                 term.trap_expr = match (term.trap_expr.as_str(), trap_cs.as_str()) {
@@ -532,6 +539,13 @@ impl<'a> Emitter<'a> {
             }
 
             if has_getchar {
+                // Suppress traps while waiting for input: the original wrap
+                // order had getchar wrapping the trap-wrapped pc_expr, so a
+                // trap whose pc-side condition fired during a wait was
+                // overridden by `current_pc`. Mirror that here for trap_pc.
+                if cycle_trap_pc != "0" {
+                    cycle_trap_pc = Self::sel_expr(&getchar_ready, &cycle_trap_pc, "0");
+                }
                 term.pc_expr = Self::sel_expr(&getchar_ready, &term.pc_expr, &format!("{}", pc));
                 let _ = write!(
                     wait_input_arms,
@@ -540,9 +554,12 @@ impl<'a> Emitter<'a> {
                 );
             }
 
+            if cycle_trap_pc != "0" {
+                let _ = write!(trap_pc_arms, "style(--_1pc: {}): {}; ", pc, cycle_trap_pc);
+            }
+
             let fallthrough_pc_expr = format!("{}", pc.saturating_add(1));
-            let is_trivial_fallthrough =
-                term.trap_expr == "0" && term.pc_expr == fallthrough_pc_expr;
+            let is_trivial_fallthrough = term.pc_expr == fallthrough_pc_expr;
             if !is_trivial_fallthrough {
                 let _ = write!(pc_arms, "style(--_1pc: {}): {}; ", pc, term.pc_expr);
             }
@@ -813,7 +830,29 @@ impl<'a> Emitter<'a> {
         }
 
         let pc_fallback = "--sel(--lt(var(--_1pc), 0), var(--_1pc), calc(var(--_1pc) + 1))";
-        Self::emit_if_or_fallback(out, "--pc", &pc_arms, pc_fallback);
+        if !trap_pc_arms.is_empty() {
+            // Aggregate every cycle's trap PC into a single property so the
+            // bounds predicates only need to be evaluated when --pc is read,
+            // and so identical predicates across cycles can dedupe via
+            // dedupe_pc_groups instead of being inlined into each --pc arm.
+            Self::emit_if_or_fallback(out, "--trap_pc", &trap_pc_arms, "0");
+            // Short-circuit on traps: when --trap_pc is non-zero, use it
+            // directly; otherwise fall through to the regular per-PC dispatch.
+            // `if(style(--trap_pc: 0): ...)` lets the engine skip evaluating
+            // the normal pc_arms branch when a trap fired this cycle.
+            let normal_pc = if pc_arms.is_empty() {
+                pc_fallback.to_string()
+            } else {
+                format!("if({}else: {})", pc_arms, pc_fallback)
+            };
+            let _ = writeln!(
+                out,
+                " --pc: if(style(--trap_pc: 0): {}; else: var(--trap_pc));",
+                normal_pc
+            );
+        } else {
+            Self::emit_if_or_fallback(out, "--pc", &pc_arms, pc_fallback);
+        }
         Self::emit_if_or_fallback(out, "--wait_input", &wait_input_arms, "0");
         if self.uses_callstack {
             Self::emit_if_or_fallback(out, "--cs_sp", &cs_sp_arms, "var(--_1cs_sp)");
