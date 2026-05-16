@@ -8,18 +8,12 @@ impl<'a> Emitter<'a> {
                 .filter(move |code| uses_callstack || *code != TrapCode::CallstackOverflow)
         }
 
-        out.push_str("@function --pow2(--s <integer>) returns <number> { result: if(");
-        // TODO(i64): pow2 lookup is currently capped for 32-bit bit-manipulation helpers.
-        for s in 0..=32u32 {
-            let v = 1u64 << s;
-            let _ = write!(out, "style(--s: {}): {}; ", s, v);
-        }
-        out.push_str("else: 1); }\n");
-
         self.emit_i2char(out);
         self.emit_hex_digit(out);
-        self.emit_byte_clz_lookup(out);
-        self.emit_byte_ctz_lookup(out);
+        if self.uses_bitcount {
+            self.emit_byte_clz_lookup(out);
+            self.emit_byte_ctz_lookup(out);
+        }
 
         let mem_shadow = self
             .mem_names
@@ -87,29 +81,16 @@ impl<'a> Emitter<'a> {
         }
         out.push_str("else: #222); display: block; flex: 0 0 auto; }\n");
 
-        for code in &codes {
-            if *code == TrapCode::Exited {
-                let _ = writeln!(
-                    out,
-                    "@container style(--pc: {}) {{ .screen::after {{ content: var(--fb, \"\") \"\\a[Program exited with code \" var(--ra, \"{}\") \"]\"; }} }}",
-                    code.pc(),
-                    DEFAULT_RA_DISPLAY
-                );
-                continue;
-            }
+        if !codes.is_empty() {
+            let cond = codes
+                .iter()
+                .map(|code| format!("style(--pc: {})", code.pc()))
+                .collect::<Vec<_>>()
+                .join(" or ");
             let _ = writeln!(
                 out,
-                "@container style(--pc: {}) {{ .screen::after {{ content: var(--fb, \"\") \"\\a[{}]\"; color: #d00; }} }}",
-                code.pc(),
-                code.screen_label().unwrap_or("")
-            );
-        }
-
-        for code in &codes {
-            let _ = writeln!(
-                out,
-                ".clk:has(.terminal) {{ @container style(--pc: {}) {{ .terminal {{ animation-play-state: paused, paused !important; }} }} }}",
-                code.pc()
+                ".clk:has(.terminal) {{ @container {} {{ .terminal {{ animation-play-state: paused, paused !important; }} }} }}",
+                cond
             );
         }
     }
@@ -298,9 +279,9 @@ impl<'a> Emitter<'a> {
                 let y = (i / mem_cols) * 8 + 8;
                 let name = &self.mem_names[i / 2];
                 let byte = if i % 2 == 0 {
-                    format!("mod(var({}), 256)", name)
+                    format!("--mlo(var({}))", name)
                 } else {
-                    format!("calc(var({}) / 256)", name)
+                    format!("--mhi(var({}))", name)
                 };
                 format!("{}px {}px rgb({}, {}, {})", x, y, byte, byte, byte)
             })
@@ -354,9 +335,9 @@ impl<'a> Emitter<'a> {
                 let y = (i / cs_cols) * 8 + 8;
                 let name = &self.cs_names[i / 2];
                 let byte = if i % 2 == 0 {
-                    format!("mod(var({}), 256)", name)
+                    format!("--mlo(var({}))", name)
                 } else {
-                    format!("calc(var({}) / 256)", name)
+                    format!("--mhi(var({}))", name)
                 };
                 format!("{}px {}px rgb({}, {}, {})", x, y, byte, byte, byte)
             })
@@ -443,8 +424,8 @@ impl<'a> Emitter<'a> {
     }
 
     pub(super) fn merge_word_expr_for_cell(&self, cell_expr: &str, prev_word: &str) -> String {
-        let lo_prev = format!("mod(({}), 256)", prev_word);
-        let hi_prev = format!("mod(round(down, calc(({}) / 256)), 256)", prev_word);
+        let lo_prev = format!("--mlo({})", prev_word);
+        let hi_prev = format!("--mhi({})", prev_word);
         let lo = self.merge_byte_expr_for_cell(cell_expr, 0, &lo_prev);
         let hi = self.merge_byte_expr_for_cell(cell_expr, 1, &hi_prev);
         format!("calc(({}) + 256 * ({}))", lo, hi)
@@ -474,14 +455,8 @@ impl<'a> Emitter<'a> {
             let is_lo = format!("--eqz(var(--csp{}))", s);
             let is_hi = format!("--eq1(var(--csp{}))", s);
 
-            let lo_cond = format!(
-                "calc(({}) * min(1, calc(({}) + ({}))))",
-                same_slot, is_lo, is_word
-            );
-            let hi_cond = format!(
-                "calc(({}) * min(1, calc(({}) + ({}))))",
-                same_slot, is_hi, is_word
-            );
+            let lo_cond = format!("calc(({}) * (({}) + ({})))", same_slot, is_lo, is_word);
+            let hi_cond = format!("calc(({}) * (({}) + ({})))", same_slot, is_hi, is_word);
 
             let lo_val = format!(
                 "calc(({}) * --mlo(var(--csv{})) + (1 - ({})) * var(--csv{}))",
@@ -530,6 +505,77 @@ impl<'a> Emitter<'a> {
         }
     }
 
+    /// Collapses sequential bounds checks against the same base variable:
+    /// for `--ge(<base> [+ I], K)` keeps the largest I (it implies the smaller);
+    /// for `--lt(<base> [+ I], 0)` keeps the smallest I (it implies the larger).
+    /// `<base>` matches either `var(--name)` (I=0) or `calc(var(--name) + I)`.
+    pub(super) fn dedupe_bounds_checks(parts: &mut Vec<String>) {
+        use std::collections::HashMap;
+        let parse = |s: &str| -> Option<(&'static str, String, String, i64)> {
+            let (cmp, rest) = if let Some(r) = s.strip_prefix("--ge(") {
+                ("ge", r)
+            } else if let Some(r) = s.strip_prefix("--lt(") {
+                ("lt", r)
+            } else {
+                return None;
+            };
+            let close = rest.rfind(", ")?;
+            let inner = &rest[..close];
+            let limit = rest[close + 2..].strip_suffix(')')?.trim().to_string();
+            let (base, imm) = if let Some(t) = inner.strip_prefix("var(") {
+                let name = t.strip_suffix(')')?;
+                (name.to_string(), 0i64)
+            } else if let Some(t) = inner.strip_prefix("calc(var(") {
+                let close_paren = t.find(')')?;
+                let name = &t[..close_paren];
+                let after = &t[close_paren + 1..];
+                let body = after.strip_suffix(')')?;
+                let imm = if let Some(p) = body.strip_prefix(" + ") {
+                    p.parse::<i64>().ok()?
+                } else if let Some(p) = body.strip_prefix(" - ") {
+                    -p.parse::<i64>().ok()?
+                } else {
+                    return None;
+                };
+                (name.to_string(), imm)
+            } else {
+                return None;
+            };
+            Some((cmp, base, limit, imm))
+        };
+
+        let mut extreme: HashMap<(&'static str, String, String), i64> = HashMap::new();
+        for part in parts.iter() {
+            if let Some((cmp, base, limit, imm)) = parse(part) {
+                let key = (cmp, base, limit);
+                extreme
+                    .entry(key)
+                    .and_modify(|m| {
+                        let take = if cmp == "ge" { imm > *m } else { imm < *m };
+                        if take {
+                            *m = imm;
+                        }
+                    })
+                    .or_insert(imm);
+            }
+        }
+        if extreme.is_empty() {
+            return;
+        }
+        let mut seen: std::collections::HashSet<(&'static str, String, String)> =
+            std::collections::HashSet::new();
+        parts.retain(|part| match parse(part) {
+            Some((cmp, base, limit, imm)) => {
+                let key = (cmp, base, limit);
+                if Some(&imm) != extreme.get(&key) {
+                    return false;
+                }
+                seen.insert(key)
+            }
+            None => true,
+        });
+    }
+
     pub(super) fn dirty_page_expr(&self, page: usize) -> String {
         if self.max_mem_store_slots == 0 {
             return "0".to_string();
@@ -566,13 +612,159 @@ impl<'a> Emitter<'a> {
         Self::clamp_sum_or_zero(&terms)
     }
 
+    /// Finds long `style(--_1pc: N) or style(--_1pc: M) or ...` chains that
+    /// appear multiple times in `logic` and replaces them with
+    /// `style(--gK: 1)` indicator-property references, emitting the
+    /// corresponding `@property --gK` declaration into `props` and the
+    /// indicator's arm definition into `init_arms`.
+    pub(super) fn dedupe_pc_groups(logic: &mut String, props: &mut String, init_arms: &mut String) {
+        // 1. Scan logic for all maximal `style(--_1pc: N) or style(--_1pc: M) or ...`
+        //    chains. Group by exact-string identity, count occurrences.
+        use std::collections::HashMap;
+        let mut counts: HashMap<String, usize> = HashMap::new();
+        let mut i = 0usize;
+        while i < logic.len() {
+            if let Some(end) = Self::match_pc_chain(logic, i)
+                && logic[i..end].contains(" or ")
+            {
+                *counts.entry(logic[i..end].to_string()).or_insert(0) += 1;
+                i = end;
+            } else {
+                i += 1;
+            }
+        }
+
+        // 2. Select profitable chains: K * (L - replacement_len) > arm_overhead + L.
+        let mut groups: Vec<(String, String)> = Vec::new();
+        let mut next_id = 0usize;
+        let mut entries: Vec<(String, usize)> = counts.into_iter().collect();
+        entries.sort_by_key(|(chain, _)| std::cmp::Reverse(chain.len()));
+        for (chain, count) in entries {
+            let l = chain.len();
+            let replacement_len = 16usize;
+            let arm_overhead = 110usize;
+            let savings = count.saturating_mul(l.saturating_sub(replacement_len));
+            if count >= 2 && savings > arm_overhead + l {
+                let name = format!("--pcg{}", next_id);
+                next_id += 1;
+                groups.push((chain, name));
+            }
+        }
+
+        for (chain, name) in &groups {
+            let _ = writeln!(
+                props,
+                "@property {} {{ syntax: \"<integer>\"; initial-value: 0; inherits: true; }}",
+                name
+            );
+            let _ = writeln!(init_arms, " {}: if({}: 1; else: 0);", name, chain);
+            *logic = logic.replace(chain, &format!("style({}: 1)", name));
+        }
+    }
+
+    /// Returns the byte index just past the longest `style(--_1pc: N) or
+    /// style(--_1pc: M) or ...` chain starting at byte `start`, or `None`
+    /// when no chain starts there. The chain may be a single
+    /// `style(--_1pc: N)`; the caller filters to require at least one `or`.
+    fn match_pc_chain(s: &str, start: usize) -> Option<usize> {
+        let mut end = Self::match_pc_atom(s, start)?;
+        loop {
+            let bridge = " or ";
+            if s[end..].starts_with(bridge) {
+                let next_start = end + bridge.len();
+                if let Some(after) = Self::match_pc_atom(s, next_start) {
+                    end = after;
+                    continue;
+                }
+            }
+            return Some(end);
+        }
+    }
+
+    fn match_pc_atom(s: &str, start: usize) -> Option<usize> {
+        let prefix = "style(--_1pc: ";
+        if !s[start..].starts_with(prefix) {
+            return None;
+        }
+        let bytes = s.as_bytes();
+        let mut p = start + prefix.len();
+        let digit_start = p;
+        while p < bytes.len() && bytes[p].is_ascii_digit() {
+            p += 1;
+        }
+        if p == digit_start || p >= bytes.len() || bytes[p] != b')' {
+            return None;
+        }
+        Some(p + 1)
+    }
+
     pub(super) fn if_or_fallback_decl(name: &str, arms: &str, fallback: &str) -> String {
         let pruned = Self::prune_redundant_arms(arms, fallback);
-        if pruned.is_empty() {
+        let merged = Self::merge_arms_by_value(&pruned);
+        if merged.is_empty() {
             format!(" {}: {};", name, fallback)
         } else {
-            format!(" {}: if({}else: {});", name, pruned, fallback)
+            format!(" {}: if({}else: {});", name, merged, fallback)
         }
+    }
+
+    fn merge_arms_by_value(arms: &str) -> String {
+        if arms.is_empty() {
+            return String::new();
+        }
+        let mut parsed: Vec<(String, String)> = Vec::new();
+        let bytes = arms.as_bytes();
+        let mut start = 0usize;
+        let mut depth = 0i32;
+        let mut i = 0usize;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'(' => depth += 1,
+                b')' => depth -= 1,
+                b';' if depth == 0 => {
+                    let arm = arms[start..i].trim();
+                    if let Some(idx) = arm.rfind("): ") {
+                        let cond = arm[..=idx].trim().to_string();
+                        let value = arm[idx + 3..].trim().to_string();
+                        parsed.push((cond, value));
+                    } else if !arm.is_empty() {
+                        // Unrecognized shape; bail out and keep arms verbatim.
+                        return arms.to_string();
+                    }
+                    i += 1;
+                    while i < bytes.len() && bytes[i] == b' ' {
+                        i += 1;
+                    }
+                    start = i;
+                    continue;
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        if parsed.is_empty() {
+            return String::new();
+        }
+        let mut order: Vec<String> = Vec::new();
+        let mut groups: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
+        for (cond, value) in parsed {
+            if !groups.contains_key(&value) {
+                order.push(value.clone());
+            }
+            groups.entry(value).or_default().push(cond);
+        }
+        let mut out = String::new();
+        for value in order {
+            let conds = groups
+                .get(&value)
+                .expect("value was inserted via order push");
+            out.push_str(&conds.join(" or "));
+            out.push_str(": ");
+            out.push_str(&value);
+            out.push_str("; ");
+        }
+        out
     }
 
     fn prune_redundant_arms(arms: &str, fallback: &str) -> String {
@@ -623,38 +815,6 @@ impl<'a> Emitter<'a> {
 
     pub(super) fn emit_if_or_fallback(out: &mut String, name: &str, arms: &str, fallback: &str) {
         let _ = writeln!(out, "{}", Self::if_or_fallback_decl(name, arms, fallback));
-    }
-
-    pub(super) fn emit_partitioned_active_flag(out: &mut String, name: &str, pcs: &[u16]) {
-        if pcs.is_empty() {
-            let _ = writeln!(out, " {}: 0;", name);
-            return;
-        }
-        let arms_for = |chunk: &[u16]| {
-            chunk
-                .iter()
-                .map(|pc| format!("style(--_1pc: {}): 1; ", pc))
-                .collect::<String>()
-        };
-        if pcs.len() <= ACTIVE_FLAG_ARMS_CHUNK {
-            let arms = arms_for(pcs);
-            Self::emit_if_or_fallback(out, name, &arms, "0");
-            return;
-        }
-
-        let mut parts = Vec::new();
-        for (chunk_idx, chunk) in pcs.chunks(ACTIVE_FLAG_ARMS_CHUNK).enumerate() {
-            let part_name = format!("{}p{}", name, chunk_idx);
-            parts.push(part_name.clone());
-            let arms = arms_for(chunk);
-            Self::emit_if_or_fallback(out, &part_name, &arms, "0");
-        }
-        let joined = parts
-            .iter()
-            .map(|n| format!("var({})", n))
-            .collect::<Vec<_>>()
-            .join(" + ");
-        let _ = writeln!(out, " {}: min(1, calc({}));", name, joined);
     }
 
     pub(super) fn emit_chunked_prefixed(

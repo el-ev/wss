@@ -23,8 +23,6 @@ impl<'a> Emitter<'a> {
         let mut exc_flag_arms = String::new();
         let mut exc_tag_arms: [String; 4] = Default::default();
         let mut exc_payload_arms: [String; 4] = Default::default();
-        let mut mw_active_pcs = Vec::new();
-        let mut csw_active_pcs = Vec::new();
 
         let mut ms_cell_arms = vec![String::new(); self.max_mem_store_slots];
         let mut ms_par_arms = vec![String::new(); self.max_mem_store_slots];
@@ -46,9 +44,12 @@ impl<'a> Emitter<'a> {
         let mut csr_ok_arms = vec![String::new(); self.max_cs_read_slots];
         let mut mb_arms = vec![String::new(); self.max_mem_addr_slots];
 
+        let global_bool_regs = Self::collect_bool_regs(self.program);
+
         for cycle in &self.program.cycles {
             let pc = cycle.pc.index();
             let mut reg_now = HashMap::new();
+            let mut bool_regs: std::collections::HashSet<u16> = global_bool_regs.clone();
             let mut addr_counts: HashMap<crate::ir8::Addr, usize> = HashMap::new();
             for op in &cycle.ops {
                 match op.kind {
@@ -81,6 +82,9 @@ impl<'a> Emitter<'a> {
                     Inst8Kind::Copy(s) => {
                         if let Some(dst) = op.dst {
                             reg_now.insert(dst.expect_vreg(), Self::val_expr(&reg_now, *s));
+                            if Self::val_is_bool(&bool_regs, *s) {
+                                bool_regs.insert(dst.expect_vreg());
+                            }
                         }
                     }
                     Inst8Kind::Add32Byte { lhs, rhs, lane } => {
@@ -105,6 +109,7 @@ impl<'a> Emitter<'a> {
                                 dst.expect_vreg(),
                                 Self::sub32_borrow_expr(&reg_now, *lhs, *rhs),
                             );
+                            bool_regs.insert(dst.expect_vreg());
                         }
                     }
                     Inst8Kind::Add(l, r) => {
@@ -197,6 +202,7 @@ impl<'a> Emitter<'a> {
                                     &Self::val_expr(&reg_now, *r),
                                 ),
                             );
+                            bool_regs.insert(dst.expect_vreg());
                         }
                     }
                     Inst8Kind::Ne(l, r) => {
@@ -208,6 +214,7 @@ impl<'a> Emitter<'a> {
                                     &Self::val_expr(&reg_now, *r),
                                 ),
                             );
+                            bool_regs.insert(dst.expect_vreg());
                         }
                     }
                     Inst8Kind::LtU(l, r) => {
@@ -220,6 +227,7 @@ impl<'a> Emitter<'a> {
                                     Self::val_expr(&reg_now, *r)
                                 ),
                             );
+                            bool_regs.insert(dst.expect_vreg());
                         }
                     }
                     Inst8Kind::GeU(l, r) => {
@@ -232,6 +240,7 @@ impl<'a> Emitter<'a> {
                                     Self::val_expr(&reg_now, *r)
                                 ),
                             );
+                            bool_regs.insert(dst.expect_vreg());
                         }
                     }
                     Inst8Kind::BoolAnd(bool_op) => {
@@ -240,6 +249,7 @@ impl<'a> Emitter<'a> {
                                 dst.expect_vreg(),
                                 Self::bool_nary_expr(&reg_now, bool_op, true),
                             );
+                            bool_regs.insert(dst.expect_vreg());
                         }
                     }
                     Inst8Kind::BoolOr(bool_op) => {
@@ -248,14 +258,19 @@ impl<'a> Emitter<'a> {
                                 dst.expect_vreg(),
                                 Self::bool_nary_expr(&reg_now, bool_op, false),
                             );
+                            bool_regs.insert(dst.expect_vreg());
                         }
                     }
                     Inst8Kind::BoolNot(s) => {
                         if let Some(dst) = op.dst {
-                            reg_now.insert(
-                                dst.expect_vreg(),
-                                format!("calc(1 - min(1, {}))", Self::val_expr(&reg_now, *s)),
-                            );
+                            let inner = Self::val_expr(&reg_now, *s);
+                            let body = if Self::val_is_bool(&bool_regs, *s) {
+                                inner
+                            } else {
+                                format!("min(1, {})", inner)
+                            };
+                            reg_now.insert(dst.expect_vreg(), format!("calc(1 - {})", body));
+                            bool_regs.insert(dst.expect_vreg());
                         }
                     }
                     Inst8Kind::Sel(c, l, r) => {
@@ -480,6 +495,7 @@ impl<'a> Emitter<'a> {
 
             let mut term = self.emit_terminator(cycle, &mut reg_now, loaded_pc_expr);
 
+            Self::dedupe_bounds_checks(&mut trap_mem_parts);
             let trap_mem = Self::clamp_sum_or_zero(&trap_mem_parts);
 
             if trap_mem != "0" {
@@ -497,6 +513,7 @@ impl<'a> Emitter<'a> {
             };
 
             if self.uses_callstack {
+                Self::dedupe_bounds_checks(&mut trap_cs_parts);
                 let trap_cs = Self::clamp_sum_or_zero(&trap_cs_parts);
 
                 if trap_cs != "0" {
@@ -575,9 +592,6 @@ impl<'a> Emitter<'a> {
             }
 
             let mem_stores = Self::pair_mem_stores(mem_stores_raw);
-            if !mem_stores.is_empty() {
-                mw_active_pcs.push(pc);
-            }
             for s in 0..self.max_mem_store_slots {
                 if let Some(ms) = mem_stores.get(s) {
                     let _ = write!(
@@ -609,9 +623,6 @@ impl<'a> Emitter<'a> {
             }
 
             if self.uses_callstack {
-                if !cs_stores.is_empty() {
-                    csw_active_pcs.push(pc);
-                }
                 for s in 0..self.max_cs_store_slots {
                     if let Some(cs) = cs_stores.get(s) {
                         let _ = write!(csw_idx_arms[s], "style(--_1pc: {}): {}; ", pc, cs.idx);
@@ -753,7 +764,6 @@ impl<'a> Emitter<'a> {
             slot_consts.ms_val_b[s] = Self::arms_active_constant(&ms_val_arms_b[s], "0");
         }
         let _ = self.mem_slot_consts.set(slot_consts);
-        Self::emit_partitioned_active_flag(out, "--mw_active", &mw_active_pcs);
 
         if self.max_mem_store_slots > 0 {
             for page in 0..self.page_count() {
@@ -786,12 +796,13 @@ impl<'a> Emitter<'a> {
                 Self::emit_if_or_fallback(out, &format!("--csv{}", s), &csw_val_arms[s], "0");
                 Self::emit_if_or_fallback(out, &format!("--cso{}", s), &csw_ok_arms[s], "0");
             }
-            Self::emit_partitioned_active_flag(out, "--csw_active", &csw_active_pcs);
             if self.max_cs_store_slots > 0 {
                 for page in 0..self.cs_page_count() {
+                    // cs_dirty_page_expr evaluates to 0 whenever no csoN is set,
+                    // so the explicit `if(csw_active: 1: ...; else: 0)` guard
+                    // is redundant.
                     let expr = self.cs_dirty_page_expr(page);
-                    let guarded = format!("if(style(--csw_active: 1): {}; else: 0)", expr);
-                    let _ = writeln!(out, " --cswdp{}: {};", page, guarded);
+                    let _ = writeln!(out, " --cswdp{}: {};", page, expr);
                 }
             }
             for s in 0..self.max_cs_read_slots {
@@ -859,9 +870,9 @@ impl<'a> Emitter<'a> {
             let expr = if self.max_mem_store_slots == 0 {
                 prev.clone()
             } else {
-                let page_merge =
-                    format!("if(style(--mwdp{}: 1): {}; else: {})", page, merged, prev);
-                format!("if(style(--mw_active: 1): {}; else: {})", page_merge, prev)
+                // mwdpN = 1 implies some mso* is 1 at this PC, which implies
+                // mw_active = 1; so the outer `mw_active` check is redundant.
+                format!("if(style(--mwdp{}: 1): {}; else: {})", page, merged, prev)
             };
             let _ = write!(mem_line, " {}: {};", name, expr);
             if (i + 1) % 8 == 0 {
@@ -882,9 +893,9 @@ impl<'a> Emitter<'a> {
                 } else {
                     let merged = format!("--csmerge({}, {})", i, prev);
                     let page = i / CALLSTACK_DIRTY_PAGE_CELLS;
-                    let page_merge =
-                        format!("if(style(--cswdp{}: 1): {}; else: {})", page, merged, prev);
-                    format!("if(style(--csw_active: 1): {}; else: {})", page_merge, prev)
+                    // cswdpN = 1 implies some csoN is 1 at this PC, which
+                    // implies csw_active = 1; so the outer check is redundant.
+                    format!("if(style(--cswdp{}: 1): {}; else: {})", page, merged, prev)
                 };
                 let _ = write!(cs_line, " {}: {};", name, expr);
                 if (i + 1) % 8 == 0 {
@@ -991,12 +1002,7 @@ impl<'a> Emitter<'a> {
                     // Return may be in a later packed cycle than CsLoadPc; in that case,
                     // re-read RA from the current call-stack top.
                     let idx = "calc(var(--_1cs_sp) + 0)";
-                    let ok = format!(
-                        "calc(--lt(-1, {}) * --lt({}, {}))",
-                        idx,
-                        idx,
-                        self.cs_names.len()
-                    );
+                    let ok = format!("--inrange({}, {})", idx, self.cs_names.len());
                     Self::sel_expr(&ok, &format!("--read_cs({})", idx), "var(--_1pc)")
                 } else {
                     "var(--_1pc)".to_string()
@@ -1030,6 +1036,157 @@ impl<'a> Emitter<'a> {
         now.get(&r.expect_vreg())
             .cloned()
             .unwrap_or_else(|| format!("var(--_1r{})", r.expect_vreg()))
+    }
+
+    /// Peels redundant `calc(…)` and `min(1, …)` wrappers from a truthy-only
+    /// context (e.g. a `--sel` condition): `min(1, X) == 0` iff `X == 0` for
+    /// non-negative X, and `--sel` only cares about the zero / nonzero
+    /// distinction. We only strip a wrapper when the remaining inner
+    /// expression is itself a valid CSS value at the outermost level (a
+    /// number, `var(…)`, or function call) — otherwise we'd be left with a
+    /// bare arithmetic expression that isn't a legal `--sel` argument.
+    fn strip_truthy_wrappers(s: &str) -> String {
+        let mut cur = s.trim().to_string();
+        loop {
+            let next = if let Some(inner) =
+                cur.strip_prefix("calc(").and_then(|t| t.strip_suffix(')'))
+                && Self::balanced_parens(inner)
+                && Self::is_atomic_css_value(inner.trim())
+            {
+                inner.trim().to_string()
+            } else if let Some(inner) = cur
+                .strip_prefix("min(1, ")
+                .and_then(|t| t.strip_suffix(')'))
+                && Self::balanced_parens(inner)
+                && Self::is_atomic_css_value(inner.trim())
+            {
+                inner.trim().to_string()
+            } else {
+                return cur;
+            };
+            if next == cur {
+                return cur;
+            }
+            cur = next;
+        }
+    }
+
+    /// True when `s` is a valid stand-alone CSS value at the outer level —
+    /// i.e. a numeric literal, a `var(…)`, or a `name(…)` function call.
+    fn is_atomic_css_value(s: &str) -> bool {
+        let t = s.trim();
+        if t.is_empty() {
+            return false;
+        }
+        // Numeric literal (optionally signed, may include decimal).
+        if t.bytes()
+            .all(|b| b.is_ascii_digit() || b == b'.' || b == b'-' || b == b'+')
+        {
+            return true;
+        }
+        // Function-call form: `<ident>(<balanced>)` covering the whole string.
+        let bytes = t.as_bytes();
+        let mut i = 0;
+        if i < bytes.len() && bytes[i] == b'-' && i + 1 < bytes.len() && bytes[i + 1] == b'-' {
+            i += 2;
+        }
+        while i < bytes.len()
+            && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'-')
+        {
+            i += 1;
+        }
+        if i == 0 || i >= bytes.len() || bytes[i] != b'(' {
+            return false;
+        }
+        let mut depth = 0i32;
+        for (j, b) in bytes.iter().enumerate().skip(i) {
+            match b {
+                b'(' => depth += 1,
+                b')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return j == bytes.len() - 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+        false
+    }
+
+    fn balanced_parens(s: &str) -> bool {
+        let mut depth = 0i32;
+        for b in s.bytes() {
+            match b {
+                b'(' => depth += 1,
+                b')' => {
+                    depth -= 1;
+                    if depth < 0 {
+                        return false;
+                    }
+                }
+                _ => {}
+            }
+        }
+        depth == 0
+    }
+
+    pub(super) fn val_is_bool(bool_regs: &std::collections::HashSet<u16>, v: Val8) -> bool {
+        match v.imm_value() {
+            Some(x) => x <= 1,
+            None => bool_regs.contains(&v.expect_vreg()),
+        }
+    }
+
+    fn collect_bool_regs(program: &crate::ir8::Ir8Program) -> std::collections::HashSet<u16> {
+        let mut bool_regs: std::collections::HashSet<u16> = std::collections::HashSet::new();
+        // Iterate to a fixed point so derived rules (And8 with bool, Copy-of-bool,
+        // Sel between two bools, etc.) propagate.
+        loop {
+            let mut changed = false;
+            let imm_bool = |v: Val8, set: &std::collections::HashSet<u16>| -> bool {
+                match v.imm_value() {
+                    Some(x) => x <= 1,
+                    None => set.contains(&v.expect_vreg()),
+                }
+            };
+            for cycle in &program.cycles {
+                for op in &cycle.ops {
+                    let Some(dst) = op.dst else { continue };
+                    let dst_v = dst.expect_vreg();
+                    if bool_regs.contains(&dst_v) {
+                        continue;
+                    }
+                    let is_bool = match op.kind {
+                        Inst8Kind::Eq(_, _)
+                        | Inst8Kind::Ne(_, _)
+                        | Inst8Kind::LtU(_, _)
+                        | Inst8Kind::GeU(_, _)
+                        | Inst8Kind::BoolAnd(_)
+                        | Inst8Kind::BoolOr(_)
+                        | Inst8Kind::BoolNot(_)
+                        | Inst8Kind::Sub32Borrow { .. }
+                        | Inst8Kind::Carry(_, _) => true,
+                        Inst8Kind::Copy(s) => imm_bool(s, &bool_regs),
+                        Inst8Kind::And8(a, b) => imm_bool(a, &bool_regs) || imm_bool(b, &bool_regs),
+                        Inst8Kind::Or8(a, b) | Inst8Kind::Xor8(a, b) => {
+                            imm_bool(a, &bool_regs) && imm_bool(b, &bool_regs)
+                        }
+                        Inst8Kind::Sel(_, t, f) => {
+                            imm_bool(t, &bool_regs) && imm_bool(f, &bool_regs)
+                        }
+                        _ => false,
+                    };
+                    if is_bool && bool_regs.insert(dst_v) {
+                        changed = true;
+                    }
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        bool_regs
     }
 
     pub(super) fn eq_expr(l: &str, r: &str) -> String {
@@ -1143,7 +1300,12 @@ impl<'a> Emitter<'a> {
             .map(|term| Self::paren_if_needed(term))
             .collect::<Vec<_>>()
             .join(if and { " * " } else { " + " });
-        format!("calc(min(1, {joined}))")
+        if and {
+            // Product of bools stays in {0, 1}; no clamp needed.
+            format!("calc({joined})")
+        } else {
+            format!("calc(min(1, {joined}))")
+        }
     }
 
     fn mem_addr_bounds(
@@ -1199,7 +1361,7 @@ impl<'a> Emitter<'a> {
 
     fn cs_bounds_check(&self, idx: &str, extend: bool, trap_parts: &mut Vec<String>) -> String {
         let limit = self.cs_names.len() + usize::from(extend);
-        let ok = format!("calc(--lt(-1, {}) * --lt({}, {}))", idx, idx, limit);
+        let ok = format!("--inrange({}, {})", idx, limit);
         // out-of-range = (idx < 0) + (idx >= limit); both bools, sum stays in {0, 1}.
         trap_parts.push(format!("--lt({}, 0)", idx));
         trap_parts.push(format!("--ge({}, {})", idx, limit));
@@ -1207,10 +1369,19 @@ impl<'a> Emitter<'a> {
     }
 
     pub(super) fn sel_expr(cond: &str, if_true: &str, if_false: &str) -> String {
-        match cond.trim() {
+        // --sel uses style(--c: 0)/else, so it only cares whether `cond` is
+        // zero — any nonzero value selects the true branch. Strip a redundant
+        // `min(1, …)` clamp around the condition (and surrounding calc()) when
+        // we can identify it; the inner expression has the same truthiness.
+        let cond_str = Self::strip_truthy_wrappers(cond.trim());
+        let cond = cond_str.as_str();
+        match cond {
             "0" => return if_false.to_string(),
             "1" => return if_true.to_string(),
             _ => {}
+        }
+        if if_true.trim() == if_false.trim() {
+            return if_true.to_string();
         }
         if !cond.contains("--sel(") && !if_true.contains("--sel(") && !if_false.contains("--sel(") {
             return format!("--sel({}, {}, {})", cond, if_true, if_false);
@@ -1984,6 +2155,36 @@ impl<'a> Emitter<'a> {
         {
             return n.rem_euclid(modulus).to_string();
         }
+        if modulus == 256 && Self::is_byte_valued_var(v) {
+            return v.to_string();
+        }
         format!("mod({}, {})", value, modulus)
+    }
+
+    /// True if `v` is a `var(--_NrM)` shadow reference to a byte-typed
+    /// register — IR8 vregs always hold 0..=255, so a `mod(…, 256)` wrapper
+    /// around such a reference is redundant.
+    fn is_byte_valued_var(v: &str) -> bool {
+        let Some(inner) = v.strip_prefix("var(").and_then(|t| t.strip_suffix(')')) else {
+            return false;
+        };
+        let inner = inner.trim();
+        let after_dash = match inner.strip_prefix("--_") {
+            Some(t) => t,
+            None => return false,
+        };
+        // Stage digit, then `r`, then digits.
+        let mut chars = after_dash.bytes();
+        let Some(stage) = chars.next() else {
+            return false;
+        };
+        if !stage.is_ascii_digit() {
+            return false;
+        }
+        let Some(b'r') = chars.next() else {
+            return false;
+        };
+        let rest = &after_dash[2..];
+        !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit())
     }
 }

@@ -327,11 +327,11 @@ fn emit_html_includes_callstack_overflow_trap_ui_and_guard() {
     });
 
     let html = emit_program(&program).expect("emit should succeed");
-    assert!(html.contains("@container style(--pc: -5)"));
+    assert!(html.contains("style(--pc: -5)"));
     assert!(html.contains("[Trap: callstack overflow]"));
     let alloc_expr = format!("calc(var(--_1cs_sp) + {})", alloc);
     assert!(html.contains(&alloc_expr));
-    assert!(html.contains("--lt(-1, calc(var(--_1cs_sp) +"));
+    assert!(html.contains("--inrange(calc(var(--_1cs_sp) +"));
     assert!(html.contains(", -5,"));
 }
 
@@ -442,8 +442,8 @@ fn emit_html_memory_visualizer_tracks_read_and_write_slots() {
     assert!(html.contains("--mro0:"));
     assert!(html.contains("--mvh-0"));
     assert!(html.contains(".memvis::before {"));
-    assert!(html.contains("rgb(calc(var(--m000) / 256)"));
-    assert!(!html.contains("rgb(mod(round(down, calc(var(--m000) / 256)), 256)"));
+    assert!(html.contains("rgb(--mhi(var(--m000))"));
+    assert!(html.contains("rgb(--mlo(var(--m000))"));
 }
 
 #[test]
@@ -483,62 +483,13 @@ fn emit_html_callstack_visualizer_tracks_read_and_write_slots() {
         html.contains("@function --csmerge(--idx <number>, --prev <number>) returns <integer>")
     );
     assert!(!html.contains("--csmerge_slot("));
-    assert!(html.contains(" --csw_active: if("));
+    assert!(!html.contains(" --csw_active:"));
     assert!(html.contains(" --cswdp0:"));
     assert!(html.contains("@property --cswdp0 { syntax: \"<integer>\";"));
     assert!(html.contains(&format!(
-            " {}: if(style(--csw_active: 1): if(style(--cswdp0: 1): --csmerge(0, var({})); else: var({})); else: var({}));",
-            cs0_name, cs0_shadow, cs0_shadow, cs0_shadow
-        )));
-}
-
-#[test]
-fn emit_html_partitions_active_flags_when_many_writer_pcs() {
-    let total = (ACTIVE_FLAG_ARMS_CHUNK as u16) + 3;
-    let addr = crate::ir8::Addr::new(Val8::reg(0), Val8::reg(1));
-    let mut cycles = Vec::with_capacity(total as usize);
-    for i in 0..total {
-        let term = if i + 1 < total {
-            Terminator8::Goto(crate::ir8::Pc::new(i + 1))
-        } else {
-            Terminator8::Exit { val: None }
-        };
-        cycles.push(crate::ir8::Cycle {
-            pc: crate::ir8::Pc::new(i),
-            ops: vec![
-                crate::ir8::Inst8::no_dst(Inst8Kind::StoreMem {
-                    base: 0,
-                    addr,
-                    lane: 0,
-                    val: Val8::reg(2),
-                }),
-                crate::ir8::Inst8::no_dst(Inst8Kind::CsStore {
-                    offset: 0,
-                    val: Val8::reg(3),
-                }),
-            ],
-            terminator: term,
-        });
-    }
-    let program = Ir8Program {
-        entry_func: 0,
-        num_vregs: 4,
-        func_blocks: Vec::new(),
-        cycles,
-        func_entries: Vec::new(),
-        func_num_locals: Vec::new(),
-        memory_end: 0,
-        init_bytes: Vec::new(),
-        global_init: Vec::new(),
-    };
-
-    let html = emit_program(&program).expect("emit should succeed");
-    assert!(html.contains(" --mw_activep0: if("));
-    assert!(html.contains(" --mw_activep1: if("));
-    assert!(html.contains(" --mw_active: min(1, calc("));
-    assert!(html.contains(" --csw_activep0: if("));
-    assert!(html.contains(" --csw_activep1: if("));
-    assert!(html.contains(" --csw_active: min(1, calc("));
+        " {}: if(style(--cswdp0: 1): --csmerge(0, var({})); else: var({}));",
+        cs0_name, cs0_shadow, cs0_shadow
+    )));
 }
 
 #[test]
@@ -947,11 +898,11 @@ fn emit_html_memory_store_merge_expr_flattens_slot_conditions() {
     assert!(html.contains("--eq1(var(--msp0))"));
     assert!(html.contains(" --mwdp0: min(1, calc("));
     assert!(html.contains("@property --mwdp0 { syntax: \"<integer>\";"));
-    assert!(html.contains(" --mw_active: if("));
+    assert!(!html.contains(" --mw_active:"));
     assert!(html.contains(&format!(
-            " {}: if(style(--mw_active: 1): if(style(--mwdp0: 1): --mmerge16(0, var({})); else: var({})); else: var({}));",
-            m0_name, m0_shadow, m0_shadow, m0_shadow
-        )));
+        " {}: if(style(--mwdp0: 1): --mmerge16(0, var({})); else: var({}));",
+        m0_name, m0_shadow, m0_shadow
+    )));
     assert!(
         !html.contains("calc((calc(var(--mso0) * --eq(var(--msc0), 0))) * --eqz(var(--msp0)))")
     );
@@ -1012,7 +963,7 @@ fn emit_html_return_falls_back_to_callstack_top_when_cs_load_pc_is_in_prior_cycl
 
     let html = emit_program(&program).expect("emit should succeed");
     assert!(html.contains("style(--_1pc: 2): --sel("));
-    assert!(html.contains("style(--_1pc: 2): --sel(calc(--lt(-1, calc(var(--_1cs_sp) + 0))"));
+    assert!(html.contains("style(--_1pc: 2): --sel(--inrange(calc(var(--_1cs_sp) + 0), "));
     assert!(html.contains("--read_cs(calc(var(--_1cs_sp) + 0))"));
     assert!(!html.contains("@function --csmerge("));
     assert!(!html.contains(" --csw_active: if("));
