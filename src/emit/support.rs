@@ -1,5 +1,37 @@
 use super::*;
 
+const SLOT_ALIAS_PREFIXES: &[&str] = &["cri", "cro", "csi", "cso", "mri", "mro"];
+
+/// Parses ` --{prefix}N: var(--{prefix}T);` (a slot-indicator alias) into
+/// `(alias_name, canonical_name)`. Returns `None` for any other shape.
+fn parse_slot_alias_line(line: &str) -> Option<(String, String)> {
+    let trimmed = line.trim();
+    let body = trimmed.strip_suffix(';')?.trim_end();
+    let (name_with_dashes, value) = body.split_once(": ")?;
+    let alias_full = name_with_dashes.trim();
+    let alias = alias_full.strip_prefix("--")?;
+    if !SLOT_ALIAS_PREFIXES.iter().any(|p| {
+        alias
+            .strip_prefix(p)
+            .is_some_and(|r| r.bytes().all(|b| b.is_ascii_alphanumeric()))
+    }) {
+        return None;
+    }
+    let inner = value.trim().strip_prefix("var(")?.strip_suffix(')')?.trim();
+    if !inner.starts_with("--") {
+        return None;
+    }
+    Some((alias_full.to_string(), inner.to_string()))
+}
+
+/// Extracts the property name from an `@property --foo { ... }` line.
+fn parse_property_name(line: &str) -> Option<&str> {
+    let trimmed = line.trim_start();
+    let rest = trimmed.strip_prefix("@property ")?;
+    let end = rest.find(|c: char| c.is_whitespace() || c == '{')?;
+    Some(&rest[..end])
+}
+
 impl<'a> Emitter<'a> {
     pub(super) fn emit_support(&self, out: &mut String) {
         fn terminal_codes(uses_callstack: bool) -> impl Iterator<Item = TrapCode> {
@@ -145,6 +177,39 @@ impl<'a> Emitter<'a> {
         format!("--_{}{}", stage, tail)
     }
 
+    /// Emits `style(--i: A) or style(--i: B): V; style(--i: C): W; ...`,
+    /// grouping consecutive arms with byte-identical values under a single
+    /// `or` chain. Skips entries whose value is `"0"` (caller emits an
+    /// `else: 0` arm). Preserves first-occurrence order across distinct
+    /// values so output is stable.
+    pub(super) fn emit_grouped_style_arms(out: &mut String, arms: &[(usize, String)]) {
+        let mut order: Vec<String> = Vec::new();
+        let mut by_val: std::collections::HashMap<String, Vec<usize>> =
+            std::collections::HashMap::new();
+        for (idx, val) in arms {
+            let v = val.trim();
+            if v == "0" {
+                continue;
+            }
+            if !by_val.contains_key(v) {
+                order.push(v.to_string());
+            }
+            by_val.entry(v.to_string()).or_default().push(*idx);
+        }
+        for val in &order {
+            let idxs = &by_val[val];
+            for (i, idx) in idxs.iter().enumerate() {
+                if i != 0 {
+                    out.push_str(" or ");
+                }
+                let _ = write!(out, "style(--i: {})", idx);
+            }
+            out.push_str(": ");
+            out.push_str(val);
+            out.push_str("; ");
+        }
+    }
+
     pub(super) fn emit_chunked_read_function(
         out: &mut String,
         func: &str,
@@ -171,12 +236,7 @@ impl<'a> Emitter<'a> {
                 "@function {}(--i <integer>) returns <integer> {{ result: if(",
                 func
             );
-            for (idx, expr) in arms {
-                if expr.trim() == "0" {
-                    continue;
-                }
-                let _ = write!(out, "style(--i: {}): {}; ", idx, expr);
-            }
+            Self::emit_grouped_style_arms(out, arms);
             out.push_str("else: 0); }\n");
             return;
         }
@@ -195,12 +255,7 @@ impl<'a> Emitter<'a> {
                 "@function {}_{}(--i <integer>) returns <integer> {{ result: if(",
                 func, chunk_idx
             );
-            for (idx, expr) in chunk_reads {
-                if expr.trim() == "0" {
-                    continue;
-                }
-                let _ = write!(out, "style(--i: {}): {}; ", idx, expr);
-            }
+            Self::emit_grouped_style_arms(out, chunk_reads);
             out.push_str("else: 0); }\n");
         }
         let _ = write!(
@@ -350,10 +405,7 @@ impl<'a> Emitter<'a> {
         );
         hl_entries.extend((0..self.max_cs_read_slots).map(|s| {
             Self::vis_slot_shadow_entry(
-                &format!(
-                    "calc((var(--cri{}) * 2) + --sel(--eq1(var(--crp{})), 1, 0))",
-                    s, s
-                ),
+                &format!("calc((var(--cri{}) * 2) + --eq1(var(--crp{})))", s, s),
                 cs_cols,
                 "48, 170, 84",
                 &format!("calc(0.72 * var(--cro{}))", s),
@@ -361,10 +413,7 @@ impl<'a> Emitter<'a> {
         }));
         hl_entries.extend((0..self.max_cs_store_slots).map(|s| {
             Self::vis_slot_shadow_entry(
-                &format!(
-                    "calc((var(--csi{}) * 2) + --sel(--eq1(var(--csp{})), 1, 0))",
-                    s, s
-                ),
+                &format!("calc((var(--csi{}) * 2) + --eq1(var(--csp{})))", s, s),
                 cs_cols,
                 "38, 112, 255",
                 &format!("calc(0.88 * var(--cso{}))", s),
@@ -394,9 +443,16 @@ impl<'a> Emitter<'a> {
         let mut expr = prev.to_string();
         for s in 0..self.max_mem_store_slots {
             for suffix in ["", "b"] {
+                // cond = is-this-slot-storing-this-byte. Routed through eq_expr
+                // so a constant `cell_expr` folds the --eq(msc, cell) check.
                 let cond = format!(
-                    "calc(var(--mso{}{}) * --eq(var(--msc{}{}), {}) * {}(var(--msp{}{})))",
-                    s, suffix, s, suffix, cell_expr, parity_fn, s, suffix
+                    "calc(var(--mso{}{}) * {} * {}(var(--msp{}{})))",
+                    s,
+                    suffix,
+                    Self::eq_expr(&format!("var(--msc{}{})", s, suffix), cell_expr),
+                    parity_fn,
+                    s,
+                    suffix
                 );
                 let val_const = consts.and_then(|c| {
                     let row = if suffix == "b" {
@@ -406,6 +462,9 @@ impl<'a> Emitter<'a> {
                     };
                     row.get(s).cloned().flatten()
                 });
+                // CSS @function bodies must avoid --sel calls — its container
+                // queries don't see the local --c binding when nested inside
+                // another @function. Stick to bare calc arithmetic here.
                 expr = match val_const.as_deref() {
                     Some("0") => {
                         format!("calc((1 - ({})) * ({}))", cond, expr)
@@ -447,10 +506,12 @@ impl<'a> Emitter<'a> {
         let mut lo_expr = format!("--mlo({})", prev);
         let mut hi_expr = format!("--mhi({})", prev);
         for s in 0..self.max_cs_store_slots {
-            let same_slot = format!(
-                "calc(var(--cso{}) * --eq(var(--csi{}), {}))",
-                s, s, idx_expr
-            );
+            let csi = format!("var(--csi{})", s);
+            // CSS @function parameters do not flow into nested container
+            // queries (style(--c: 0) reads the rule's container, not the
+            // local --c binding), so calls to --sel inside this function
+            // body misbehave. Use bare calc arithmetic instead.
+            let same_slot = format!("calc(var(--cso{}) * {})", s, Self::eq_expr(&csi, idx_expr));
             let is_word = format!("--eq(var(--csp{}), 2)", s);
             let is_lo = format!("--eqz(var(--csp{}))", s);
             let is_hi = format!("--eq1(var(--csp{}))", s);
@@ -501,16 +562,31 @@ impl<'a> Emitter<'a> {
         match parts.len() {
             0 => "0".to_string(),
             1 => parts[0].clone(),
-            _ => format!("min(1, calc({}))", parts.join(" + ")),
+            _ => {
+                let inner = parts
+                    .iter()
+                    .map(|p| {
+                        let t = p.trim();
+                        Self::peel_calc(t)
+                            .map(str::to_string)
+                            .unwrap_or_else(|| t.to_string())
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" + ");
+                format!("min(1, calc({}))", inner)
+            }
         }
     }
 
-    /// Collapses sequential bounds checks against the same base variable:
-    /// for `--ge(<base> [+ I], K)` keeps the largest I (it implies the smaller);
-    /// for `--lt(<base> [+ I], 0)` keeps the smallest I (it implies the larger).
-    /// `<base>` matches either `var(--name)` (I=0) or `calc(var(--name) + I)`.
+    /// Collapses sequential bounds checks against the same base variable in
+    /// a boolean-sum (truthy) context. The kept entry is the dominating one:
+    /// for `--ge`, the easiest-to-satisfy effective threshold `K - I` (min);
+    /// for `--lt`, the easiest-to-satisfy effective threshold (max). If any
+    /// peer limit is non-integer, falls back to per-limit-string grouping
+    /// keeping the extreme offset (largest I for `--ge`, smallest for `--lt`).
+    /// `<base>` matches `var(--name)` (I=0) or `calc(var(--name) + I)`.
     pub(super) fn dedupe_bounds_checks(parts: &mut Vec<String>) {
-        use std::collections::HashMap;
+        use std::collections::{HashMap, HashSet};
         let parse = |s: &str| -> Option<(&'static str, String, String, i64)> {
             let (cmp, rest) = if let Some(r) = s.strip_prefix("--ge(") {
                 ("ge", r)
@@ -544,35 +620,73 @@ impl<'a> Emitter<'a> {
             Some((cmp, base, limit, imm))
         };
 
-        let mut extreme: HashMap<(&'static str, String, String), i64> = HashMap::new();
-        for part in parts.iter() {
+        let mut by_base: HashMap<(&'static str, String), Vec<_>> = HashMap::new();
+        for (i, part) in parts.iter().enumerate() {
             if let Some((cmp, base, limit, imm)) = parse(part) {
-                let key = (cmp, base, limit);
-                extreme
-                    .entry(key)
-                    .and_modify(|m| {
-                        let take = if cmp == "ge" { imm > *m } else { imm < *m };
-                        if take {
-                            *m = imm;
-                        }
-                    })
-                    .or_insert(imm);
+                by_base
+                    .entry((cmp, base))
+                    .or_default()
+                    .push((i, limit, imm));
             }
         }
-        if extreme.is_empty() {
+        if by_base.is_empty() {
             return;
         }
-        let mut seen: std::collections::HashSet<(&'static str, String, String)> =
-            std::collections::HashSet::new();
-        parts.retain(|part| match parse(part) {
-            Some((cmp, base, limit, imm)) => {
-                let key = (cmp, base, limit);
-                if Some(&imm) != extreme.get(&key) {
-                    return false;
+
+        let mut drop_idx: HashSet<usize> = HashSet::new();
+        for ((cmp, _base), entries) in by_base {
+            let parsed: Option<Vec<(usize, i64)>> = entries
+                .iter()
+                .map(|(i, lim, imm)| lim.parse::<i64>().ok().map(|k| (*i, k - imm)))
+                .collect();
+            if let Some(effs) = parsed {
+                // All limits are integer literals: pick the dominating entry
+                // across the whole group by effective threshold.
+                if let Some(best) = effs.iter().copied().reduce(|a, b| {
+                    let take = if cmp == "ge" { b.1 < a.1 } else { b.1 > a.1 };
+                    if take { b } else { a }
+                }) {
+                    for (i, _) in effs {
+                        if i != best.0 {
+                            drop_idx.insert(i);
+                        }
+                    }
                 }
-                seen.insert(key)
+            } else {
+                // Mixed limits: fall back to per-limit-string subgrouping,
+                // keeping the extreme offset within each subgroup.
+                let mut by_lim: HashMap<String, (usize, i64)> = HashMap::new();
+                for (i, lim, imm) in entries {
+                    match by_lim.get(&lim) {
+                        None => {
+                            by_lim.insert(lim, (i, imm));
+                        }
+                        Some(&(prev_i, prev_imm)) => {
+                            let take = if cmp == "ge" {
+                                imm > prev_imm
+                            } else {
+                                imm < prev_imm
+                            };
+                            if take {
+                                drop_idx.insert(prev_i);
+                                by_lim.insert(lim, (i, imm));
+                            } else {
+                                drop_idx.insert(i);
+                            }
+                        }
+                    }
+                }
             }
-            None => true,
+        }
+
+        if drop_idx.is_empty() {
+            return;
+        }
+        let mut idx = 0usize;
+        parts.retain(|_| {
+            let keep = !drop_idx.contains(&idx);
+            idx += 1;
+            keep
         });
     }
 
@@ -613,6 +727,53 @@ impl<'a> Emitter<'a> {
     }
 
     /// Finds long `style(--_1pc: N) or style(--_1pc: M) or ...` chains that
+    /// Removes slot-indicator alias declarations of the form
+    /// ` --criN: var(--criT);` (also `cro`, `csi`, `cso`, `mri`, `mro`), then
+    /// rewrites every `var(--{prefix}N)` reference in both `logic` and
+    /// `support` to use the canonical slot `T`. Also drops the now-unused
+    /// `@property --{prefix}N { ... }` declarations from `props`. The
+    /// canonical slot's `@property` carries the original initial value, so
+    /// downstream consumers see a single source of truth without a redundant
+    /// per-cycle `var()` indirection.
+    pub(super) fn collapse_slot_aliases(
+        logic: &mut String,
+        support: &mut String,
+        props: &mut String,
+    ) {
+        use std::collections::HashMap;
+        let mut aliases: HashMap<String, String> = HashMap::new();
+        let mut kept = String::with_capacity(logic.len());
+        for line in logic.split_inclusive('\n') {
+            if let Some((alias, canonical)) = parse_slot_alias_line(line) {
+                aliases.insert(alias, canonical);
+            } else {
+                kept.push_str(line);
+            }
+        }
+        if aliases.is_empty() {
+            return;
+        }
+        *logic = kept;
+        for (alias, canonical) in &aliases {
+            let needle = format!("var({})", alias);
+            let replacement = format!("var({})", canonical);
+            *logic = logic.replace(&needle, &replacement);
+            *support = support.replace(&needle, &replacement);
+        }
+        let alias_names: std::collections::HashSet<&str> =
+            aliases.keys().map(String::as_str).collect();
+        let mut new_props = String::with_capacity(props.len());
+        for line in props.split_inclusive('\n') {
+            if let Some(name) = parse_property_name(line)
+                && alias_names.contains(name)
+            {
+                continue;
+            }
+            new_props.push_str(line);
+        }
+        *props = new_props;
+    }
+
     /// appear multiple times in `logic` and replaces them with
     /// `style(--gK: 1)` indicator-property references, emitting the
     /// corresponding `@property --gK` declaration into `props` and the
@@ -817,6 +978,30 @@ impl<'a> Emitter<'a> {
         let _ = writeln!(out, "{}", Self::if_or_fallback_decl(name, arms, fallback));
     }
 
+    /// Emits one `--{prefix}{s}` declaration per slot. When an earlier slot
+    /// has byte-identical arms, the later slot is aliased to `var(--{prefix}{t})`
+    /// so the expensive `if(...)` chain is evaluated once and shared. CSS
+    /// computed-value resolution handles the in-rule forward reference.
+    pub(super) fn emit_slot_with_cse(
+        out: &mut String,
+        prefix: &str,
+        arms: &[String],
+        fallback: &str,
+    ) {
+        for s in 0..arms.len() {
+            let alias = if arms[s].is_empty() {
+                None
+            } else {
+                (0..s).find(|&t| !arms[t].is_empty() && arms[t] == arms[s])
+            };
+            if let Some(t) = alias {
+                let _ = writeln!(out, " --{}{}: var(--{}{});", prefix, s, prefix, t);
+            } else {
+                Self::emit_if_or_fallback(out, &format!("--{}{}", prefix, s), &arms[s], fallback);
+            }
+        }
+    }
+
     pub(super) fn emit_chunked_prefixed(
         out: &mut String,
         chunk_size: usize,
@@ -839,24 +1024,21 @@ impl<'a> Emitter<'a> {
     pub(super) fn emit_keyframes(&self, out: &mut String) {
         let _ = writeln!(out, "@keyframes store {{");
         let _ = writeln!(out, "  0%, 100% {{");
-        let _ = writeln!(out, "    --_2pc: var(--_0pc, {});", self.entry_pc);
+        let _ = writeln!(out, "    --_2pc: var(--_0pc);");
         Self::emit_chunked_prefixed(
             out,
             8,
             "   ",
-            (0..self.program.num_vregs).map(|r| format!(" --_2r{}: var(--_0r{}, 0);", r, r)),
+            (0..self.program.num_vregs).map(|r| format!(" --_2r{}: var(--_0r{});", r, r)),
         );
         for g in 0..self.global_count {
-            let gv = self.global_init[g as usize];
             // TODO(i64): staged global snapshots are currently fixed to 4 byte lanes.
             let store_g_line = (0..4u8)
                 .map(|lane| {
-                    let init = (gv >> (u32::from(lane) * 8)) & 0xff;
                     format!(
-                        "    {}: var({}, {});",
+                        "    {}: var({});",
                         Self::staged_global_lane_name(2, g, lane),
                         Self::staged_global_lane_name(0, g, lane),
-                        init
                     )
                 })
                 .collect::<String>();
@@ -866,25 +1048,23 @@ impl<'a> Emitter<'a> {
             out,
             8,
             "   ",
-            self.mem_names.iter().enumerate().map(|(i, name)| {
-                let init = self.mem_init.get(i).copied().unwrap_or(0);
+            self.mem_names.iter().map(|name| {
                 format!(
-                    " {}: var({}, {});",
+                    " {}: var({});",
                     Self::shadow_name(2, name),
                     Self::shadow_name(0, name),
-                    init
                 )
             }),
         );
         if self.uses_callstack {
-            let _ = writeln!(out, "    --_2cs_sp: var(--_0cs_sp, 0);");
+            let _ = writeln!(out, "    --_2cs_sp: var(--_0cs_sp);");
             Self::emit_chunked_prefixed(
                 out,
                 8,
                 "   ",
                 self.cs_names.iter().map(|name| {
                     format!(
-                        " {}: var({}, 0);",
+                        " {}: var({});",
                         Self::shadow_name(2, name),
                         Self::shadow_name(0, name)
                     )
@@ -892,26 +1072,22 @@ impl<'a> Emitter<'a> {
             );
         }
         if self.uses_exceptions {
-            let _ = writeln!(out, "    --_2exc_flag: var(--_0exc_flag, 0);");
+            let _ = writeln!(out, "    --_2exc_flag: var(--_0exc_flag);");
             for lane in 0..4u8 {
-                let _ = writeln!(
-                    out,
-                    "    --_2exc_tag_{}: var(--_0exc_tag_{}, 0);",
-                    lane, lane
-                );
+                let _ = writeln!(out, "    --_2exc_tag_{}: var(--_0exc_tag_{});", lane, lane);
             }
         }
         if self.uses_exc_payload {
             for lane in 0..4u8 {
                 let _ = writeln!(
                     out,
-                    "    --_2exc_payload_{}: var(--_0exc_payload_{}, 0);",
+                    "    --_2exc_payload_{}: var(--_0exc_payload_{});",
                     lane, lane
                 );
             }
         }
-        let _ = writeln!(out, "    --_2fb: var(--_0fb, \"\");");
-        let _ = writeln!(out, "    --_2ra: var(--_0ra, \"{}\");", DEFAULT_RA_DISPLAY);
+        let _ = writeln!(out, "    --_2fb: var(--_0fb);");
+        let _ = writeln!(out, "    --_2ra: var(--_0ra);");
         let _ = writeln!(out, "  }}");
         let _ = writeln!(out, "}}");
 

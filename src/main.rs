@@ -15,6 +15,7 @@ use std::path::PathBuf;
 
 mod ast;
 mod constants;
+mod css;
 mod emit;
 mod ir;
 mod ir8;
@@ -86,6 +87,9 @@ struct Cli {
     /// Skip embedding the invoking compile command as an HTML comment at the top of the artifact.
     #[arg(long = "no-embed-compile-command", action = ArgAction::SetTrue)]
     no_embed_compile_command: bool,
+    /// Disable memory and callstack visualizers in the emitted runtime.
+    #[arg(long = "no-visualizers", action = ArgAction::SetTrue)]
+    no_visualizers: bool,
     /// Dump all compiler stages to stdout.
     #[arg(long, action = ArgAction::SetTrue)]
     dump_all: bool,
@@ -133,6 +137,7 @@ fn main() -> Result<()> {
         js_clock,
         args.js_coprocessor,
         args.js_clock_debugger,
+        !args.no_visualizers,
     )?;
 
     let wasm_bytes = std::fs::read(&args.wasm_file).with_context(|| {

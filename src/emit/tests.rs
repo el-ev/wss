@@ -331,7 +331,9 @@ fn emit_html_includes_callstack_overflow_trap_ui_and_guard() {
     assert!(html.contains("[Trap: callstack overflow]"));
     let alloc_expr = format!("calc(var(--_1cs_sp) + {})", alloc);
     assert!(html.contains(&alloc_expr));
-    assert!(html.contains("--inrange(calc(var(--_1cs_sp) +"));
+    // CsAlloc(N) folds the offset into the trap bound: ge(idx, K) becomes ge(B, K-N).
+    // K = cs slot count + 1 for the alloc extend bit; with alloc == K this is 0.
+    assert!(html.contains("--ge(var(--_1cs_sp), 0)"));
     assert!(html.contains(", -5,"));
 }
 
@@ -519,7 +521,7 @@ fn emit_html_mload_helper_avoids_local_aliasing() {
     };
     let html = emit_program(&program).expect("emit should succeed");
     assert!(html.contains("@function --mload(--byte <number>) returns <integer>"));
-    assert!(html.contains("mod(--read_m16(--mhalf(var(--byte))), 256)"));
+    assert!(html.contains("--read_m16(--mhalf(var(--byte)))"));
     assert!(!html.contains("@function --ne(--a <number>, --b <number>) returns <integer>"));
     assert!(!html.contains("--cell: --read_m16"));
 }
@@ -760,10 +762,10 @@ fn emit_html_globals_emit_all_lanes_on_single_line_per_global() {
     assert!(g_store.contains(&_2g0_lane1));
     assert!(g_store.contains(&_2g0_lane2));
     assert!(g_store.contains(&_2g0_lane3));
-    assert!(g_store.contains(&format!("var({}, 68)", _0g0_lane0)));
-    assert!(g_store.contains(&format!("var({}, 51)", _0g0_lane1)));
-    assert!(g_store.contains(&format!("var({}, 34)", _0g0_lane2)));
-    assert!(g_store.contains(&format!("var({}, 17)", _0g0_lane3)));
+    assert!(g_store.contains(&format!("var({})", _0g0_lane0)));
+    assert!(g_store.contains(&format!("var({})", _0g0_lane1)));
+    assert!(g_store.contains(&format!("var({})", _0g0_lane2)));
+    assert!(g_store.contains(&format!("var({})", _0g0_lane3)));
 
     let g_exec = html
         .lines()
@@ -963,8 +965,8 @@ fn emit_html_return_falls_back_to_callstack_top_when_cs_load_pc_is_in_prior_cycl
 
     let html = emit_program(&program).expect("emit should succeed");
     assert!(html.contains("style(--_1pc: 2): --sel("));
-    assert!(html.contains("style(--_1pc: 2): --sel(--inrange(calc(var(--_1cs_sp) + 0), "));
-    assert!(html.contains("--read_cs(calc(var(--_1cs_sp) + 0))"));
+    assert!(html.contains("style(--_1pc: 2): --sel(--inrange(var(--_1cs_sp), "));
+    assert!(html.contains("--read_cs(var(--_1cs_sp))"));
     assert!(!html.contains("@function --csmerge("));
     assert!(!html.contains(" --csw_active: if("));
 }

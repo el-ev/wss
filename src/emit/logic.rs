@@ -159,7 +159,10 @@ impl<'a> Emitter<'a> {
                         if let Some(dst) = op.dst {
                             let lhs = Self::paren_if_needed(&Self::val_expr(&reg_now, *l));
                             let rhs = Self::paren_if_needed(&Self::val_expr(&reg_now, *r));
-                            let e = format!("mod(round(down, calc({lhs} * {rhs} / 256)), 256)");
+                            // Two byte operands give a product <= 65025, so
+                            // round-down by 256 already lies in 0..=254 and
+                            // the outer `mod(_, 256)` is redundant.
+                            let e = format!("round(down, calc({lhs} * {rhs} / 256))");
                             reg_now.insert(dst.expect_vreg(), e);
                         }
                     }
@@ -221,10 +224,9 @@ impl<'a> Emitter<'a> {
                         if let Some(dst) = op.dst {
                             reg_now.insert(
                                 dst.expect_vreg(),
-                                format!(
-                                    "--lt({}, {})",
-                                    Self::val_expr(&reg_now, *l),
-                                    Self::val_expr(&reg_now, *r)
+                                Self::lt_expr(
+                                    &Self::val_expr(&reg_now, *l),
+                                    &Self::val_expr(&reg_now, *r),
                                 ),
                             );
                             bool_regs.insert(dst.expect_vreg());
@@ -752,12 +754,15 @@ impl<'a> Emitter<'a> {
         slot_consts.ms_val.resize(self.max_mem_store_slots, None);
         slot_consts.ms_val_b.resize(self.max_mem_store_slots, None);
         for s in 0..self.max_mem_store_slots {
-            Self::emit_if_or_fallback(out, &format!("--msc{}", s), &ms_cell_arms[s], "-1");
-            Self::emit_if_or_fallback(out, &format!("--msp{}", s), &ms_par_arms[s], "-1");
+            // All slot indicators default to 0: their consumers gate on the
+            // companion `--msoN` active bit, which is also 0 when the slot
+            // is not driven this cycle.
+            Self::emit_if_or_fallback(out, &format!("--msc{}", s), &ms_cell_arms[s], "0");
+            Self::emit_if_or_fallback(out, &format!("--msp{}", s), &ms_par_arms[s], "0");
             Self::emit_if_or_fallback(out, &format!("--msv{}", s), &ms_val_arms[s], "0");
             Self::emit_if_or_fallback(out, &format!("--mso{}", s), &ms_ok_arms[s], "0");
-            Self::emit_if_or_fallback(out, &format!("--msc{}b", s), &ms_cell_arms_b[s], "-1");
-            Self::emit_if_or_fallback(out, &format!("--msp{}b", s), &ms_par_arms_b[s], "-1");
+            Self::emit_if_or_fallback(out, &format!("--msc{}b", s), &ms_cell_arms_b[s], "0");
+            Self::emit_if_or_fallback(out, &format!("--msp{}b", s), &ms_par_arms_b[s], "0");
             Self::emit_if_or_fallback(out, &format!("--msv{}b", s), &ms_val_arms_b[s], "0");
             Self::emit_if_or_fallback(out, &format!("--mso{}b", s), &ms_ok_arms_b[s], "0");
             slot_consts.ms_val[s] = Self::arms_active_constant(&ms_val_arms[s], "0");
@@ -772,10 +777,8 @@ impl<'a> Emitter<'a> {
             }
         }
 
-        for s in 0..self.max_mem_read_slots {
-            Self::emit_if_or_fallback(out, &format!("--mri{}", s), &mr_idx_arms[s], "-1");
-            Self::emit_if_or_fallback(out, &format!("--mro{}", s), &mr_ok_arms[s], "0");
-        }
+        Self::emit_slot_with_cse(out, "mri", &mr_idx_arms, "0");
+        Self::emit_slot_with_cse(out, "mro", &mr_ok_arms, "0");
 
         for (s, arms) in mb_arms.iter().enumerate() {
             Self::emit_if_or_fallback(out, &format!("--mb{}", s), arms, "0");
@@ -790,12 +793,12 @@ impl<'a> Emitter<'a> {
         }
 
         if self.uses_callstack {
+            Self::emit_slot_with_cse(out, "csi", &csw_idx_arms, "0");
             for s in 0..self.max_cs_store_slots {
-                Self::emit_if_or_fallback(out, &format!("--csi{}", s), &csw_idx_arms[s], "-1");
-                Self::emit_if_or_fallback(out, &format!("--csp{}", s), &csw_par_arms[s], "-1");
+                Self::emit_if_or_fallback(out, &format!("--csp{}", s), &csw_par_arms[s], "0");
                 Self::emit_if_or_fallback(out, &format!("--csv{}", s), &csw_val_arms[s], "0");
-                Self::emit_if_or_fallback(out, &format!("--cso{}", s), &csw_ok_arms[s], "0");
             }
+            Self::emit_slot_with_cse(out, "cso", &csw_ok_arms, "0");
             if self.max_cs_store_slots > 0 {
                 for page in 0..self.cs_page_count() {
                     // cs_dirty_page_expr evaluates to 0 whenever no csoN is set,
@@ -805,11 +808,11 @@ impl<'a> Emitter<'a> {
                     let _ = writeln!(out, " --cswdp{}: {};", page, expr);
                 }
             }
+            Self::emit_slot_with_cse(out, "cri", &csr_idx_arms, "0");
             for s in 0..self.max_cs_read_slots {
-                Self::emit_if_or_fallback(out, &format!("--cri{}", s), &csr_idx_arms[s], "-1");
-                Self::emit_if_or_fallback(out, &format!("--crp{}", s), &csr_par_arms[s], "-1");
-                Self::emit_if_or_fallback(out, &format!("--cro{}", s), &csr_ok_arms[s], "0");
+                Self::emit_if_or_fallback(out, &format!("--crp{}", s), &csr_par_arms[s], "0");
             }
+            Self::emit_slot_with_cse(out, "cro", &csr_ok_arms, "0");
         }
 
         let pc_fallback = "--sel(--lt(var(--_1pc), 0), var(--_1pc), calc(var(--_1pc) + 1))";
@@ -1001,8 +1004,8 @@ impl<'a> Emitter<'a> {
                 let fallback_pc_expr = if self.uses_callstack {
                     // Return may be in a later packed cycle than CsLoadPc; in that case,
                     // re-read RA from the current call-stack top.
-                    let idx = "calc(var(--_1cs_sp) + 0)";
-                    let ok = format!("--inrange({}, {})", idx, self.cs_names.len());
+                    let idx = "var(--_1cs_sp)";
+                    let ok = Self::inrange_expr(idx, self.cs_names.len() as i64);
                     Self::sel_expr(&ok, &format!("--read_cs({})", idx), "var(--_1pc)")
                 } else {
                     "var(--_1pc)".to_string()
@@ -1190,6 +1193,9 @@ impl<'a> Emitter<'a> {
     }
 
     pub(super) fn eq_expr(l: &str, r: &str) -> String {
+        if let (Ok(a), Ok(b)) = (l.trim().parse::<i64>(), r.trim().parse::<i64>()) {
+            return format!("{}", (a == b) as i32);
+        }
         match (l, r) {
             (a, "0") | ("0", a) => format!("--eqz({})", a),
             (a, "1") | ("1", a) => format!("--eq1({})", a),
@@ -1198,6 +1204,9 @@ impl<'a> Emitter<'a> {
     }
 
     pub(super) fn ne_expr(l: &str, r: &str) -> String {
+        if let (Ok(a), Ok(b)) = (l.trim().parse::<i64>(), r.trim().parse::<i64>()) {
+            return format!("{}", (a != b) as i32);
+        }
         match (l, r) {
             (a, "0") | ("0", a) => format!("--nez({})", a),
             _ => format!("--ne({}, {})", l, r),
@@ -1216,12 +1225,187 @@ impl<'a> Emitter<'a> {
         }
     }
 
+    /// Parses an expression of the form `BASE`, `calc(BASE + N)`, or
+    /// `calc(BASE - N)` into its base and integer offset. Returns `None` if
+    /// the expression is not a calc-with-literal-offset shape. Bare
+    /// expressions return offset 0.
+    pub(super) fn try_split_calc_offset(s: &str) -> Option<(String, i64)> {
+        let t = s.trim();
+        let Some(inner) = t.strip_prefix("calc(").and_then(|x| x.strip_suffix(')')) else {
+            return Some((t.to_string(), 0));
+        };
+        let bytes = inner.as_bytes();
+        let mut depth: i32 = 0;
+        let mut split: Option<(usize, bool)> = None;
+        let mut i = 0;
+        while i + 2 < bytes.len() {
+            match bytes[i] {
+                b'(' => depth += 1,
+                b')' => depth -= 1,
+                b' ' if depth == 0
+                    && (bytes[i + 1] == b'+' || bytes[i + 1] == b'-')
+                    && bytes[i + 2] == b' ' =>
+                {
+                    split = Some((i, bytes[i + 1] == b'-'));
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        let (pos, is_neg) = split?;
+        let lhs = inner[..pos].trim();
+        let rhs = inner[pos + 3..].trim();
+        let n: i64 = rhs.parse().ok()?;
+        Some((lhs.to_string(), if is_neg { -n } else { n }))
+    }
+
+    /// Emits `--lt(l, r)` after folding constant offsets so a literal sits
+    /// on the side opposite the variable: `--lt(calc(B + N), K)` becomes
+    /// `--lt(B, K - N)`, symmetric for the swapped form.
+    pub(super) fn lt_expr(l: &str, r: &str) -> String {
+        let (l, r) = (l.trim(), r.trim());
+        if let (Ok(a), Ok(b)) = (l.parse::<i64>(), r.parse::<i64>()) {
+            return if a < b {
+                "1".to_string()
+            } else {
+                "0".to_string()
+            };
+        }
+        // Fold a byte-valued var against an out-of-range bound to a constant.
+        if let Ok(k) = r.parse::<i64>() {
+            if Self::is_byte_valued_var(l) {
+                if k <= 0 {
+                    return "0".to_string();
+                }
+                if k > 255 {
+                    return "1".to_string();
+                }
+            }
+            if let Some((base, n)) = Self::try_split_calc_offset(l)
+                && n != 0
+            {
+                return format!("--lt({}, {})", base, k - n);
+            }
+        }
+        if let Ok(k) = l.parse::<i64>() {
+            if Self::is_byte_valued_var(r) {
+                if k < 0 {
+                    return "1".to_string();
+                }
+                if k >= 255 {
+                    return "0".to_string();
+                }
+            }
+            if let Some((base, n)) = Self::try_split_calc_offset(r)
+                && n != 0
+            {
+                return format!("--lt({}, {})", k - n, base);
+            }
+        }
+        format!("--lt({}, {})", l, r)
+    }
+
+    /// Like `lt_expr` but for `--ge`.
+    pub(super) fn ge_expr(l: &str, r: &str) -> String {
+        let (l, r) = (l.trim(), r.trim());
+        if let (Ok(a), Ok(b)) = (l.parse::<i64>(), r.parse::<i64>()) {
+            return if a >= b {
+                "1".to_string()
+            } else {
+                "0".to_string()
+            };
+        }
+        if let Ok(k) = r.parse::<i64>() {
+            if Self::is_byte_valued_var(l) {
+                if k <= 0 {
+                    return "1".to_string();
+                }
+                if k > 255 {
+                    return "0".to_string();
+                }
+            }
+            if let Some((base, n)) = Self::try_split_calc_offset(l)
+                && n != 0
+            {
+                return format!("--ge({}, {})", base, k - n);
+            }
+        }
+        if let Ok(k) = l.parse::<i64>() {
+            if Self::is_byte_valued_var(r) {
+                if k < 0 {
+                    return "0".to_string();
+                }
+                if k >= 255 {
+                    return "1".to_string();
+                }
+            }
+            if let Some((base, n)) = Self::try_split_calc_offset(r)
+                && n != 0
+            {
+                return format!("--ge({}, {})", k - n, base);
+            }
+        }
+        format!("--ge({}, {})", l, r)
+    }
+
+    /// Emits `--inrange(idx, k)`. When `idx` has a literal offset we inline
+    /// the definition so the offset folds into both bounds and the calc()
+    /// wrapper disappears from the per-argument evaluation.
+    pub(super) fn inrange_expr(idx: &str, k: i64) -> String {
+        // Strip a trivial `+ 0` wrapper but keep the `--inrange` function
+        // call; CSS evaluates the calc argument once into a local, while
+        // inlining the definition would re-read the base in every --lt.
+        if let Some((base, 0)) = Self::try_split_calc_offset(idx) {
+            return format!("--inrange({}, {})", base, k);
+        }
+        format!("--inrange({}, {})", idx, k)
+    }
+
     pub(super) fn paren_if_needed(expr: &str) -> String {
         if Self::is_atomic_calc_term(expr) {
             expr.to_string()
         } else {
             format!("({})", expr)
         }
+    }
+
+    /// Prepares `expr` for inclusion inside a surrounding `calc(...)`. When the
+    /// expression itself is already `calc(BODY)`, rewrites it as `(BODY)` so
+    /// we avoid emitting `calc(calc(BODY) ...)` redundancies.
+    /// Returns the boolean negation `1 - b`, folding when `b` is a literal
+    /// `"0"` or `"1"`. Avoids emitting `calc(1 - (0))`-style trivia.
+    pub(super) fn flip_bool(b: &str) -> String {
+        match b.trim() {
+            "0" => "1".to_string(),
+            "1" => "0".to_string(),
+            other => format!("calc(1 - {})", Self::calc_inner(other)),
+        }
+    }
+
+    pub(super) fn calc_inner(expr: &str) -> String {
+        let t = expr.trim();
+        if let Some(inner) = Self::peel_calc(t) {
+            return format!("({})", inner);
+        }
+        Self::paren_if_needed(t)
+    }
+
+    pub(super) fn peel_calc(s: &str) -> Option<&str> {
+        let inner = s.strip_prefix("calc(")?.strip_suffix(')')?;
+        let mut depth: i32 = 0;
+        for b in inner.bytes() {
+            match b {
+                b'(' => depth += 1,
+                b')' => {
+                    if depth == 0 {
+                        return None;
+                    }
+                    depth -= 1;
+                }
+                _ => {}
+            }
+        }
+        if depth == 0 { Some(inner) } else { None }
     }
 
     pub(super) fn is_atomic_calc_term(expr: &str) -> bool {
@@ -1328,8 +1512,9 @@ impl<'a> Emitter<'a> {
                 imm
             ),
         };
-        let in_bounds = format!("--lt({}, {})", byte_addr, self.memory_end);
-        trap_parts.push(format!("--ge({}, {})", byte_addr, self.memory_end));
+        let mem_end = self.memory_end.to_string();
+        let in_bounds = Self::lt_expr(&byte_addr, &mem_end);
+        trap_parts.push(Self::ge_expr(&byte_addr, &mem_end));
         (byte_addr, in_bounds)
     }
 
@@ -1360,11 +1545,11 @@ impl<'a> Emitter<'a> {
     }
 
     fn cs_bounds_check(&self, idx: &str, extend: bool, trap_parts: &mut Vec<String>) -> String {
-        let limit = self.cs_names.len() + usize::from(extend);
-        let ok = format!("--inrange({}, {})", idx, limit);
+        let limit = (self.cs_names.len() + usize::from(extend)) as i64;
+        let ok = Self::inrange_expr(idx, limit);
         // out-of-range = (idx < 0) + (idx >= limit); both bools, sum stays in {0, 1}.
-        trap_parts.push(format!("--lt({}, 0)", idx));
-        trap_parts.push(format!("--ge({}, {})", idx, limit));
+        trap_parts.push(Self::lt_expr(idx, "0"));
+        trap_parts.push(Self::ge_expr(idx, &limit.to_string()));
         ok
     }
 
@@ -1380,19 +1565,101 @@ impl<'a> Emitter<'a> {
             "1" => return if_true.to_string(),
             _ => {}
         }
-        if if_true.trim() == if_false.trim() {
+        let t = if_true.trim();
+        let f = if_false.trim();
+        if t == f {
             return if_true.to_string();
+        }
+        // `sel(calc(1 - bool), t, f)` flips its branches into `sel(bool, f, t)`,
+        // letting downstream branch folds catch the bool form.
+        if let Some(rest) = cond.strip_prefix("calc(1 - ")
+            && let Some(inner) = rest.strip_suffix(')')
+        {
+            let inner_trim = inner.trim();
+            let unwrapped = inner_trim
+                .strip_prefix('(')
+                .and_then(|s| s.strip_suffix(')'))
+                .map(str::trim)
+                .unwrap_or(inner_trim);
+            if Self::is_bool_expr(unwrapped) {
+                return Self::sel_expr(unwrapped, if_false, if_true);
+            }
+        }
+        // `sel(bool, 1, 0)` is the bool itself; `sel(bool, 0, 1)` is its
+        // logical negation. Only safe when `cond` already returns 0/1.
+        if Self::is_bool_expr(cond) {
+            if t == "1" && f == "0" {
+                return cond.to_string();
+            }
+            if t == "0" && f == "1" {
+                return Self::flip_bool(cond);
+            }
         }
         if !cond.contains("--sel(") && !if_true.contains("--sel(") && !if_false.contains("--sel(") {
             return format!("--sel({}, {}, {})", cond, if_true, if_false);
         }
+        // Drop dead multiplicands when either branch is literal `0`:
+        //   sel(c, 0, f) → (1 - c) * f
+        //   sel(c, t, 0) → c * t
+        if t == "0" {
+            return format!(
+                "calc((1 - {}) * {})",
+                Self::calc_inner(cond),
+                Self::calc_inner(if_false),
+            );
+        }
+        if f == "0" {
+            return format!(
+                "calc({} * {})",
+                Self::calc_inner(cond),
+                Self::calc_inner(if_true),
+            );
+        }
         format!(
             "calc({} * {} + (1 - {}) * {})",
-            Self::paren_if_needed(cond),
-            Self::paren_if_needed(if_true),
-            Self::paren_if_needed(cond),
-            Self::paren_if_needed(if_false),
+            Self::calc_inner(cond),
+            Self::calc_inner(if_true),
+            Self::calc_inner(cond),
+            Self::calc_inner(if_false),
         )
+    }
+
+    /// Conservatively detect expressions that already evaluate to 0 or 1.
+    pub(super) fn is_bool_expr(s: &str) -> bool {
+        let t = s.trim();
+        if matches!(t, "0" | "1")
+            || t.starts_with("--eq(")
+            || t.starts_with("--eq1(")
+            || t.starts_with("--eqz(")
+            || t.starts_with("--ne(")
+            || t.starts_with("--nez(")
+            || t.starts_with("--lt(")
+            || t.starts_with("--ge(")
+            || t.starts_with("--inrange(")
+            || t.starts_with("--mpar(")
+        {
+            return true;
+        }
+        // `mod(<inner>, 2)` is always 0 or 1.
+        if let Some(rest) = t.strip_prefix("mod(")
+            && let Some(inner) = rest.strip_suffix(", 2)")
+        {
+            // Ensure the trailing ", 2)" closes the mod call and isn't
+            // nested inside a deeper expression.
+            let mut depth = 0i32;
+            for b in inner.bytes() {
+                match b {
+                    b'(' => depth += 1,
+                    b')' => depth -= 1,
+                    _ => {}
+                }
+                if depth < 0 {
+                    return false;
+                }
+            }
+            return depth == 0;
+        }
+        false
     }
 
     pub(super) fn word_bytes_expr(now: &HashMap<u16, String>, w: Word) -> [String; 4] {
@@ -1405,56 +1672,81 @@ impl<'a> Emitter<'a> {
     }
 
     fn byte_add_total_expr(lhs: &str, rhs: &str, carry_in: &str) -> String {
-        let terms: Vec<String> = [lhs, rhs, carry_in]
-            .iter()
-            .filter(|t| t.trim() != "0")
-            .map(|t| t.to_string())
-            .collect();
-        if terms.is_empty() {
-            return "0".to_string();
+        let mut const_sum: i64 = 0;
+        let mut var_terms: Vec<String> = Vec::new();
+        for t in [lhs.trim(), rhs.trim(), carry_in.trim()] {
+            if t == "0" {
+                continue;
+            }
+            if let Ok(n) = t.parse::<i64>() {
+                const_sum += n;
+            } else {
+                var_terms.push(t.to_string());
+            }
         }
-        if terms.len() == 1 {
-            return terms.into_iter().next().unwrap();
+        if var_terms.is_empty() {
+            return const_sum.to_string();
         }
-        // Try compile-time integer fold.
-        if let Some(sum) = terms
-            .iter()
-            .map(|t| t.parse::<i64>().ok())
-            .collect::<Option<Vec<_>>>()
-            .map(|v| v.iter().sum::<i64>())
-        {
-            return sum.to_string();
+        if const_sum == 0 && var_terms.len() == 1 {
+            return var_terms.into_iter().next().unwrap();
         }
-        let joined = terms
-            .iter()
-            .map(|t| Self::paren_if_needed(t))
-            .collect::<Vec<_>>()
-            .join(" + ");
-        format!("calc({})", joined)
+        let mut parts: Vec<String> = var_terms.iter().map(|t| Self::calc_inner(t)).collect();
+        if const_sum != 0 {
+            parts.push(const_sum.to_string());
+        }
+        format!("calc({})", parts.join(" + "))
     }
 
     fn byte_sub_total_expr(lhs: &str, rhs: &str, borrow_in: &str) -> String {
-        let l_lit = lhs.trim().parse::<i64>().ok();
-        let r_lit = rhs.trim().parse::<i64>().ok();
-        let b_lit = borrow_in.trim().parse::<i64>().ok();
-        if let (Some(a), Some(b), Some(c)) = (l_lit, r_lit, b_lit) {
-            return (a - b - c).to_string();
+        // Accumulate `lhs - rhs - borrow_in` while folding any literal terms.
+        let mut const_sum: i64 = 0;
+        let mut pos_terms: Vec<String> = Vec::new();
+        let mut neg_terms: Vec<String> = Vec::new();
+        if let Ok(n) = lhs.trim().parse::<i64>() {
+            const_sum += n;
+        } else if lhs.trim() != "0" {
+            pos_terms.push(lhs.trim().to_string());
         }
-        let l = Self::paren_if_needed(lhs);
-        let mut out = format!("calc({l}");
-        if rhs.trim() != "0" {
-            out.push_str(" - ");
-            out.push_str(&Self::paren_if_needed(rhs));
+        for t in [rhs.trim(), borrow_in.trim()] {
+            if t == "0" {
+                continue;
+            }
+            if let Ok(n) = t.parse::<i64>() {
+                const_sum -= n;
+            } else {
+                neg_terms.push(t.to_string());
+            }
         }
-        if borrow_in.trim() != "0" {
+        if pos_terms.is_empty() && neg_terms.is_empty() {
+            return const_sum.to_string();
+        }
+        if const_sum == 0 && neg_terms.is_empty() && pos_terms.len() == 1 {
+            return pos_terms.into_iter().next().unwrap();
+        }
+        // CSS calc() rejects leading unary minus; emit `0 - x` when only
+        // negative terms remain.
+        let mut out = String::from("calc(");
+        if !pos_terms.is_empty() {
+            out.push_str(&Self::calc_inner(&pos_terms[0]));
+            for t in &pos_terms[1..] {
+                out.push_str(" + ");
+                out.push_str(&Self::calc_inner(t));
+            }
+            if const_sum > 0 {
+                out.push_str(" + ");
+                out.push_str(&const_sum.to_string());
+            } else if const_sum < 0 {
+                out.push_str(" - ");
+                out.push_str(&(-const_sum).to_string());
+            }
+        } else {
+            out.push_str(&const_sum.to_string());
+        }
+        for t in &neg_terms {
             out.push_str(" - ");
-            out.push_str(&Self::paren_if_needed(borrow_in));
+            out.push_str(&Self::calc_inner(t));
         }
         out.push(')');
-        // If we ended up with just `calc(lhs)`, return `lhs` directly.
-        if out == format!("calc({})", l) {
-            return lhs.to_string();
-        }
         out
     }
 
@@ -1464,34 +1756,52 @@ impl<'a> Emitter<'a> {
             let lhs_byte = Self::val_expr(now, lhs.byte(idx));
             let rhs_byte = Self::val_expr(now, rhs.byte(idx));
             let total = Self::byte_add_total_expr(&lhs_byte, &rhs_byte, &carry);
-            carry = format!("round(down, calc({} / 256))", Self::paren_if_needed(&total));
+            carry = if let Ok(n) = total.parse::<i64>() {
+                (n.div_euclid(256)).to_string()
+            } else if Self::is_byte_valued_var(&total) {
+                // A bare byte var is in 0..=255, so floor(_ / 256) is always 0.
+                "0".to_string()
+            } else {
+                format!("round(down, calc({} / 256))", Self::calc_inner(&total))
+            };
         }
         carry
     }
 
     /// Computes the byte-level borrow-out for one subtraction step:
     ///   round(down, (255 - lhs + rhs + borrow_in) / 256)
-    /// Drops literal-zero operands and folds when all operands are literals.
+    /// Folds literal operands into the leading 255 constant so e.g.
+    /// `255 - var + 32` emits as `287 - var` rather than `255 - var + 32`.
     fn byte_borrow_step(lhs: &str, rhs: &str, borrow_in: &str) -> String {
-        if let (Some(l), Some(r), Some(b)) = (
-            lhs.trim().parse::<i64>().ok(),
-            rhs.trim().parse::<i64>().ok(),
-            borrow_in.trim().parse::<i64>().ok(),
-        ) {
-            return (255 - l + r + b).div_euclid(256).to_string();
+        let mut const_sum: i64 = 255;
+        let mut neg_terms: Vec<String> = Vec::new();
+        let mut pos_terms: Vec<String> = Vec::new();
+        if let Ok(l) = lhs.trim().parse::<i64>() {
+            const_sum -= l;
+        } else {
+            neg_terms.push(lhs.trim().to_string());
         }
-        let mut numerator = String::from("255");
-        if lhs.trim() != "0" {
+        for t in [rhs.trim(), borrow_in.trim()] {
+            if t == "0" {
+                continue;
+            }
+            if let Ok(n) = t.parse::<i64>() {
+                const_sum += n;
+            } else {
+                pos_terms.push(t.to_string());
+            }
+        }
+        if neg_terms.is_empty() && pos_terms.is_empty() {
+            return const_sum.div_euclid(256).to_string();
+        }
+        let mut numerator = const_sum.to_string();
+        for t in &pos_terms {
+            numerator.push_str(" + ");
+            numerator.push_str(&Self::calc_inner(t));
+        }
+        for t in &neg_terms {
             numerator.push_str(" - ");
-            numerator.push_str(&Self::paren_if_needed(lhs));
-        }
-        if rhs.trim() != "0" {
-            numerator.push_str(" + ");
-            numerator.push_str(&Self::paren_if_needed(rhs));
-        }
-        if borrow_in.trim() != "0" {
-            numerator.push_str(" + ");
-            numerator.push_str(&Self::paren_if_needed(borrow_in));
+            numerator.push_str(&Self::calc_inner(t));
         }
         format!("round(down, calc(({}) / 256))", numerator)
     }
@@ -1529,13 +1839,9 @@ impl<'a> Emitter<'a> {
         let rhs_byte = Self::val_expr(now, rhs.byte(lane));
         let borrow_in = Self::sub32_borrow_in_expr(now, lhs, rhs, lane);
         let total = Self::byte_sub_total_expr(&lhs_byte, &rhs_byte, &borrow_in);
-        // total may be negative; "+ 256" then mod 256 normalises to a byte.
-        let shifted = if let Ok(n) = total.parse::<i64>() {
-            (n + 256).to_string()
-        } else {
-            format!("calc({} + 256)", Self::paren_if_needed(&total))
-        };
-        Self::fold_mod(&shifted, 256)
+        // CSS `mod(A, B)` for positive B returns a result in [0, B), regardless
+        // of A's sign (Euclidean modulus), so we don't need a `+ 256` shift.
+        Self::fold_mod(&total, 256)
     }
 
     pub(super) fn sub32_borrow_expr(now: &HashMap<u16, String>, lhs: Word, rhs: Word) -> String {
@@ -1571,11 +1877,21 @@ impl<'a> Emitter<'a> {
     }
 
     pub(super) fn byte_bit_expr(byte: &str, bit: u8) -> String {
+        let trimmed = byte.trim();
         let p2 = 1u32 << bit;
         // Constant-fold when the byte is a numeric literal — common when the
         // builder is selecting bits of an immediate shift/rotate count.
-        if let Ok(v) = byte.trim().parse::<i64>() {
+        if let Ok(v) = trimmed.parse::<i64>() {
             return ((v >> bit) & 1).to_string();
+        }
+        // When the input is already known to be in {0, 1}, every bit above
+        // bit 0 is zero and bit 0 is the value itself.
+        if Self::is_bool_expr(trimmed) {
+            return if bit == 0 {
+                trimmed.to_string()
+            } else {
+                "0".to_string()
+            };
         }
         let b = Self::paren_if_needed(byte);
         if p2 == 1 {
@@ -1594,13 +1910,38 @@ impl<'a> Emitter<'a> {
     }
 
     pub(super) fn byte_ctz_expr(byte: &str) -> String {
-        let b = Self::paren_if_needed(byte);
-        format!("--byte_ctz(mod(calc({b} + 256), 256))")
+        if let Ok(v) = byte.trim().parse::<i64>()
+            && (0..=255).contains(&v)
+        {
+            let b = v as u8;
+            let r = if b == 0 { 8 } else { b.trailing_zeros() };
+            return format!("{}", r);
+        }
+        format!("--byte_ctz({})", Self::sanitize_byte_arg(byte))
     }
 
     pub(super) fn byte_clz_expr(byte: &str) -> String {
-        let b = Self::paren_if_needed(byte);
-        format!("--byte_clz(mod(calc({b} + 256), 256))")
+        if let Ok(v) = byte.trim().parse::<i64>()
+            && (0..=255).contains(&v)
+        {
+            let b = v as u8;
+            let r = if b == 0 { 8 } else { b.leading_zeros() };
+            return format!("{}", r);
+        }
+        format!("--byte_clz({})", Self::sanitize_byte_arg(byte))
+    }
+
+    /// Normalises a byte expression for table-lookup helpers: drop the
+    /// defensive `+ 256, mod 256` wrap when the input is already in 0..=255.
+    fn sanitize_byte_arg(byte: &str) -> String {
+        let trimmed = byte.trim();
+        if Self::is_byte_valued_var(trimmed)
+            || trimmed.starts_with("mod(")
+            || trimmed.parse::<i64>().is_ok_and(|n| (0..=255).contains(&n))
+        {
+            return trimmed.to_string();
+        }
+        format!("mod(calc({} + 256), 256)", Self::paren_if_needed(byte))
     }
 
     pub(super) fn shl_stage_expr(word: &[String; 4], amount: u8) -> [String; 4] {
@@ -1775,7 +2116,17 @@ impl<'a> Emitter<'a> {
     }
 
     pub(super) fn byte_hex_expr(expr: &str) -> String {
-        let b = format!("mod(calc(({}) + 256), 256)", expr);
+        // The hex helper expects a byte in 0..=255. Byte-valued vars and
+        // already-mod-256'd expressions skip the defensive `+ 256` wrap.
+        let trimmed = expr.trim();
+        let b = if Self::is_byte_valued_var(trimmed)
+            || trimmed.starts_with("mod(")
+            || trimmed.parse::<i64>().is_ok_and(|n| (0..=255).contains(&n))
+        {
+            trimmed.to_string()
+        } else {
+            format!("mod(calc(({}) + 256), 256)", expr)
+        };
         let hi = format!("round(down, calc(({}) / 16))", b);
         let lo = format!("mod(({}), 16)", b);
         format!("--hex({}) --hex({})", hi, lo)
@@ -1946,12 +2297,12 @@ impl<'a> Emitter<'a> {
                 let c2 = format!("calc(8 + ({}))", Self::byte_clz_expr(&lhs[2]));
                 let c1 = format!("calc(16 + ({}))", Self::byte_clz_expr(&lhs[1]));
                 let c0 = format!("calc(24 + ({}))", Self::byte_clz_expr(&lhs[0]));
-                let nz3 = format!("--ne({}, 0)", lhs[3]);
-                let nz2 = format!("--ne({}, 0)", lhs[2]);
-                let nz1 = format!("--ne({}, 0)", lhs[1]);
-                let z3 = format!("calc(1 - ({}))", nz3);
-                let z2 = format!("calc(1 - ({}))", nz2);
-                let z1 = format!("calc(1 - ({}))", nz1);
+                let nz3 = Self::ne_expr(&lhs[3], "0");
+                let nz2 = Self::ne_expr(&lhs[2], "0");
+                let nz1 = Self::ne_expr(&lhs[1], "0");
+                let z3 = Self::flip_bool(&nz3);
+                let z2 = Self::flip_bool(&nz2);
+                let z1 = Self::flip_bool(&nz1);
                 let out0 = format!(
                     "calc(({}) * ({}) + (({}) * ({})) * ({}) + (({}) * ({}) * ({})) * ({}) + (({}) * ({}) * ({})) * ({}))",
                     nz3, c3, z3, nz2, c2, z3, z2, nz1, c1, z3, z2, z1, c0
@@ -1966,12 +2317,12 @@ impl<'a> Emitter<'a> {
                 let c1 = format!("calc(8 + ({}))", Self::byte_ctz_expr(&lhs[1]));
                 let c2 = format!("calc(16 + ({}))", Self::byte_ctz_expr(&lhs[2]));
                 let c3 = format!("calc(24 + ({}))", Self::byte_ctz_expr(&lhs[3]));
-                let nz0 = format!("--ne({}, 0)", lhs[0]);
-                let nz1 = format!("--ne({}, 0)", lhs[1]);
-                let nz2 = format!("--ne({}, 0)", lhs[2]);
-                let z0 = format!("calc(1 - ({}))", nz0);
-                let z1 = format!("calc(1 - ({}))", nz1);
-                let z2 = format!("calc(1 - ({}))", nz2);
+                let nz0 = Self::ne_expr(&lhs[0], "0");
+                let nz1 = Self::ne_expr(&lhs[1], "0");
+                let nz2 = Self::ne_expr(&lhs[2], "0");
+                let z0 = Self::flip_bool(&nz0);
+                let z1 = Self::flip_bool(&nz1);
+                let z2 = Self::flip_bool(&nz2);
                 let out0 = format!(
                     "calc(({}) * ({}) + (({}) * ({})) * ({}) + (({}) * ({}) * ({})) * ({}) + (({}) * ({}) * ({})) * ({}))",
                     nz0, c0, z0, nz1, c1, z0, z1, nz2, c2, z0, z1, z2, c3

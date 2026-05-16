@@ -109,14 +109,23 @@ jobs:
           chmod +x "${wrapper}"
           echo "path=${wrapper}" >> "$GITHUB_OUTPUT"
 
+      - name: Build wss
+        shell: bash
+        run: cargo build --release --bin wss
+
+      - name: Build blackbox runner
+        shell: bash
+        run: cargo build --release --manifest-path tests/blackbox-runner/Cargo.toml
+
       - name: Blackbox
         shell: bash
         env:
           WSS_CHROME: ${{ steps.chrome_wrapper.outputs.path }}
           WSS_DUMP_TIMEOUT_BUFFER_MS: "60000"
+          WSS_BIN: ${{ github.workspace }}/target/release/wss
         run: |
           set -euo pipefail
-          cargo run --release --manifest-path tests/blackbox-runner/Cargo.toml -- --retries=3 --jobs=3
+          ./tests/blackbox-runner/target/release/wss-blackbox-runner --retries=3 --jobs=3
 
   blackbox-lengthy:
     name: Blackbox (Lengthy)
@@ -181,11 +190,20 @@ jobs:
           chmod +x "${wrapper}"
           echo "path=${wrapper}" >> "$GITHUB_OUTPUT"
 
+      - name: Build wss
+        shell: bash
+        run: cargo build --release --bin wss
+
+      - name: Build blackbox runner
+        shell: bash
+        run: cargo build --release --manifest-path tests/blackbox-runner/Cargo.toml
+
       - name: Blackbox (Lengthy)
         shell: bash
         env:
           WSS_CHROME: ${{ steps.chrome_wrapper.outputs.path }}
           WSS_DUMP_TIMEOUT_BUFFER_MS: "60000"
+          WSS_BIN: ${{ github.workspace }}/target/release/wss
         run: |
           set -euo pipefail
-          cargo run --release --manifest-path tests/blackbox-runner/Cargo.toml -- --only-lengthy --retries=3 --jobs=2
+          ./tests/blackbox-runner/target/release/wss-blackbox-runner --only-lengthy --retries=3 --jobs=2

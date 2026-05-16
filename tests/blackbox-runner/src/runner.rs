@@ -1732,6 +1732,7 @@ fn build_wss_args(
     if settings.js_coprocessor {
         args.push("--js-coprocessor".to_string());
     }
+    args.push("--no-visualizers".to_string());
     args
 }
 

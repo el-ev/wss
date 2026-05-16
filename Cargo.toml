@@ -11,6 +11,7 @@ repository = "https://github.com/el-ev/wss"
 anyhow = "1.0.102"
 bitflags = "2.11.0"
 chrono = "0.4.44"
+chumsky = "0.13.0"
 clap = { version = "4.6.0", features = ["derive"] }
 paste = "1.0.15"
 wasmparser = { version = "0.245.1", features = [] }

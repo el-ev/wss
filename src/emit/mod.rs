@@ -1,3 +1,4 @@
+mod inline;
 mod logic;
 mod properties;
 mod support;
@@ -46,6 +47,7 @@ pub struct EmitConfig {
     js_clock: bool,
     js_coprocessor: bool,
     js_clock_debugger: bool,
+    visualizers: bool,
 }
 
 #[cfg(test)]
@@ -57,6 +59,7 @@ impl Default for EmitConfig {
             DEFAULT_JS_CLOCK_ENABLED,
             DEFAULT_JS_COPROCESSOR_ENABLED,
             DEFAULT_JS_CLOCK_DEBUGGER_ENABLED,
+            true,
         )
         .expect("default emit config should be valid")
     }
@@ -69,6 +72,7 @@ impl EmitConfig {
         js_clock: bool,
         js_coprocessor: bool,
         js_clock_debugger: bool,
+        visualizers: bool,
     ) -> anyhow::Result<Self> {
         anyhow::ensure!(
             callstack_slots_cap > 0,
@@ -88,6 +92,7 @@ impl EmitConfig {
             js_clock,
             js_coprocessor,
             js_clock_debugger,
+            visualizers,
         })
     }
 
@@ -111,6 +116,10 @@ impl EmitConfig {
         self.js_clock_debugger
     }
 
+    pub fn visualizers(&self) -> bool {
+        self.visualizers
+    }
+
     #[cfg(test)]
     pub fn with_memory_bytes_cap(self, memory_bytes_cap: u32) -> anyhow::Result<Self> {
         Self::new(
@@ -119,6 +128,7 @@ impl EmitConfig {
             self.js_clock(),
             self.js_coprocessor(),
             self.js_clock_debugger(),
+            self.visualizers(),
         )
     }
 
@@ -130,6 +140,7 @@ impl EmitConfig {
             js_clock,
             self.js_coprocessor(),
             self.js_clock_debugger(),
+            self.visualizers(),
         )
     }
 
@@ -141,6 +152,7 @@ impl EmitConfig {
             self.js_clock(),
             js_coprocessor,
             self.js_clock_debugger(),
+            self.visualizers(),
         )
     }
 
@@ -152,6 +164,7 @@ impl EmitConfig {
             self.js_clock(),
             self.js_coprocessor(),
             js_clock_debugger,
+            self.visualizers(),
         )
     }
 }
@@ -354,6 +367,10 @@ pub fn emit_program(program: &Ir8Program, config: EmitConfig) -> anyhow::Result<
     Emitter::dedupe_pc_groups(&mut logic_css, &mut props_css, &mut group_arms);
     logic_css.push_str(&group_arms);
 
+    Emitter::collapse_slot_aliases(&mut logic_css, &mut support_css, &mut props_css);
+
+    inline::inline_slot_indicators(&mut logic_css, &mut support_css);
+
     let html = replace_placeholder_once(BASE_HTML, PROPS_PLACEHOLDER, &props_css)?;
     let html = replace_placeholder_once(&html, LOGIC_PLACEHOLDER, &logic_css)?;
     let html = replace_placeholder_once(&html, SUPPORT_PLACEHOLDER, &support_css)?;
@@ -492,6 +509,7 @@ impl<'a> Emitter<'a> {
         let features = Self::compute_template_features(
             &usage,
             uses_callstack,
+            config.visualizers(),
             max_mem_store_slots,
             max_mem_read_slots,
             max_cs_store_slots,
@@ -663,6 +681,7 @@ impl<'a> Emitter<'a> {
     fn compute_template_features(
         usage: &UsageScan,
         uses_callstack: bool,
+        visualizers: bool,
         max_mem_store_slots: usize,
         max_mem_read_slots: usize,
         max_cs_store_slots: usize,
@@ -676,7 +695,9 @@ impl<'a> Emitter<'a> {
             | TemplateFeatures::FN_MHI
             | TemplateFeatures::FN_M16;
 
-        features |= TemplateFeatures::MEM_VISUALIZER;
+        if visualizers {
+            features |= TemplateFeatures::MEM_VISUALIZER;
+        }
 
         if usage.uses_getchar {
             features |= TemplateFeatures::PROP_KB;
@@ -710,7 +731,9 @@ impl<'a> Emitter<'a> {
         }
         if uses_callstack {
             features |= TemplateFeatures::SP_INDICATOR;
-            features |= TemplateFeatures::CS_VISUALIZER;
+            if visualizers {
+                features |= TemplateFeatures::CS_VISUALIZER;
+            }
             features |= TemplateFeatures::FN_GE;
             features |= TemplateFeatures::FN_INRANGE;
         }

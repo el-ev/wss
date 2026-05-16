@@ -872,3 +872,363 @@ fn print_term8(out: &mut String, term: &Terminator8) {
         }
     }
 }
+
+// =====================================================================
+// CSS expression AST (crate::css) printers
+//
+// Two output formats:
+//   - print_css_expr / Node::to_css  — production CSS, math-context aware.
+//   - dump_css_expr / Node::to_dump  — indented tree for debugging.
+// =====================================================================
+
+// CSS-AST printers — public entry points used once stage 2 routes
+// emit passes through the AST. Suppress dead-code warnings until then.
+#[allow(dead_code)]
+use crate::css::{Arm as CssArm, Node as CssNode, Sign as CssSign, Term as CssTerm};
+
+/// Render a CSS expression as a string suitable for emission.
+#[allow(dead_code)]
+pub fn print_css_expr(node: &CssNode) -> String {
+    let mut out = String::new();
+    write_css_expr(node, false, &mut out);
+    out
+}
+
+/// Render a CSS expression AST as an indented tree.
+#[allow(dead_code)]
+pub fn dump_css_expr(node: &CssNode) -> String {
+    let mut out = String::new();
+    write_css_dump(node, 0, &mut out);
+    out
+}
+
+#[allow(dead_code)]
+impl CssNode {
+    pub fn to_css(&self) -> String {
+        print_css_expr(self)
+    }
+    pub fn to_dump(&self) -> String {
+        dump_css_expr(self)
+    }
+}
+
+#[allow(dead_code)]
+fn write_css_expr(node: &CssNode, math_ctx: bool, out: &mut String) {
+    match node {
+        CssNode::Int(n) => {
+            write!(out, "{}", n).unwrap();
+        }
+        CssNode::Var { name, fallback } => {
+            out.push_str("var(");
+            out.push_str(name);
+            if let Some(fb) = fallback {
+                out.push_str(", ");
+                write_css_expr(fb, false, out);
+            }
+            out.push(')');
+        }
+        CssNode::Calc(inner) => {
+            // Inside an existing math context, `calc(X)` is redundant with
+            // bare `(X)`. We still emit it explicitly because most callers
+            // expect a stable shape; the fold pass strips it.
+            out.push_str("calc(");
+            write_css_expr(inner, true, out);
+            out.push(')');
+        }
+        CssNode::MathFn { name, args } => {
+            out.push_str(name);
+            out.push('(');
+            for (i, arg) in args.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                write_css_expr(arg, true, out);
+            }
+            out.push(')');
+        }
+        CssNode::Fn { name, args } => {
+            out.push_str(name);
+            out.push('(');
+            for (i, arg) in args.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                // Non-math function arguments start fresh non-math context;
+                // arithmetic subexpressions get wrapped in calc() here.
+                write_css_arg(arg, out);
+            }
+            out.push(')');
+        }
+        CssNode::Sum(terms) => {
+            if math_ctx {
+                write_css_sum(terms, out);
+            } else {
+                out.push_str("calc(");
+                write_css_sum(terms, out);
+                out.push(')');
+            }
+        }
+        CssNode::Product(factors) => {
+            if math_ctx {
+                write_css_product(factors, out);
+            } else {
+                out.push_str("calc(");
+                write_css_product(factors, out);
+                out.push(')');
+            }
+        }
+        CssNode::Div(l, r) => {
+            if math_ctx {
+                write_css_factor(l, out);
+                out.push_str(" / ");
+                write_css_factor(r, out);
+            } else {
+                out.push_str("calc(");
+                write_css_factor(l, out);
+                out.push_str(" / ");
+                write_css_factor(r, out);
+                out.push(')');
+            }
+        }
+        CssNode::Paren(inner) => {
+            out.push('(');
+            // Paren-grouping inherits math context from outside; CSS
+            // doesn't establish a new context for bare parens the way
+            // `calc()` does.
+            write_css_expr(inner, math_ctx, out);
+            out.push(')');
+        }
+        CssNode::If { arms, default } => {
+            out.push_str("if(");
+            for (i, arm) in arms.iter().enumerate() {
+                if i > 0 {
+                    out.push_str("; ");
+                }
+                write_css_arm(arm, out);
+            }
+            if !arms.is_empty() {
+                out.push_str("; ");
+            }
+            out.push_str("else: ");
+            write_css_expr(default, false, out);
+            out.push(')');
+        }
+        CssNode::Style { prop, value } => {
+            out.push_str("style(");
+            out.push_str(prop);
+            out.push_str(": ");
+            out.push_str(value);
+            out.push(')');
+        }
+        CssNode::Or(conds) => {
+            for (i, c) in conds.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(" or ");
+                }
+                write_css_expr(c, false, out);
+            }
+        }
+        CssNode::Raw(s) => out.push_str(s),
+    }
+}
+
+#[allow(dead_code)]
+fn write_css_arg(node: &CssNode, out: &mut String) {
+    match node {
+        CssNode::Sum(_) | CssNode::Product(_) | CssNode::Div(_, _) => {
+            out.push_str("calc(");
+            write_css_expr(node, true, out);
+            out.push(')');
+        }
+        _ => write_css_expr(node, false, out),
+    }
+}
+
+#[allow(dead_code)]
+fn write_css_sum(terms: &[CssTerm], out: &mut String) {
+    for (i, t) in terms.iter().enumerate() {
+        if i == 0 {
+            match t.sign {
+                CssSign::Pos => {}
+                // Leading negative term: prefer `-N` for integer
+                // literals (still a single token), otherwise prepend
+                // `0 - ` to keep the expression syntactically valid in
+                // CSS — calc forbids a unary `-` operator outside of
+                // numeric literals.
+                CssSign::Neg => match &t.node {
+                    CssNode::Int(_) => out.push('-'),
+                    _ => out.push_str("0 - "),
+                },
+            }
+            write_css_factor(&t.node, out);
+        } else {
+            match t.sign {
+                CssSign::Pos => out.push_str(" + "),
+                CssSign::Neg => out.push_str(" - "),
+            }
+            write_css_factor(&t.node, out);
+        }
+    }
+}
+
+#[allow(dead_code)]
+fn write_css_product(factors: &[CssNode], out: &mut String) {
+    for (i, f) in factors.iter().enumerate() {
+        if i > 0 {
+            out.push_str(" * ");
+        }
+        write_css_factor(f, out);
+    }
+}
+
+/// A factor inside a Product or Div lhs/rhs: wrap a Sum in `(...)` so
+/// the binding stays tighter than `+`/`-`.
+#[allow(dead_code)]
+fn write_css_factor(node: &CssNode, out: &mut String) {
+    match node {
+        CssNode::Sum(_) => {
+            out.push('(');
+            write_css_expr(node, true, out);
+            out.push(')');
+        }
+        _ => write_css_expr(node, true, out),
+    }
+}
+
+#[allow(dead_code)]
+fn write_css_arm(arm: &CssArm, out: &mut String) {
+    write_css_expr(&arm.cond, false, out);
+    out.push_str(": ");
+    write_css_expr(&arm.value, false, out);
+}
+
+// ---------------------------------------------------------------------
+// CSS dump format
+// ---------------------------------------------------------------------
+
+#[allow(dead_code)]
+fn write_css_dump(node: &CssNode, indent: usize, out: &mut String) {
+    let pad: String = " ".repeat(indent);
+    match node {
+        CssNode::Int(n) => {
+            writeln!(out, "{}Int({})", pad, n).unwrap();
+        }
+        CssNode::Var { name, fallback } => {
+            writeln!(out, "{}Var {}", pad, name).unwrap();
+            if let Some(fb) = fallback {
+                writeln!(out, "{}  fallback:", pad).unwrap();
+                write_css_dump(fb, indent + 4, out);
+            }
+        }
+        CssNode::Calc(inner) => {
+            writeln!(out, "{}Calc", pad).unwrap();
+            write_css_dump(inner, indent + 2, out);
+        }
+        CssNode::MathFn { name, args } => {
+            writeln!(
+                out,
+                "{}MathFn {} ({} arg{})",
+                pad,
+                name,
+                args.len(),
+                pluralize(args.len())
+            )
+            .unwrap();
+            for a in args {
+                write_css_dump(a, indent + 2, out);
+            }
+        }
+        CssNode::Fn { name, args } => {
+            writeln!(
+                out,
+                "{}Fn {} ({} arg{})",
+                pad,
+                name,
+                args.len(),
+                pluralize(args.len())
+            )
+            .unwrap();
+            for a in args {
+                write_css_dump(a, indent + 2, out);
+            }
+        }
+        CssNode::Sum(terms) => {
+            writeln!(
+                out,
+                "{}Sum ({} term{})",
+                pad,
+                terms.len(),
+                pluralize(terms.len())
+            )
+            .unwrap();
+            for t in terms {
+                let sign = match t.sign {
+                    CssSign::Pos => "+",
+                    CssSign::Neg => "-",
+                };
+                writeln!(out, "{}  [{}]", pad, sign).unwrap();
+                write_css_dump(&t.node, indent + 4, out);
+            }
+        }
+        CssNode::Product(factors) => {
+            writeln!(
+                out,
+                "{}Product ({} factor{})",
+                pad,
+                factors.len(),
+                pluralize(factors.len())
+            )
+            .unwrap();
+            for f in factors {
+                write_css_dump(f, indent + 2, out);
+            }
+        }
+        CssNode::Div(l, r) => {
+            writeln!(out, "{}Div", pad).unwrap();
+            writeln!(out, "{}  lhs:", pad).unwrap();
+            write_css_dump(l, indent + 4, out);
+            writeln!(out, "{}  rhs:", pad).unwrap();
+            write_css_dump(r, indent + 4, out);
+        }
+        CssNode::Paren(inner) => {
+            writeln!(out, "{}Paren", pad).unwrap();
+            write_css_dump(inner, indent + 2, out);
+        }
+        CssNode::If { arms, default } => {
+            writeln!(
+                out,
+                "{}If ({} arm{})",
+                pad,
+                arms.len(),
+                pluralize(arms.len())
+            )
+            .unwrap();
+            for (i, arm) in arms.iter().enumerate() {
+                writeln!(out, "{}  arm[{}].cond:", pad, i).unwrap();
+                write_css_dump(&arm.cond, indent + 4, out);
+                writeln!(out, "{}  arm[{}].value:", pad, i).unwrap();
+                write_css_dump(&arm.value, indent + 4, out);
+            }
+            writeln!(out, "{}  default:", pad).unwrap();
+            write_css_dump(default, indent + 4, out);
+        }
+        CssNode::Style { prop, value } => {
+            writeln!(out, "{}Style {}: {}", pad, prop, value).unwrap();
+        }
+        CssNode::Or(conds) => {
+            let plural = if conds.len() == 1 { "" } else { "es" };
+            writeln!(out, "{}Or ({} branch{})", pad, conds.len(), plural).unwrap();
+            for c in conds {
+                write_css_dump(c, indent + 2, out);
+            }
+        }
+        CssNode::Raw(s) => {
+            writeln!(out, "{}Raw {:?}", pad, s).unwrap();
+        }
+    }
+}
+
+#[allow(dead_code)]
+fn pluralize(n: usize) -> &'static str {
+    if n == 1 { "" } else { "s" }
+}

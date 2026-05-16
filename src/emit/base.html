@@ -233,7 +233,7 @@ body { margin: 0; background: #f5f5f5; font-family: ui-monospace, SFMono-Regular
 @function --m16(--lo <number>, --hi <number>) returns <integer> { result: calc(var(--lo) + 256 * var(--hi)); }
 /*__WSS_KEEP_FN_M16_END__*/
 /*__WSS_KEEP_FN_MLOAD_START__*/
-@function --mload(--byte <number>) returns <integer> { result: calc((--eqz(--mpar(var(--byte)))) * mod(--read_m16(--mhalf(var(--byte))), 256) + (--nez(--mpar(var(--byte)))) * mod(round(down, calc(--read_m16(--mhalf(var(--byte))) / 256)), 256)); }
+@function --mload(--byte <number>) returns <integer> { result: mod(round(down, calc(--read_m16(--mhalf(var(--byte))) / (1 + 255 * mod(var(--byte), 2)))), 256); }
 /*__WSS_KEEP_FN_MLOAD_END__*/
 /*__WSS_SUPPORT__*/
 </style>
@@ -298,13 +298,13 @@ Please try an up-to-date Chromium-based browser.
     /*__WSS_KEEP_JS_CLOCK_DEBUGGER_RUNTIME_END__*/
     let halted = false;
     let animationPending = false;
+    /*__WSS_KEEP_JS_CLOCK_DEBUGGER_RUNTIME_START__*/
     let debugRunBtn = null;
     let debugStepBtn = null;
     let debugSpeedOut = null;
     let debugStateOut = null;
     let debugPcOut = null;
     let debugClockOut = null;
-    /*__WSS_KEEP_JS_CLOCK_DEBUGGER_RUNTIME_START__*/
     let debugOpsList = null;
     let debugOpsHead = null;
     let debugStickyKey = null;
@@ -345,8 +345,8 @@ Please try an up-to-date Chromium-based browser.
         return readIntStyle(style, "--pc", readIntStyle(style, "--_1pc", 0));
     }
 
+    /*__WSS_KEEP_JS_CLOCK_DEBUGGER_RUNTIME_START__*/
     function refreshDebuggerLabels(style) {
-        /*__WSS_KEEP_JS_CLOCK_DEBUGGER_RUNTIME_START__*/
         if (!debugStateOut) return;
         const pc = readPc(style);
         debugStateOut.textContent = halted ? "halted" : paused ? "paused" : "running";
@@ -362,8 +362,8 @@ Please try an up-to-date Chromium-based browser.
             debugSpeedOut.textContent = formatSpeedLabel(speedMultiplier);
         }
         renderDebuggerOps(pc, style);
-        /*__WSS_KEEP_JS_CLOCK_DEBUGGER_RUNTIME_END__*/
     }
+    /*__WSS_KEEP_JS_CLOCK_DEBUGGER_RUNTIME_END__*/
 
     /*__WSS_KEEP_JS_CLOCK_DEBUGGER_RUNTIME_START__*/
     function setStickyKey(code) {
@@ -613,7 +613,9 @@ Please try an up-to-date Chromium-based browser.
         if (halted) {
             paused = true;
         }
+        /*__WSS_KEEP_JS_CLOCK_DEBUGGER_RUNTIME_START__*/
         refreshDebuggerLabels(style);
+        /*__WSS_KEEP_JS_CLOCK_DEBUGGER_RUNTIME_END__*/
         if (!halted && (!paused || pendingStepCount > 0)) {
             scheduleAnimation();
         }
@@ -624,8 +626,8 @@ Please try an up-to-date Chromium-based browser.
         return Math.min(maxSpeedMultiplier, Math.max(minSpeedMultiplier, value));
     }
 
+    /*__WSS_KEEP_JS_CLOCK_DEBUGGER_RUNTIME_START__*/
     function initializeDebuggerPopup() {
-        /*__WSS_KEEP_JS_CLOCK_DEBUGGER_RUNTIME_START__*/
         const toggleBtn = document.createElement("button");
         toggleBtn.type = "button";
         toggleBtn.className = "wss-debug-trigger";
@@ -724,13 +726,15 @@ Please try an up-to-date Chromium-based browser.
                 event.preventDefault();
             });
         }
-        /*__WSS_KEEP_JS_CLOCK_DEBUGGER_RUNTIME_END__*/
     }
+    /*__WSS_KEEP_JS_CLOCK_DEBUGGER_RUNTIME_END__*/
 
     clkEl.style.setProperty("--clk", "0", "important");
     scrollScreenToBottom();
+    /*__WSS_KEEP_JS_CLOCK_DEBUGGER_RUNTIME_START__*/
     initializeDebuggerPopup();
     refreshDebuggerLabels(getComputedStyle(terminalEl));
+    /*__WSS_KEEP_JS_CLOCK_DEBUGGER_RUNTIME_END__*/
     if (!paused) {
         scheduleAnimation();
     }

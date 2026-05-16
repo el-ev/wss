@@ -1,6 +1,6 @@
 # wss
 
-wss is a transpiler from WebAssembly to CSS, plus an HTML/CSS runtime.
+wss is an _optimizing_ transpiler from WebAssembly to CSS, plus an HTML/CSS runtime.
 
 The result runs entirely in pure HTML/CSS; optional JavaScript add-ons are available for quality-of-life features.
 
@@ -76,6 +76,7 @@ Options:
 - `--no-js-clock`: disable JS-based clock stepping.
 - `--js-coprocessor`: enable the JS coprocessor for `div`/`rem` and bitwise builtins. Conflicts with `--no-js-clock`.
 - `--js-clock-debugger`: enable the JS debugger popup. Conflicts with `--no-js-clock`.
+- `--no-visualizers`: omit the memory and callstack visualizers from the emitted runtime.
 - `--max-phys-regs <N>`: register-allocation cap, including reserved `r0`-`r3`. Default: `256`
 
 ## Testing
@@ -92,13 +93,12 @@ Options:
 - **Function calls with TCO** — call, call_indirect, return_call, return_call_indirect
 - **Locals and globals** — get, set, tee
 - **Select** — typed and untyped select
-- **Exception handling** — `try`, `catch`, `catch_all`, `delegate`, `throw`, `rethrow` on exception tags with either no payload or a single `i32` payload. Dedicated `exc_flag` / `exc_tag` / `exc_payload` state channels propagate through calls and returns; an uncaught exception in `_start` traps with code `-6` (`uncaught exception`). Current gaps: multi-value or non-`i32` tag payloads, `try_table`, `throw_ref`, `delegate` depth > `0`, `rethrow` depth > `0`, and `rethrow` from `catch_all`.
+- **Exception handling** — `try`, `catch`, `catch_all`, `delegate`, `throw`, `rethrow` on exception tags with either no payload or a single `i32` payload. Doesn't support: multi-value or non-`i32` tag payloads, `try_table`, `throw_ref`, `delegate` depth > `0`, `rethrow` depth > `0`, and `rethrow` from `catch_all`.
 
 ## What is under development
 
-- **Partial i64 integer support**
-  - The transpiler now accepts integer-only wasm signatures using `i32` and `i64`, including `i64` `_start` returns and a working end-to-end path for basic `i64` constants, direct-call/return plumbing, locals, and simple integer operations.
-  - The lower8/runtime path is still incomplete for the full wasm `i64` opcode set, so some `i64` operations may still fail at transpile time.
+- Full i64 integer support
+- Some exception-handling features
 
 ## What will not be supported
 
