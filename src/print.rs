@@ -931,12 +931,18 @@ fn write_css_expr(node: &CssNode, math_ctx: bool, out: &mut String) {
             out.push(')');
         }
         CssNode::Calc(inner) => {
-            // Inside an existing math context, `calc(X)` is redundant with
-            // bare `(X)`. We still emit it explicitly because most callers
-            // expect a stable shape; the fold pass strips it.
-            out.push_str("calc(");
-            write_css_expr(inner, true, out);
-            out.push(')');
+            // Inside an existing math context the `calc(...)` wrapper is
+            // semantically redundant — `min(1, calc(a + b))` is identical
+            // to `min(1, a + b)`. Drop the wrapper here for a smaller
+            // output; the parser still accepts both forms, and Stage 3
+            // tests assert parse → print stability (not AST identity).
+            if math_ctx {
+                write_css_expr(inner, true, out);
+            } else {
+                out.push_str("calc(");
+                write_css_expr(inner, true, out);
+                out.push(')');
+            }
         }
         CssNode::MathFn { name, args } => {
             out.push_str(name);
@@ -1024,15 +1030,56 @@ fn write_css_expr(node: &CssNode, math_ctx: bool, out: &mut String) {
             out.push(')');
         }
         CssNode::Or(conds) => {
-            for (i, c) in conds.iter().enumerate() {
-                if i > 0 {
-                    out.push_str(" or ");
+            // Collapse `style(--p: a) or style(--p: b) or ...` to the
+            // compact `style((--p: a) or (--p: b) or ...)` form when
+            // every disjunct is a `Style` query against the *same*
+            // property. Saves the per-clause `style(...)` wrapper —
+            // ~5 bytes per extra clause on long `--pcg*` chains.
+            if let Some(prop) = same_style_prop(conds) {
+                out.push_str("style(");
+                for (i, c) in conds.iter().enumerate() {
+                    let CssNode::Style { value, .. } = c else {
+                        unreachable!()
+                    };
+                    if i > 0 {
+                        out.push_str(" or ");
+                    }
+                    out.push('(');
+                    out.push_str(prop);
+                    out.push_str(": ");
+                    out.push_str(value);
+                    out.push(')');
                 }
-                write_css_expr(c, false, out);
+                out.push(')');
+            } else {
+                for (i, c) in conds.iter().enumerate() {
+                    if i > 0 {
+                        out.push_str(" or ");
+                    }
+                    write_css_expr(c, false, out);
+                }
             }
         }
         CssNode::Raw(s) => out.push_str(s),
     }
+}
+
+/// If every conjunct in an `Or` chain is a `style(--p: v)` query with
+/// the same `--p`, return that property name. Used by the printer to
+/// pick the compact `style((--p: a) or (--p: b))` form.
+fn same_style_prop(conds: &[CssNode]) -> Option<&str> {
+    let mut shared: Option<&str> = None;
+    for c in conds {
+        let CssNode::Style { prop, .. } = c else {
+            return None;
+        };
+        match shared {
+            None => shared = Some(prop),
+            Some(s) if s == prop => {}
+            _ => return None,
+        }
+    }
+    shared
 }
 
 #[allow(dead_code)]

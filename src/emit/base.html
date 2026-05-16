@@ -97,15 +97,11 @@ body { margin: 0; background: #f5f5f5; font-family: ui-monospace, SFMono-Regular
 #ind-sp::before { counter-reset: ind-sp var(--cs_sp); content: counter(ind-sp); }
 /*__WSS_KEEP_SP_INDICATOR_CSS_END__*/
 #ind-g0::before {
-    --g0b0: mod(calc(var(--g0_0, 0) + 256), 256);
-    --g0b1: mod(calc(var(--g0_1, 0) + 256), 256);
-    --g0b2: mod(calc(var(--g0_2, 0) + 256), 256);
-    --g0b3: mod(calc(var(--g0_3, 0) + 256), 256);
-    content: "0x"
-        --hex(round(down, calc(var(--g0b3) / 16))) --hex(mod(var(--g0b3), 16))
-        --hex(round(down, calc(var(--g0b2) / 16))) --hex(mod(var(--g0b2), 16))
-        --hex(round(down, calc(var(--g0b1) / 16))) --hex(mod(var(--g0b1), 16))
-        --hex(round(down, calc(var(--g0b0) / 16))) --hex(mod(var(--g0b0), 16));
+content: "0x"
+--hex(round(down, calc(var(--g0_3) / 16))) --hex(mod(var(--g0_3), 16))
+--hex(round(down, calc(var(--g0_2) / 16))) --hex(mod(var(--g0_2), 16))
+--hex(round(down, calc(var(--g0_1) / 16))) --hex(mod(var(--g0_1), 16))
+--hex(round(down, calc(var(--g0_0) / 16))) --hex(mod(var(--g0_0), 16));
 }
 
 @function --support-test() returns <integer> { result: calc(1 + 1); }
@@ -232,7 +228,7 @@ body { animation: rng-roll-0 257ms steps(256, jump-end) infinite, rng-roll-1 263
 @function --lt(--a <number>, --b <number>) returns <integer> { result: round(down, calc((1 - sign(calc(var(--a) - var(--b)))) / 2)); }
 /*__WSS_KEEP_FN_LT_END__*/
 /*__WSS_KEEP_FN_GE_START__*/
-@function --ge(--a <number>, --b <number>) returns <integer> { result: calc(1 - --lt(var(--a), var(--b))); }
+@function --ge(--a <number>, --b <number>) returns <integer> { result: round(up, calc((sign(calc(var(--a) - var(--b))) + 1) / 2)); }
 /*__WSS_KEEP_FN_GE_END__*/
 /*__WSS_KEEP_FN_INRANGE_START__*/
 @function --inrange(--x <number>, --k <number>) returns <integer> { result: calc(--lt(-1, var(--x)) * --lt(var(--x), var(--k))); }

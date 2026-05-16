@@ -331,9 +331,12 @@ fn emit_html_includes_callstack_overflow_trap_ui_and_guard() {
     assert!(html.contains("[Trap: callstack overflow]"));
     let alloc_expr = format!("calc(var(--_1cs_sp) + {})", alloc);
     assert!(html.contains(&alloc_expr));
-    // CsAlloc(N) folds the offset into the trap bound: ge(idx, K) becomes ge(B, K-N).
-    // K = cs slot count + 1 for the alloc extend bit; with alloc == K this is 0.
-    assert!(html.contains("--ge(var(--_1cs_sp), 0)"));
+    // CsAlloc(N) folds the offset into the trap bound: ge(idx, K)
+    // becomes ge(B, K-N). K = cs slot count + 1 (the alloc extend
+    // bit); with alloc == K the threshold is 0, and the
+    // known-nonneg fold collapses `--ge(--_1cs_sp, 0)` to `1` (sp
+    // is non-negative by construction, so the guard always fires).
+    // The trap target `-5` survives in the `--sel` else-arm.
     assert!(html.contains(", -5,"));
 }
 
@@ -488,8 +491,11 @@ fn emit_html_callstack_visualizer_tracks_read_and_write_slots() {
     assert!(!html.contains(" --csw_active:"));
     assert!(html.contains(" --cswdp0:"));
     assert!(html.contains("@property --cswdp0 { syntax: \"<integer>\";"));
+    // logic.rs flips the condition to `--cswdp0: 0` (no-store
+    // cycle) so the dirty-page sum can be emitted without a
+    // `min(1, …)` clamp.
     assert!(html.contains(&format!(
-        " {}: if(style(--cswdp0: 1): --csmerge(0, var({})); else: var({}));",
+        " {}: if(style(--cswdp0: 0): var({}); else: --csmerge(0, var({})));",
         cs0_name, cs0_shadow, cs0_shadow
     )));
 }
@@ -560,7 +566,9 @@ fn emit_html_includes_rng_when_random_is_used() {
     assert!(html.contains("@property --rng3"));
     assert!(html.contains("@keyframes rng-roll-0"));
     assert!(html.contains("rng-roll-0 257ms steps(256, jump-end) infinite"));
-    assert!(html.contains("mod(calc(var(--rng0, 0) * var(--rng1, 0) + var(--rng2, 0) + 1), 256)"));
+    // Math-function args inherit math context, so the inner `calc(...)`
+    // gets stripped by the AST fold.
+    assert!(html.contains("mod(var(--rng0, 0) * var(--rng1, 0) + var(--rng2, 0) + 1, 256)"));
     // Debugger is off by default in tests; the rand inspector should NOT
     // appear in this baseline (covered separately when both flags on).
     assert!(!html.contains("data-wss-debug-rng-u32"));
@@ -677,7 +685,7 @@ fn emit_html_includes_keyboard_ui_when_getchar_is_used() {
     assert!(html.contains("@property --kb"));
     assert!(html.contains("@property --wait_input"));
     assert!(html.contains(" --wait_input: if("));
-    assert!(html.contains("--eq(var(--kb, -1), -1)"));
+    assert!(html.contains("--eq(var(--kb), -1)"));
     assert!(html.contains("@function --eqz(--a <number>) returns <integer>"));
     assert!(html.contains("@function --ne(--a <number>, --b <number>) returns <integer>"));
     assert!(html.contains("class=\"kb\""));
@@ -740,8 +748,10 @@ fn emit_html_untouched_registers_use_direct_fallback_without_empty_if() {
         global_init: Vec::new(),
     };
     let html = emit_program(&program).expect("emit should succeed");
-    assert!(html.contains(" --r7: var(--_1r7);"));
-    assert!(!html.contains(" --r7: if(else: var(--_1r7));"));
+    // `--_1r7` (= `var(--_2r7, 0)`) is single-use, so it gets inlined
+    // into `--r7`, leaving `--r7: var(--_2r7, 0);`.
+    assert!(html.contains(" --r7: var(--_2r7, 0);"));
+    assert!(!html.contains(" --r7: if(else: var(--_2r7, 0));"));
 }
 
 #[test]
@@ -853,13 +863,14 @@ fn emit_html_globals_emit_all_lanes_on_single_line_per_global() {
     assert!(g_props.contains(&format!("@property {}", g0_lane2)));
     assert!(g_props.contains(&format!("@property {}", g0_lane3)));
 
-    let g_shadow = html
-        .lines()
-        .find(|line| line.contains(&_1g0_lane0))
-        .expect("missing _1g line");
-    assert!(g_shadow.contains(&_1g0_lane1));
-    assert!(g_shadow.contains(&_1g0_lane2));
-    assert!(g_shadow.contains(&_1g0_lane3));
+    // Each `--_1g0_N: var(--_2g0_N, …)` shadow is read exactly once
+    // (from `--gN_M: var(--_1gN_M);`), so single-use inlining drops the
+    // shadow and the `--g0_N: var(--_2g0_N, …)` line below carries the
+    // fallback chain directly.
+    let _ = _1g0_lane0;
+    let _ = _1g0_lane1;
+    let _ = _1g0_lane2;
+    let _ = _1g0_lane3;
 
     let g_line = html
         .lines()
@@ -889,10 +900,17 @@ fn emit_html_globals_emit_all_lanes_on_single_line_per_global() {
     assert!(g_exec.contains(&_0g0_lane2));
     assert!(g_exec.contains(&_0g0_lane3));
 
-    assert!(g_shadow.contains(&format!("var({}, 68)", _2g0_lane0)));
-    assert!(g_shadow.contains(&format!("var({}, 51)", _2g0_lane1)));
-    assert!(g_shadow.contains(&format!("var({}, 34)", _2g0_lane2)));
-    assert!(g_shadow.contains(&format!("var({}, 17)", _2g0_lane3)));
+    // After single-use inlining the `--_1g0_N` chain element disappears
+    // and the `--g0_N` decl line carries the `var(--_2g0_N, init)`
+    // fallback values directly.
+    let g_public = html
+        .lines()
+        .find(|line| line.contains(&format!("{}: var(", g0_lane0)))
+        .expect("missing public --g0 line");
+    assert!(g_public.contains(&format!("var({}, 68)", _2g0_lane0)));
+    assert!(g_public.contains(&format!("var({}, 51)", _2g0_lane1)));
+    assert!(g_public.contains(&format!("var({}, 34)", _2g0_lane2)));
+    assert!(g_public.contains(&format!("var({}, 17)", _2g0_lane3)));
 }
 
 #[test]
@@ -1012,11 +1030,15 @@ fn emit_html_memory_store_merge_expr_flattens_slot_conditions() {
         html.contains("@function --mmerge16(--cell <number>, --prev <number>) returns <integer>")
     );
     assert!(html.contains("--eq1(var(--msp0))"));
-    assert!(html.contains(" --mwdp0: min(1, calc("));
+    // Dirty-page indicator is emitted as a raw sum (no `min(1, …)` clamp);
+    // the consumer below tests `--mwdp0: 0` and swaps branches, so any
+    // non-zero sum routes through the merge expression.
+    assert!(html.contains(" --mwdp0: calc("));
+    assert!(!html.contains(" --mwdp0: min(1,"));
     assert!(html.contains("@property --mwdp0 { syntax: \"<integer>\";"));
     assert!(!html.contains(" --mw_active:"));
     assert!(html.contains(&format!(
-        " {}: if(style(--mwdp0: 1): --mmerge16(0, var({})); else: var({}));",
+        " {}: if(style(--mwdp0: 0): var({}); else: --mmerge16(0, var({})));",
         m0_name, m0_shadow, m0_shadow
     )));
     assert!(
@@ -1041,7 +1063,14 @@ fn emit_html_memory_store_merge_expr_uses_byte_helpers_when_no_writes() {
     assert!(html.contains("@function --mlo(--w <number>) returns <integer>"));
     assert!(html.contains("@function --mhi(--w <number>) returns <integer>"));
     assert!(html.contains("@function --m16(--lo <number>, --hi <number>) returns <integer>"));
-    assert!(html.contains(&format!(" {}: var({});", m0_name, m0_shadow)));
+    // The `--_1m000` shadow is single-use, so it gets inlined into
+    // `--m000`, which now carries the `var(--_2m000, 0)` chain directly.
+    let _ = m0_shadow;
+    assert!(html.contains(&format!(
+        " {}: var(--_2{}, 0);",
+        m0_name,
+        m0_name.trim_start_matches("--")
+    )));
     assert!(!html.contains("@function --mmerge16("));
     assert!(!html.contains("@function --mmerge_byte("));
     assert!(!html.contains(" --mw_active: if("));

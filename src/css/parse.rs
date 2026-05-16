@@ -1,20 +1,3 @@
-//! Chumsky-based parser for the CSS expressions wss emits.
-//!
-//! The grammar is small and entirely under our control. Anything we
-//! don't model — bare keywords inside `round()`, unrecognized syntax
-//! inside `style()` values — falls back to [`Node::Raw`] and is
-//! ferried through unchanged by the printer.
-//!
-//! Two parsers cooperate via [`recursive`]:
-//!  - `atom` — a single value: `Int`, `Var`, `Calc`, `Fn`, `MathFn`,
-//!    `If`, `Style`, `Paren`, …
-//!  - `math` — a sum-of-products built from atoms, only legal inside
-//!    a math context.
-//!
-//! [`parse`] is the public entry point. It returns the parsed node, or
-//! `Raw(input)` if parsing fails (so the printer can re-emit the
-//! original verbatim).
-
 use chumsky::error::Rich;
 use chumsky::extra;
 use chumsky::prelude::*;
@@ -42,8 +25,6 @@ fn atom_parser<'a>() -> impl Parser<'a, &'a str, Node, Err<'a>> + Clone {
         let math = math_expr_parser(atom.clone()).boxed();
 
         choice((
-            // Order matters: more-specific keywords (calc/var/if/style)
-            // before the generic math-fn / user-fn / ident dispatch.
             calc_call(math.clone()),
             var_call(atom.clone()),
             if_call(),
@@ -58,7 +39,6 @@ fn atom_parser<'a>() -> impl Parser<'a, &'a str, Node, Err<'a>> + Clone {
     })
 }
 
-/// Sum-of-products in math context. Uses `atom` as factor.
 fn math_expr_parser<'a>(
     atom: impl Parser<'a, &'a str, Node, Err<'a>> + Clone + 'a,
 ) -> impl Parser<'a, &'a str, Node, Err<'a>> + Clone {
@@ -105,8 +85,6 @@ fn int_literal<'a>() -> impl Parser<'a, &'a str, Node, Err<'a>> + Clone {
         .map(|s: &str| Node::Int(s.parse().unwrap_or(0)))
 }
 
-/// CSS-flavored identifier: starts with a letter or `-`, continues with
-/// letters/digits/`-`/`_`.
 fn css_ident<'a>() -> impl Parser<'a, &'a str, &'a str, Err<'a>> + Clone {
     any()
         .filter(|c: &char| c.is_ascii_alphabetic() || *c == '-' || *c == '_')
@@ -212,12 +190,6 @@ fn style_call<'a>() -> impl Parser<'a, &'a str, Node, Err<'a>> + Clone {
         .map(|body| parse_style_body(&body))
 }
 
-/// Consume characters up to the matching close paren of an *already
-/// opened* call (i.e. the leading `name(` has already been parsed).
-/// Tracks paren depth so nested `()` inside the body don't terminate
-/// the match early. Built as a custom parser because chumsky's
-/// `recursive` combinator struggles with the inner-type inference
-/// when the result is a `String`.
 fn balanced_body<'a>() -> impl Parser<'a, &'a str, String, Err<'a>> + Clone {
     custom::<_, &str, _, Err>(|input| {
         let start = input.cursor();
@@ -239,7 +211,6 @@ fn balanced_body<'a>() -> impl Parser<'a, &'a str, String, Err<'a>> + Clone {
                 }
                 None => break,
             }
-            // Defensive: cursor must advance.
             debug_assert!(input.cursor() != before);
         }
         Ok(input.slice(&start..&input.cursor()).to_string())
@@ -277,13 +248,62 @@ fn parse_if_body(body: &str) -> Node {
 }
 
 fn parse_style_body(body: &str) -> Node {
-    if let Some((prop, value)) = body.split_once(':') {
+    let trimmed = body.trim();
+    // Compact-or form: `style((--p: 1) or (--p: 2) or ...)`. We parse
+    // each `(--p: v)` clause as a Style and wrap the whole thing in
+    // `Or` so it round-trips back through the printer's same-prop
+    // collapse rule.
+    if trimmed.starts_with('(') {
+        let clauses = split_top_level_or(trimmed);
+        let parsed: Option<Vec<Node>> = clauses
+            .iter()
+            .map(|c| parse_paren_style_feature(c.trim()))
+            .collect();
+        if let Some(nodes) = parsed
+            && !nodes.is_empty()
+        {
+            if nodes.len() == 1 {
+                return nodes.into_iter().next().unwrap();
+            }
+            return Node::Or(nodes);
+        }
+    }
+    if let Some(idx) = top_level_colon(trimmed) {
+        let (prop, value) = trimmed.split_at(idx);
         return Node::Style {
             prop: prop.trim().to_string(),
-            value: value.trim().to_string(),
+            value: value[1..].trim().to_string(),
         };
     }
     Node::Raw(format!("style({})", body))
+}
+
+/// Parse one `(--p: v)` clause from inside a compact `style()` query.
+/// Returns `None` if the clause doesn't match the shape.
+fn parse_paren_style_feature(s: &str) -> Option<Node> {
+    let inner = s.strip_prefix('(').and_then(|x| x.strip_suffix(')'))?;
+    let inner = inner.trim();
+    let idx = top_level_colon(inner)?;
+    let (prop, value) = inner.split_at(idx);
+    Some(Node::Style {
+        prop: prop.trim().to_string(),
+        value: value[1..].trim().to_string(),
+    })
+}
+
+/// Find the first `:` at paren depth 0 in `s`. Returns its byte offset.
+fn top_level_colon(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut depth: i32 = 0;
+    for (i, &b) in bytes.iter().enumerate() {
+        match b {
+            b'(' => depth += 1,
+            b')' => depth -= 1,
+            b':' if depth == 0 => return Some(i),
+            _ => {}
+        }
+    }
+    None
 }
 
 fn parse_cond(s: &str) -> Node {

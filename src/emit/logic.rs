@@ -368,12 +368,17 @@ impl<'a> Emitter<'a> {
                     Inst8Kind::Getchar => {
                         if let Some(dst) = op.dst {
                             has_getchar = true;
-                            getchar_ready = "--ne(var(--kb, -1), -1)".to_string();
+                            // `--kb` is registered as `@property --kb`
+                            // with `initial-value: -1` (see base.html),
+                            // so `var(--kb)` is always defined; the
+                            // earlier `var(--kb, -1)` fallback never
+                            // fired.
+                            getchar_ready = "--ne(var(--kb), -1)".to_string();
                             reg_now.insert(
                                 dst.expect_vreg(),
                                 Self::sel_expr(
                                     &getchar_ready,
-                                    "mod(var(--kb, -1), 256)",
+                                    "mod(var(--kb), 256)",
                                     &format!("var(--_1r{})", dst.expect_vreg()),
                                 ),
                             );
@@ -550,7 +555,7 @@ impl<'a> Emitter<'a> {
                 term.pc_expr = Self::sel_expr(&getchar_ready, &term.pc_expr, &format!("{}", pc));
                 let _ = write!(
                     wait_input_arms,
-                    "style(--_1pc: {}): --eq(var(--kb, -1), -1); ",
+                    "style(--_1pc: {}): --eq(var(--kb), -1); ",
                     pc
                 );
             }
@@ -886,9 +891,11 @@ impl<'a> Emitter<'a> {
             let expr = if self.max_mem_store_slots == 0 {
                 prev.clone()
             } else {
-                // mwdpN = 1 implies some mso* is 1 at this PC, which implies
+                // mwdpN != 0 implies some mso* is 1 at this PC, which implies
                 // mw_active = 1; so the outer `mw_active` check is redundant.
-                format!("if(style(--mwdp{}: 1): {}; else: {})", page, merged, prev)
+                // Test against 0 (no store this cycle) so the dirty-page sum
+                // can be emitted without a `min(1, …)` clamp.
+                format!("if(style(--mwdp{}: 0): {}; else: {})", page, prev, merged)
             };
             let _ = write!(mem_line, " {}: {};", name, expr);
             if (i + 1) % 8 == 0 {
@@ -909,9 +916,11 @@ impl<'a> Emitter<'a> {
                 } else {
                     let merged = format!("--csmerge({}, {})", i, prev);
                     let page = i / CALLSTACK_DIRTY_PAGE_CELLS;
-                    // cswdpN = 1 implies some csoN is 1 at this PC, which
+                    // cswdpN != 0 implies some csoN is 1 at this PC, which
                     // implies csw_active = 1; so the outer check is redundant.
-                    format!("if(style(--cswdp{}: 1): {}; else: {})", page, merged, prev)
+                    // Test against 0 (no store this cycle) so the dirty-page
+                    // sum can be emitted without a `min(1, …)` clamp.
+                    format!("if(style(--cswdp{}: 0): {}; else: {})", page, prev, merged)
                 };
                 let _ = write!(cs_line, " {}: {};", name, expr);
                 if (i + 1) % 8 == 0 {
@@ -1206,9 +1215,11 @@ impl<'a> Emitter<'a> {
     }
 
     pub(super) fn eq_expr(l: &str, r: &str) -> String {
-        if let (Ok(a), Ok(b)) = (l.trim().parse::<i64>(), r.trim().parse::<i64>()) {
-            return format!("{}", (a == b) as i32);
-        }
+        // Constant-constant fold lives in `src/css/fold.rs::fold_eq_ne`
+        // and runs unconditionally over the document. The shape choice
+        // below (prefer `--eqz`/`--eq1` over the generic `--eq` for
+        // zero/one comparisons) is a sizing preference, not a fold —
+        // the doc-fold doesn't reverse it.
         match (l, r) {
             (a, "0") | ("0", a) => format!("--eqz({})", a),
             (a, "1") | ("1", a) => format!("--eq1({})", a),
@@ -1217,9 +1228,7 @@ impl<'a> Emitter<'a> {
     }
 
     pub(super) fn ne_expr(l: &str, r: &str) -> String {
-        if let (Ok(a), Ok(b)) = (l.trim().parse::<i64>(), r.trim().parse::<i64>()) {
-            return format!("{}", (a != b) as i32);
-        }
+        // Constant-constant fold lives in `src/css/fold.rs::fold_eq_ne`.
         match (l, r) {
             (a, "0") | ("0", a) => format!("--nez({})", a),
             _ => format!("--ne({}, {})", l, r),
@@ -1573,44 +1582,19 @@ impl<'a> Emitter<'a> {
         // we can identify it; the inner expression has the same truthiness.
         let cond_str = Self::strip_truthy_wrappers(cond.trim());
         let cond = cond_str.as_str();
-        match cond {
-            "0" => return if_false.to_string(),
-            "1" => return if_true.to_string(),
-            _ => {}
-        }
-        let t = if_true.trim();
-        let f = if_false.trim();
-        if t == f {
-            return if_true.to_string();
-        }
-        // `sel(calc(1 - bool), t, f)` flips its branches into `sel(bool, f, t)`,
-        // letting downstream branch folds catch the bool form.
-        if let Some(rest) = cond.strip_prefix("calc(1 - ")
-            && let Some(inner) = rest.strip_suffix(')')
-        {
-            let inner_trim = inner.trim();
-            let unwrapped = inner_trim
-                .strip_prefix('(')
-                .and_then(|s| s.strip_suffix(')'))
-                .map(str::trim)
-                .unwrap_or(inner_trim);
-            if Self::is_bool_expr(unwrapped) {
-                return Self::sel_expr(unwrapped, if_false, if_true);
-            }
-        }
-        // `sel(bool, 1, 0)` is the bool itself; `sel(bool, 0, 1)` is its
-        // logical negation. Only safe when `cond` already returns 0/1.
-        if Self::is_bool_expr(cond) {
-            if t == "1" && f == "0" {
-                return cond.to_string();
-            }
-            if t == "0" && f == "1" {
-                return Self::flip_bool(cond);
-            }
-        }
+        // Decide between the `--sel(...)` form and a hand-expanded
+        // `c * t + (1 - c) * f` form. CSS `@function` bodies can't use
+        // `--sel` inside themselves (the container query inside `--sel`'s
+        // definition doesn't see the local `--c` binding), so when any
+        // operand mentions a nested `--sel(` we expand here. The post-
+        // emit AST fold (src/css/fold.rs) handles all literal / bool /
+        // identical-branch / calc(1-bool)-flip simplifications, so we
+        // don't repeat them here.
         if !cond.contains("--sel(") && !if_true.contains("--sel(") && !if_false.contains("--sel(") {
             return format!("--sel({}, {}, {})", cond, if_true, if_false);
         }
+        let t = if_true.trim();
+        let f = if_false.trim();
         // Drop dead multiplicands when either branch is literal `0`:
         //   sel(c, 0, f) → (1 - c) * f
         //   sel(c, t, 0) → c * t
@@ -2525,9 +2509,6 @@ impl<'a> Emitter<'a> {
         format!("mod({}, {})", value, modulus)
     }
 
-    /// True if `v` is a `var(--_NrM)` shadow reference to a byte-typed
-    /// register — IR8 vregs always hold 0..=255, so a `mod(…, 256)` wrapper
-    /// around such a reference is redundant.
     fn is_byte_valued_var(v: &str) -> bool {
         let Some(inner) = v.strip_prefix("var(").and_then(|t| t.strip_suffix(')')) else {
             return false;

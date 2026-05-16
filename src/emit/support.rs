@@ -562,20 +562,32 @@ impl<'a> Emitter<'a> {
         match parts.len() {
             0 => "0".to_string(),
             1 => parts[0].clone(),
-            _ => {
-                let inner = parts
-                    .iter()
-                    .map(|p| {
-                        let t = p.trim();
-                        Self::peel_calc(t)
-                            .map(str::to_string)
-                            .unwrap_or_else(|| t.to_string())
-                    })
-                    .collect::<Vec<_>>()
-                    .join(" + ");
-                format!("min(1, calc({}))", inner)
-            }
+            _ => format!("min(1, calc({}))", Self::join_peeled_terms(parts)),
         }
+    }
+
+    /// Like [`clamp_sum_or_zero`] but without the `min(1, …)` clamp. Use this
+    /// when the consumer only distinguishes zero from non-zero (e.g.
+    /// `style(--p: 0)`), since the clamp is then pure dead weight.
+    pub(super) fn sum_or_zero(parts: &[String]) -> String {
+        match parts.len() {
+            0 => "0".to_string(),
+            1 => parts[0].clone(),
+            _ => format!("calc({})", Self::join_peeled_terms(parts)),
+        }
+    }
+
+    fn join_peeled_terms(parts: &[String]) -> String {
+        parts
+            .iter()
+            .map(|p| {
+                let t = p.trim();
+                Self::peel_calc(t)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| t.to_string())
+            })
+            .collect::<Vec<_>>()
+            .join(" + ")
     }
 
     /// Collapses sequential bounds checks against the same base variable in
@@ -704,7 +716,7 @@ impl<'a> Emitter<'a> {
                 })
             })
             .collect::<Vec<_>>();
-        Self::clamp_sum_or_zero(&terms)
+        Self::sum_or_zero(&terms)
     }
 
     pub(super) fn cs_page_count(&self) -> usize {
@@ -723,7 +735,7 @@ impl<'a> Emitter<'a> {
                 )
             })
             .collect::<Vec<_>>();
-        Self::clamp_sum_or_zero(&terms)
+        Self::sum_or_zero(&terms)
     }
 
     /// Finds long `style(--_1pc: N) or style(--_1pc: M) or ...` chains that

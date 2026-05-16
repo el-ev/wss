@@ -374,6 +374,8 @@ pub fn emit_program(program: &Ir8Program, config: EmitConfig) -> anyhow::Result<
     Emitter::collapse_slot_aliases(&mut logic_css, &mut support_css, &mut props_css);
 
     inline::inline_slot_indicators(&mut logic_css, &mut support_css);
+    inline::fold_value_expressions(&mut logic_css, &mut support_css);
+    inline::eliminate_dead_decls(&mut logic_css, &mut support_css, BASE_HTML);
 
     let html = replace_placeholder_once(BASE_HTML, PROPS_PLACEHOLDER, &props_css)?;
     let html = replace_placeholder_once(&html, LOGIC_PLACEHOLDER, &logic_css)?;
