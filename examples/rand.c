@@ -12,13 +12,17 @@ static void print_uint(unsigned n) {
 }
 
 int _start(void) {
-  unsigned hist[16] = {0};
-  for (int i = 0; i < 256; i++) {
+  unsigned hist[16];
+  for (int i = 0; i < 16; i++)
+    hist[i] = 0;
+  for (int i = 0; i < 32; i++) {
     unsigned v = (unsigned)rand();
-    unsigned d = v & 15u;
-    hist[d]++;
-    putchar(hexd(d));
-    if ((i & 63) == 63)
+    for (int s = 0; s < 32; s += 4) {
+      unsigned d = (v >> s) & 15u;
+      hist[d]++;
+      putchar(hexd(d));
+    }
+    if ((i & 7) == 7)
       putchar('\n');
   }
   putchar('\n');
