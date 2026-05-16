@@ -198,6 +198,7 @@ fn inst_complexity(kind: &Inst8Kind) -> usize {
         | Inst8Kind::CsAlloc(_)
         | Inst8Kind::CsFree(_) => 2,
         Inst8Kind::Getchar | Inst8Kind::Putchar(_) => 2,
+        Inst8Kind::RandomByte { .. } => 1,
         Inst8Kind::ExcFlagSet { .. }
         | Inst8Kind::ExcFlagGet
         | Inst8Kind::ExcTagSet { .. }

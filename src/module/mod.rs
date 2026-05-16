@@ -84,6 +84,7 @@ pub(crate) struct ModuleInfo {
     num_imported_funcs: usize,
     putchar_import: Option<u32>,
     getchar_import: Option<u32>,
+    rand_import: Option<u32>,
     entry_export: Option<u32>,
 }
 
@@ -197,6 +198,10 @@ impl ModuleInfo {
         self.getchar_import
     }
 
+    pub(crate) fn rand_import(&self) -> Option<u32> {
+        self.rand_import
+    }
+
     pub(crate) fn entry_export(&self) -> Option<u32> {
         self.entry_export
     }
@@ -283,6 +288,9 @@ pub(crate) fn decode_module_info(wasm_bytes: &[u8]) -> anyhow::Result<ModuleInfo
                             }
                             if import.name == "getchar" {
                                 module.getchar_import = Some(num_imports as u32);
+                            }
+                            if import.name == "rand" {
+                                module.rand_import = Some(num_imports as u32);
                             }
                             num_imports += 1;
                         }
@@ -574,6 +582,7 @@ impl AstModule {
         pub(crate) fn num_imported_funcs(&self) -> usize;
         pub(crate) fn putchar_import(&self) -> Option<u32>;
         pub(crate) fn getchar_import(&self) -> Option<u32>;
+        pub(crate) fn rand_import(&self) -> Option<u32>;
         pub(crate) fn entry_export(&self) -> Option<u32>;
     }
 }
@@ -632,6 +641,7 @@ impl IrModule {
         pub(crate) fn preloaded_data(&self) -> &[(usize, Vec<u8>)];
         pub(crate) fn putchar_import(&self) -> Option<u32>;
         pub(crate) fn getchar_import(&self) -> Option<u32>;
+        pub(crate) fn rand_import(&self) -> Option<u32>;
         pub(crate) fn entry_export(&self) -> Option<u32>;
     }
 }

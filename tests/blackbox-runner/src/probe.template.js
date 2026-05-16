@@ -200,7 +200,17 @@
     };
   }
 
-  function tickInstruction(clkEl, terminalEl, clockRef) {
+  const RNG_PERIODS_MS = [257, 263, 269, 271];
+  const VIRTUAL_MS_PER_TICK = 17; // ~one rAF worth of virtual time
+  function setRngBytes(rngEl, virtualMs) {
+    for (let lane = 0; lane < 4; lane++) {
+      const p = RNG_PERIODS_MS[lane];
+      const step = Math.floor(((virtualMs % p) / p) * 256) & 0xff;
+      rngEl.style.setProperty(`--rng${lane}`, String(step), "important");
+    }
+  }
+
+  function tickInstruction(clkEl, terminalEl, clockRef, rngState) {
     for (let i = 0; i < 4; i++) {
       clkEl.style.setProperty("--clk", String(clockRef.value), "important");
       if (clockRef.value === 2) {
@@ -211,6 +221,10 @@
       }
       clockRef.value = (clockRef.value + 1) & 3;
       getComputedStyle(terminalEl).getPropertyValue("--_1pc");
+    }
+    if (rngState) {
+      rngState.ms += VIRTUAL_MS_PER_TICK;
+      setRngBytes(rngState.el, rngState.ms);
     }
   }
 
@@ -228,6 +242,15 @@
   const clkEl = document.querySelector(".clk");
   const terminalEl = document.querySelector(".terminal");
   const clockRef = { value: 0 };
+  // Detect rand() feature: --rng0 is only registered when the module
+  // imports rand. If present, freeze CSS animation and drive from JS.
+  const rngState = (() => {
+    const probe = getComputedStyle(document.body).getPropertyValue("--rng0").trim();
+    if (probe === "") return null;
+    document.body.style.setProperty("animation", "none", "important");
+    return { el: document.body, ms: 0 };
+  })();
+  if (rngState) setRngBytes(rngState.el, rngState.ms);
   if (clkEl) {
     clkEl.style.setProperty("animation", "none", "important");
     clkEl.style.setProperty("--kb", String(noInputValue), "important");
@@ -241,7 +264,7 @@
     frames < maxFrames
   ) {
     stageInputByte(clkEl, state);
-    tickInstruction(clkEl, terminalEl, clockRef);
+    tickInstruction(clkEl, terminalEl, clockRef, rngState);
     clkEl.style.setProperty("--kb", String(noInputValue), "important");
     frames += 1;
     state = readState();

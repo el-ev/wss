@@ -382,6 +382,19 @@ impl<'a> Emitter<'a> {
                     Inst8Kind::Putchar(v) => {
                         putchars.push(Self::val_expr(&reg_now, *v));
                     }
+                    Inst8Kind::RandomByte { lane } => {
+                        if let Some(dst) = op.dst {
+                            let a = lane;
+                            let b = (lane + 1) & 3;
+                            let c = (lane + 2) & 3;
+                            reg_now.insert(
+                                dst.expect_vreg(),
+                                format!(
+                                    "mod(calc(var(--rng{a}, 0) * var(--rng{b}, 0) + var(--rng{c}, 0) + 1), 256)"
+                                ),
+                            );
+                        }
+                    }
                     Inst8Kind::CsStore { offset, val } => {
                         let slot_off = (*offset) / 2;
                         let parity = (*offset) % 2;

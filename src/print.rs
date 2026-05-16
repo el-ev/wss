@@ -121,6 +121,7 @@ fn ir_produces_value(inst: &Inst) -> bool {
             | Inst::Store { .. }
             | Inst::Putchar(_)
             | Inst::Getchar
+            | Inst::Random
             | Inst::ExcSet { .. }
             | Inst::ExcClear
             | Inst::ExcPayloadSet(_)
@@ -225,6 +226,7 @@ fn print_ir_inst(out: &mut String, r: IrNode, inst: &Inst) {
             write_ir_operand(out, *v);
         }
         Inst::Getchar => write!(out, "getchar").unwrap(),
+        Inst::Random => write!(out, "rand").unwrap(),
         Inst::Drop => write!(out, "drop").unwrap(),
         Inst::LocalSet(local, v) => {
             write!(out, "local.set {} ", local).unwrap();
@@ -773,6 +775,7 @@ fn print_inst8(out: &mut String, inst: &crate::ir8::Inst8) {
 
         Inst8Kind::Getchar => write!(out, "getchar").unwrap(),
         Inst8Kind::Putchar(v) => write!(out, "putchar {}", fmt_val8(*v)).unwrap(),
+        Inst8Kind::RandomByte { lane } => write!(out, "rand.byte {}", lane).unwrap(),
 
         Inst8Kind::CsStore { offset, val } => {
             write!(out, "cs.store [cs_sp+{}] {}", offset, fmt_val8(*val)).unwrap()

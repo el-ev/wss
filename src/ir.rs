@@ -126,6 +126,8 @@ pub enum Inst {
     },
     Putchar(IrNode),
     Getchar,
+    /// Read one 32-bit sample from the animation-driven `rand` device.
+    Random,
     Drop,
     Store {
         ty: ValType,

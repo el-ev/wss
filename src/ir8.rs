@@ -300,7 +300,9 @@ impl Inst8 {
 
     pub fn uses(&self) -> Vec<Val8> {
         match &self.kind {
-            Inst8Kind::Getchar | Inst8Kind::GlobalGetByte { .. } => vec![],
+            Inst8Kind::Getchar | Inst8Kind::RandomByte { .. } | Inst8Kind::GlobalGetByte { .. } => {
+                vec![]
+            }
             Inst8Kind::Copy(s) | Inst8Kind::BoolNot(s) | Inst8Kind::Putchar(s) => {
                 let mut out = Vec::new();
                 push_vreg(&mut out, *s);
@@ -443,6 +445,10 @@ pub enum Inst8Kind {
 
     Getchar,
     Putchar(Val8),
+    /// Read one byte lane from the animation-driven rand device.
+    RandomByte {
+        lane: u8,
+    },
 
     // ─── Call stack (flat CSS memory with --cs_sp pointer) ──────────────
     //

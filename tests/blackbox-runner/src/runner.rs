@@ -142,6 +142,8 @@ struct TestCase {
     max_frames: Option<Value>,
     #[serde(default)]
     virtual_time_budget_ms: Option<Value>,
+    #[serde(default)]
+    nondeterministic: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -1012,7 +1014,7 @@ fn run_case(
     let probe_result = run_chrome_probe(test_case, &artifacts, probe_budget, env_cfg)?;
 
     let mut failures = validate_case(test_case, &probe_result);
-    if use_dump {
+    if use_dump && !test_case.nondeterministic {
         failures.extend(compare_dump_with_materialized_runtime(
             test_case,
             &artifacts,
@@ -1046,6 +1048,9 @@ fn prepare_dump_for_case(
         .extension()
         .is_some_and(|ext| ext == "wat")
     {
+        return Ok(());
+    }
+    if test_case.nondeterministic {
         return Ok(());
     }
     dump_case_memory(test_case, &artifacts, &case_config)

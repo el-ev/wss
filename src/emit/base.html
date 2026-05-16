@@ -70,6 +70,18 @@ body { margin: 0; background: #f5f5f5; font-family: ui-monospace, SFMono-Regular
 .wss-debug-stat { border: 1px solid #e1e1e1; border-radius: 7px; padding: 5px 6px; background: #fafafa; }
 .wss-debug-stat dt { margin: 0; font-size: 0.62rem; font-weight: 700; color: #666; text-transform: uppercase; letter-spacing: 0.04em; }
 .wss-debug-stat dd { margin: 2px 0 0; font-size: 0.76rem; font-weight: 700; font-variant-numeric: tabular-nums; color: #111; }
+/*__WSS_KEEP_DEBUGGER_RNG_START__*/
+.wss-debug-rng { margin: 0 0 8px; padding: 6px 8px; border: 1px solid #e1e1e1; border-radius: 7px; background: #fafafa; }
+.wss-debug-rng-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.wss-debug-rng-head .wss-debug-rng-label { font-size: 0.62rem; font-weight: 700; color: #666; text-transform: uppercase; letter-spacing: 0.04em; }
+.wss-debug-rng-head label { display: flex; align-items: center; gap: 4px; font-size: 0.7rem; color: #333; cursor: pointer; }
+.wss-debug-rng-u32 { margin-left: auto; font-size: 0.78rem; font-weight: 700; font-variant-numeric: tabular-nums; color: #111; }
+.wss-debug-rng-sliders { display: grid; grid-template-columns: 1fr 1fr; gap: 3px 8px; }
+.wss-debug-rng-sliders label { display: flex; align-items: center; gap: 4px; font-size: 0.66rem; color: #555; }
+.wss-debug-rng-sliders label > span:first-child { width: 26px; color: #666; font-weight: 700; }
+.wss-debug-rng-sliders input[type=range] { flex: 1; min-width: 0; accent-color: #444; }
+.wss-debug-rng-sliders span.wss-debug-rng-val { width: 28px; text-align: right; font-variant-numeric: tabular-nums; color: #111; font-size: 0.7rem; }
+/*__WSS_KEEP_DEBUGGER_RNG_END__*/
 @media (max-width: 720px) {
     .wss-debug-popup { right: 10px; left: 10px; width: auto; bottom: 50px; }
     .wss-debug-trigger { right: 10px; bottom: 10px; }
@@ -107,6 +119,17 @@ body { margin: 0; background: #f5f5f5; font-family: ui-monospace, SFMono-Regular
 /*__WSS_KEEP_PROP_KB_START__*/
 @property --kb { syntax: "<integer>"; initial-value: -1; inherits: true; }
 /*__WSS_KEEP_PROP_KB_END__*/
+/*__WSS_KEEP_PROP_RNG_START__*/
+@property --rng0 { syntax: "<integer>"; initial-value: 0; inherits: true; }
+@property --rng1 { syntax: "<integer>"; initial-value: 0; inherits: true; }
+@property --rng2 { syntax: "<integer>"; initial-value: 0; inherits: true; }
+@property --rng3 { syntax: "<integer>"; initial-value: 0; inherits: true; }
+@keyframes rng-roll-0 { 0% { --rng0: 0 } 100% { --rng0: 256 } }
+@keyframes rng-roll-1 { 0% { --rng1: 0 } 100% { --rng1: 256 } }
+@keyframes rng-roll-2 { 0% { --rng2: 0 } 100% { --rng2: 256 } }
+@keyframes rng-roll-3 { 0% { --rng3: 0 } 100% { --rng3: 256 } }
+body { animation: rng-roll-0 257ms steps(256, jump-end) infinite, rng-roll-1 263ms steps(256, jump-end) infinite, rng-roll-2 269ms steps(256, jump-end) infinite, rng-roll-3 271ms steps(256, jump-end) infinite; }
+/*__WSS_KEEP_PROP_RNG_END__*/
 
 /*__WSS_PROPS__*/
 
@@ -309,6 +332,12 @@ Please try an up-to-date Chromium-based browser.
     let debugOpsHead = null;
     let debugStickyKey = null;
     let debugStickyKeyOut = null;
+    /*__WSS_KEEP_DEBUGGER_RNG_START__*/
+    let debugRngFreeze = null;
+    let debugRngU32 = null;
+    let debugRngSliders = null;
+    let debugRngVals = null;
+    /*__WSS_KEEP_DEBUGGER_RNG_END__*/
     const debuggerCycles = /*__WSS_DEBUGGER_CYCLES__*/;
     /*__WSS_KEEP_JS_CLOCK_DEBUGGER_RUNTIME_END__*/
 
@@ -362,8 +391,50 @@ Please try an up-to-date Chromium-based browser.
             debugSpeedOut.textContent = formatSpeedLabel(speedMultiplier);
         }
         renderDebuggerOps(pc, style);
+        /*__WSS_KEEP_DEBUGGER_RNG_START__*/
+        refreshDebuggerRng(style);
+        /*__WSS_KEEP_DEBUGGER_RNG_END__*/
     }
     /*__WSS_KEEP_JS_CLOCK_DEBUGGER_RUNTIME_END__*/
+
+    /*__WSS_KEEP_DEBUGGER_RNG_START__*/
+    function refreshDebuggerRng(style) {
+        if (!debugRngFreeze) return;
+        const live = [0, 1, 2, 3].map((i) => {
+            const v = Number.parseInt(style.getPropertyValue("--rng" + i), 10);
+            return Number.isNaN(v) ? 0 : v & 0xff;
+        });
+        if (!debugRngFreeze.checked) {
+            for (let i = 0; i < 4; i++) {
+                debugRngSliders[i].value = String(live[i]);
+                debugRngVals[i].textContent = String(live[i]);
+            }
+        }
+        const r = debugRngFreeze.checked
+            ? debugRngSliders.map((s) => Number.parseInt(s.value, 10) & 0xff)
+            : live;
+        const mix = (lane) =>
+            (r[lane] * r[(lane + 1) & 3] + r[(lane + 2) & 3] + 1) & 0xff;
+        const u32 = (mix(0) | (mix(1) << 8) | (mix(2) << 16) | (mix(3) << 24)) >>> 0;
+        debugRngU32.textContent = "0x" + u32.toString(16).padStart(8, "0");
+    }
+
+    function applyRngFreezeOverride() {
+        for (let i = 0; i < 4; i++) {
+            document.body.style.setProperty(
+                "--rng" + i,
+                debugRngSliders[i].value,
+                "important"
+            );
+        }
+    }
+    function clearRngFreezeOverride() {
+        document.body.style.removeProperty("--rng0");
+        document.body.style.removeProperty("--rng1");
+        document.body.style.removeProperty("--rng2");
+        document.body.style.removeProperty("--rng3");
+    }
+    /*__WSS_KEEP_DEBUGGER_RNG_END__*/
 
     /*__WSS_KEEP_JS_CLOCK_DEBUGGER_RUNTIME_START__*/
     function setStickyKey(code) {
@@ -650,6 +721,21 @@ Please try an up-to-date Chromium-based browser.
                 <input class="wss-debug-range" type="range" min="${minSpeedLog}" max="${maxSpeedLog}" step="0.01" value="0" data-wss-debug-speed="1">
                 <span class="wss-debug-speed-readout" data-wss-debug-speed-value="1">1x</span>
             </label>
+            /*__WSS_KEEP_DEBUGGER_RNG_START__*/
+            <div class="wss-debug-rng">
+                <div class="wss-debug-rng-head">
+                    <span class="wss-debug-rng-label">Rand</span>
+                    <label><input type="checkbox" data-wss-debug-rng-freeze="1"> Freeze</label>
+                    <span class="wss-debug-rng-u32" data-wss-debug-rng-u32="1">0x00000000</span>
+                </div>
+                <div class="wss-debug-rng-sliders">
+                    <label><span>rng0</span><input type="range" min="0" max="255" value="0" data-wss-debug-rng-slider="0"><span class="wss-debug-rng-val" data-wss-debug-rng-val="0">0</span></label>
+                    <label><span>rng1</span><input type="range" min="0" max="255" value="0" data-wss-debug-rng-slider="1"><span class="wss-debug-rng-val" data-wss-debug-rng-val="1">0</span></label>
+                    <label><span>rng2</span><input type="range" min="0" max="255" value="0" data-wss-debug-rng-slider="2"><span class="wss-debug-rng-val" data-wss-debug-rng-val="2">0</span></label>
+                    <label><span>rng3</span><input type="range" min="0" max="255" value="0" data-wss-debug-rng-slider="3"><span class="wss-debug-rng-val" data-wss-debug-rng-val="3">0</span></label>
+                </div>
+            </div>
+            /*__WSS_KEEP_DEBUGGER_RNG_END__*/
             <div class="wss-debug-actions">
                 <button type="button" class="wss-debug-btn" data-wss-debug-run="1">Run</button>
                 <button type="button" class="wss-debug-btn" data-wss-debug-step="1">Step</button>
@@ -675,6 +761,30 @@ Please try an up-to-date Chromium-based browser.
         debugOpsList = popup.querySelector("[data-wss-debug-ops='1']");
         debugOpsHead = popup.querySelector("[data-wss-debug-ops-head='1']");
         debugStickyKeyOut = popup.querySelector("[data-wss-debug-sticky-key='1']");
+        /*__WSS_KEEP_DEBUGGER_RNG_START__*/
+        debugRngFreeze = popup.querySelector("[data-wss-debug-rng-freeze='1']");
+        debugRngU32 = popup.querySelector("[data-wss-debug-rng-u32='1']");
+        debugRngSliders = [0, 1, 2, 3].map((i) =>
+            popup.querySelector("[data-wss-debug-rng-slider='" + i + "']")
+        );
+        debugRngVals = [0, 1, 2, 3].map((i) =>
+            popup.querySelector("[data-wss-debug-rng-val='" + i + "']")
+        );
+        if (debugRngFreeze) {
+            debugRngFreeze.addEventListener("change", () => {
+                if (debugRngFreeze.checked) applyRngFreezeOverride();
+                else clearRngFreezeOverride();
+                refreshDebuggerRng(getComputedStyle(terminalEl));
+            });
+            debugRngSliders.forEach((slider, i) => {
+                slider.addEventListener("input", () => {
+                    debugRngVals[i].textContent = slider.value;
+                    if (debugRngFreeze.checked) applyRngFreezeOverride();
+                    refreshDebuggerRng(getComputedStyle(terminalEl));
+                });
+            });
+        }
+        /*__WSS_KEEP_DEBUGGER_RNG_END__*/
         if (!(speedInput instanceof HTMLInputElement) || !closeBtn || !debugRunBtn || !debugStepBtn) {
             return;
         }

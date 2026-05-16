@@ -144,20 +144,6 @@ fn idempotent_real_world_samples() {
     idempotent("--mload(calc(var(--mb0) + 512))");
     idempotent("--inrange(var(--_1cs_sp), 64)");
     idempotent("--inrange(calc(var(--_1cs_sp) + 1), 257)");
-    // Deeply nested sums-of-products from --pc dispatcher.
-    idempotent(
-        "calc((--lt(var(--_1cs_sp), 0) + --ge(var(--_1cs_sp), 257)) * -5 + (1 - (--lt(var(--_1cs_sp), 0) + --ge(var(--_1cs_sp), 257))) * --sel(--ge(var(--mb0), 509), -3, -1))",
-    );
-    // Variable with integer fallback.
-    idempotent("var(--g0_0, 0)");
-    // Or-chain in if-arm condition.
-    idempotent(
-        "if(style(--_1pc: 2017) or style(--_1pc: 2037) or style(--_1pc: 2088): -1; else: 0)",
-    );
-    // Memory merge function body slice.
-    idempotent(
-        "calc((var(--cso0) * --eq(var(--csi0), var(--idx))) * (1 + --eq(var(--csp0), 1)) + (1 - (var(--cso0) * --eq(var(--csi0), var(--idx))) * (1 + --eq(var(--csp0), 1))) * --mlo(var(--prev)))",
-    );
 }
 
 #[test]

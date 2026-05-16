@@ -39,7 +39,7 @@ int _start() {
 }
 ```
 
-Use any WebAssembly-capable compiler. Export `_start` as the entry point and (optionally) import `putchar` and `getchar` for console I/O.
+Use any WebAssembly-capable compiler. Export `_start` as the entry point and (optionally) import `putchar`, `getchar`, and `rand` for console I/O and randomness.
 
 ```sh
 clang \
@@ -89,10 +89,12 @@ Options:
 - **i32 arithmetic** — add, sub, mul, div, rem, and, or, xor, shl, shr, rotl, rotr, clz, ctz, popcnt, eqz
 - **i32 comparisons** — eq, ne, lt, gt, le, ge (signed and unsigned)
 - **i32 memory** — load and store with 8-, 16-, and 32-bit widths (signed and unsigned loads)
+- **Bulk memory** — `memory.fill` and `memory.copy` lowered to loops
 - **Control flow** — block, loop, if/else, br, br_if, br_table, return, unreachable
 - **Function calls with TCO** — call, call_indirect, return_call, return_call_indirect
 - **Locals and globals** — get, set, tee
 - **Select** — typed and untyped select
+- **rand()** — randomeness extracted from CSS keyframe animations
 - **Exception handling** — `try`, `catch`, `catch_all`, `delegate`, `throw`, `rethrow` on exception tags with either no payload or a single `i32` payload. Doesn't support: multi-value or non-`i32` tag payloads, `try_table`, `throw_ref`, `delegate` depth > `0`, `rethrow` depth > `0`, and `rethrow` from `catch_all`.
 
 ## What is under development

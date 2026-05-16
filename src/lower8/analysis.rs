@@ -11,6 +11,7 @@ pub(super) fn inst_uses(inst: &Inst) -> Vec<IrNode> {
         | Inst::MemorySize
         | Inst::TableSize(_)
         | Inst::Getchar
+        | Inst::Random
         | Inst::Drop
         | Inst::ExcSet { .. }
         | Inst::ExcClear

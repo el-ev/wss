@@ -10,3 +10,4 @@ tests/blackbox-runner/target/
 
 *.log
 .gitignore
+*.md

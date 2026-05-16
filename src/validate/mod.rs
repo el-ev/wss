@@ -53,9 +53,9 @@ fn validate_tables(module: &ModuleInfo) -> anyhow::Result<()> {
 }
 
 fn validate_imports_exports(module: &ModuleInfo) -> anyhow::Result<()> {
-    if module.num_imported_funcs() > 2 {
+    if module.num_imported_funcs() > 3 {
         bail!(
-            "expected at most 2 imported functions (getchar, putchar), got {}",
+            "expected at most 3 imported functions (getchar, putchar, rand), got {}",
             module.num_imported_funcs()
         );
     }
@@ -71,6 +71,12 @@ fn validate_imports_exports(module: &ModuleInfo) -> anyhow::Result<()> {
         // TODO(i64): imported runtime ABI is currently fixed to i32 signatures.
         if !f.params().is_empty() || f.results() != [ValType::I32] {
             bail!("getchar must have signature () -> i32");
+        }
+    }
+    if let Some(idx) = module.rand_import() {
+        let f = func_signature(module, idx)?;
+        if !f.params().is_empty() || f.results() != [ValType::I32] {
+            bail!("rand must have signature () -> i32");
         }
     }
     let entry_idx = module
@@ -166,6 +172,26 @@ fn validate_code_section(wasm_bytes: &[u8], module: &ModuleInfo) -> anyhow::Resu
 mod tests {
     use super::validate;
     use crate::module::decode_module_info;
+
+    #[test]
+    fn validate_rejects_rand_with_wrong_signature() {
+        let wasm_bytes = [
+            0x00, 0x61, 0x73, 0x6d, // magic
+            0x01, 0x00, 0x00, 0x00, // version
+            // type section: one (i32) -> i32
+            0x01, 0x06, 0x01, 0x60, 0x01, 0x7f, 0x01, 0x7f,
+            // import section: env.rand of type 0
+            0x02, 0x0c, 0x01, 0x03, 0x65, 0x6e, 0x76, 0x04, 0x72, 0x61, 0x6e, 0x64, 0x00, 0x00,
+        ];
+
+        let module = decode_module_info(&wasm_bytes).expect("module should decode");
+        assert_eq!(module.rand_import(), Some(0));
+        let err = validate(&module, &wasm_bytes).expect_err("wrong rand signature should fail");
+        assert!(
+            format!("{err:#}").contains("rand must have signature"),
+            "got: {err:#}"
+        );
+    }
 
     #[test]
     fn validate_scans_ops_after_nested_end() {

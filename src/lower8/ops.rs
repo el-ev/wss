@@ -640,6 +640,16 @@ fn lower_call_io_inst(
             b.set_word_from_byte(dst, ch);
             b.set_word(iref, dst);
         }
+        Inst::Random => {
+            let dst = b.alloc_word();
+            for (lane, dst_lane) in dst.bytes().into_iter().enumerate() {
+                b.emit(Inst8::with_dst(
+                    dst_lane,
+                    Inst8Kind::RandomByte { lane: lane as u8 },
+                ));
+            }
+            b.set_word(iref, dst);
+        }
         Inst::Call {
             func: callee_id,
             args,

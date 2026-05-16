@@ -527,6 +527,120 @@ fn emit_html_mload_helper_avoids_local_aliasing() {
 }
 
 #[test]
+fn emit_html_omits_rng_when_random_is_unused() {
+    let program = minimal_exit_program();
+    let html = emit_program(&program).expect("emit should succeed");
+    assert!(!html.contains("@property --rng0"));
+    assert!(!html.contains("@keyframes rng-roll-0"));
+    assert!(!html.contains("rng-roll-0 257ms"));
+}
+
+#[test]
+fn emit_html_includes_rng_when_random_is_used() {
+    let program = Ir8Program {
+        entry_func: 0,
+        num_vregs: 1,
+        func_blocks: Vec::new(),
+        cycles: vec![crate::ir8::Cycle {
+            pc: crate::ir8::Pc::new(0),
+            ops: vec![crate::ir8::Inst8::with_dst(
+                Val8::reg(0),
+                Inst8Kind::RandomByte { lane: 0 },
+            )],
+            terminator: Terminator8::Exit { val: None },
+        }],
+        func_entries: Vec::new(),
+        func_num_locals: Vec::new(),
+        memory_end: 0,
+        init_bytes: Vec::new(),
+        global_init: Vec::new(),
+    };
+    let html = emit_program(&program).expect("emit should succeed");
+    assert!(html.contains("@property --rng0"));
+    assert!(html.contains("@property --rng3"));
+    assert!(html.contains("@keyframes rng-roll-0"));
+    assert!(html.contains("rng-roll-0 257ms steps(256, jump-end) infinite"));
+    assert!(html.contains("mod(calc(var(--rng0, 0) * var(--rng1, 0) + var(--rng2, 0) + 1), 256)"));
+    // Debugger is off by default in tests; the rand inspector should NOT
+    // appear in this baseline (covered separately when both flags on).
+    assert!(!html.contains("data-wss-debug-rng-u32"));
+}
+
+#[test]
+fn emit_html_includes_debugger_rng_when_random_used_and_debugger_on() {
+    let program = Ir8Program {
+        entry_func: 0,
+        num_vregs: 1,
+        func_blocks: Vec::new(),
+        cycles: vec![crate::ir8::Cycle {
+            pc: crate::ir8::Pc::new(0),
+            ops: vec![crate::ir8::Inst8::with_dst(
+                Val8::reg(0),
+                Inst8Kind::RandomByte { lane: 0 },
+            )],
+            terminator: Terminator8::Exit { val: None },
+        }],
+        func_entries: Vec::new(),
+        func_num_locals: Vec::new(),
+        memory_end: 0,
+        init_bytes: Vec::new(),
+        global_init: Vec::new(),
+    };
+    let html = emit_program_with_config(
+        &program,
+        EmitConfig::default()
+            .with_js_clock_debugger(true)
+            .expect("test config should be valid"),
+    )
+    .expect("emit should succeed");
+    assert!(html.contains("data-wss-debug-rng-u32"));
+    assert!(html.contains("data-wss-debug-rng-slider="));
+    assert!(html.contains("function refreshDebuggerRng"));
+}
+
+#[test]
+fn emit_html_omits_debugger_rng_when_debugger_off() {
+    let program = Ir8Program {
+        entry_func: 0,
+        num_vregs: 1,
+        func_blocks: Vec::new(),
+        cycles: vec![crate::ir8::Cycle {
+            pc: crate::ir8::Pc::new(0),
+            ops: vec![crate::ir8::Inst8::with_dst(
+                Val8::reg(0),
+                Inst8Kind::RandomByte { lane: 0 },
+            )],
+            terminator: Terminator8::Exit { val: None },
+        }],
+        func_entries: Vec::new(),
+        func_num_locals: Vec::new(),
+        memory_end: 0,
+        init_bytes: Vec::new(),
+        global_init: Vec::new(),
+    };
+    let html = emit_program_with_config(
+        &program,
+        EmitConfig::default()
+            .with_js_clock_debugger(false)
+            .expect("test config should be valid"),
+    )
+    .expect("emit should succeed");
+    // Rand CSS itself stays; only the debugger inspector should be gone.
+    assert!(html.contains("@property --rng0"));
+    assert!(!html.contains("data-wss-debug-rng-u32"));
+    assert!(!html.contains("function refreshDebuggerRng"));
+}
+
+#[test]
+fn emit_html_omits_debugger_rng_when_random_unused() {
+    let program = minimal_exit_program();
+    let html = emit_program(&program).expect("emit should succeed");
+    // Debugger is on by default but rand is unused — rand inspector should be gone.
+    assert!(!html.contains("data-wss-debug-rng-u32"));
+    assert!(!html.contains("function refreshDebuggerRng"));
+}
+
+#[test]
 fn emit_html_omits_keyboard_ui_when_getchar_is_unused() {
     let program = minimal_exit_program();
     let html = emit_program(&program).expect("emit should succeed");

@@ -591,6 +591,7 @@ fn map_inst_kind_vals(
 ) -> anyhow::Result<()> {
     match kind {
         Inst8Kind::Getchar
+        | Inst8Kind::RandomByte { .. }
         | Inst8Kind::CsStorePc { .. }
         | Inst8Kind::CsLoadPc { .. }
         | Inst8Kind::CsAlloc(_)

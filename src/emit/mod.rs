@@ -196,6 +196,7 @@ keep_pairs! {
         (PROP_FB, "PROP_FB"),
         (PROP_RA, "PROP_RA"),
         (PROP_KB, "PROP_KB"),
+        (PROP_RNG, "PROP_RNG"),
         (FN_SEL, "FN_SEL"),
         (FN_EQZ, "FN_EQZ"),
         (FN_NEZ, "FN_NEZ"),
@@ -220,6 +221,7 @@ keep_pairs! {
         (KB_INPUT_CSS, "KB_INPUT_CSS"),
         (JS_CLOCK_DEBUGGER_CSS, "JS_CLOCK_DEBUGGER_CSS"),
         (JS_CLOCK_DEBUGGER_RUNTIME, "JS_CLOCK_DEBUGGER_RUNTIME"),
+        (DEBUGGER_RNG, "DEBUGGER_RNG"),
         (JS_COPROCESSOR_RUNTIME, "JS_COPROCESSOR_RUNTIME")
     ],
     html: [
@@ -237,6 +239,7 @@ bitflags! {
         const PROP_FB = 1 << 0;
         const PROP_RA = 1 << 1;
         const PROP_KB = 1 << 2;
+        const PROP_RNG = 1 << 21;
         const FN_SEL = 1 << 3;
         const FN_EQZ = 1 << 4;
         const FN_NEZ = 1 << 5;
@@ -261,6 +264,7 @@ bitflags! {
 #[derive(Default)]
 struct UsageScan {
     uses_getchar: bool,
+    uses_random: bool,
     uses_memory_addr: bool,
     uses_memory_load: bool,
     uses_eq: bool,
@@ -653,6 +657,9 @@ impl<'a> Emitter<'a> {
                         usage.uses_getchar = true;
                         usage.uses_ne = true;
                     }
+                    Inst8Kind::RandomByte { .. } => {
+                        usage.uses_random = true;
+                    }
                     Inst8Kind::LoadMem { .. } => {
                         usage.uses_memory_addr = true;
                         usage.uses_memory_load = true;
@@ -701,6 +708,9 @@ impl<'a> Emitter<'a> {
 
         if usage.uses_getchar {
             features |= TemplateFeatures::PROP_KB;
+        }
+        if usage.uses_random {
+            features |= TemplateFeatures::PROP_RNG;
         }
         if usage.uses_memory_addr {
             features |= TemplateFeatures::FN_ADDR16
@@ -822,6 +832,7 @@ impl<'a> Emitter<'a> {
         section!(f.contains(TemplateFeatures::PROP_FB), PROP_FB);
         section!(f.contains(TemplateFeatures::PROP_RA), PROP_RA);
         section!(f.contains(TemplateFeatures::PROP_KB), PROP_KB);
+        section!(f.contains(TemplateFeatures::PROP_RNG), PROP_RNG);
         section!(f.contains(TemplateFeatures::FN_SEL), FN_SEL);
         section!(f.contains(TemplateFeatures::FN_EQZ), FN_EQZ);
         section!(f.contains(TemplateFeatures::FN_NEZ), FN_NEZ);
@@ -852,6 +863,10 @@ impl<'a> Emitter<'a> {
         section!(self.js_clock, JS_CLOCK_RUNTIME);
         section!(self.js_clock_debugger, JS_CLOCK_DEBUGGER_CSS);
         section!(self.js_clock_debugger, JS_CLOCK_DEBUGGER_RUNTIME);
+        section!(
+            self.js_clock_debugger && f.contains(TemplateFeatures::PROP_RNG),
+            DEBUGGER_RNG
+        );
         Ok(html)
     }
 }

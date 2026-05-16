@@ -5,6 +5,7 @@ enum IndirectTargetKind {
     Direct(u32),
     Putchar,
     Getchar,
+    Random,
 }
 
 pub(super) struct CallIndirectInst<'a> {
@@ -171,6 +172,23 @@ fn emit_indirect_target_case(
             let ch = b.alloc_reg();
             b.emit(Inst8::with_dst(ch, Inst8Kind::Getchar));
             b.set_ret_from_byte(ch);
+            finish_indirect_case(b, emit_ctx)?;
+        }
+        IndirectTargetKind::Random => {
+            let bytes: [Val8; 4] = std::array::from_fn(|lane| {
+                let byte = b.alloc_reg();
+                b.emit(Inst8::with_dst(
+                    byte,
+                    Inst8Kind::RandomByte { lane: lane as u8 },
+                ));
+                byte
+            });
+            let dst = b.alloc_word();
+            for (dst_lane, src) in dst.bytes().into_iter().zip(bytes) {
+                b.emit(Inst8::with_dst(dst_lane, Inst8Kind::Copy(src)));
+            }
+            b.copy_word(crate::ir8::RET_LO, dst);
+            b.copy_word(crate::ir8::RET_HI, crate::ir8::Word::from_u32_imm(0));
             finish_indirect_case(b, emit_ctx)?;
         }
     }
@@ -413,6 +431,9 @@ fn resolve_indirect_target(
     }
     if Some(func_index) == module.getchar_import() {
         return Some(IndirectTargetKind::Getchar);
+    }
+    if Some(func_index) == module.rand_import() {
+        return Some(IndirectTargetKind::Random);
     }
     if module.body_at(func_index).is_some() {
         return Some(IndirectTargetKind::Direct(func_index));

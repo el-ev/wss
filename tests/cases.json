@@ -196,6 +196,62 @@
     }
   },
   {
+    "id": "rand_smoke",
+    "source": "tests/cases/rand_smoke.c",
+    "nondeterministic": true,
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000000",
+      "rendered_includes": [
+        "ok",
+        "Program exited with code",
+        "0x00000000"
+      ]
+    }
+  },
+  {
+    "id": "rand_varies_in_loop",
+    "source": "tests/cases/rand_varies_in_loop.c",
+    "nondeterministic": true,
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000000",
+      "rendered_includes": [
+        "var",
+        "Program exited with code",
+        "0x00000000"
+      ]
+    }
+  },
+  {
+    "id": "rand_indirect_call",
+    "source": "tests/cases/rand_indirect_call.c",
+    "nondeterministic": true,
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000000",
+      "rendered_includes": [
+        "ok",
+        "Program exited with code",
+        "0x00000000"
+      ]
+    }
+  },
+  {
+    "id": "rand_through_memory",
+    "source": "tests/cases/rand_through_memory.c",
+    "nondeterministic": true,
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000000",
+      "rendered_includes": [
+        "ok",
+        "Program exited with code",
+        "0x00000000"
+      ]
+    }
+  },
+  {
     "id": "getchar_shift_triplet",
     "source": "tests/cases/getchar_shift_triplet.c",
     "console_input": "aB3",
@@ -1753,6 +1809,66 @@
       "rendered_includes": [
         "Program exited with code",
         "0x99ffddcb"
+      ]
+    }
+  },
+  {
+    "id": "memory_fill_basic",
+    "source": "tests/cases/memory_fill_basic.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0xaa3333aa",
+      "rendered_includes": [
+        "Program exited with code",
+        "0xaa3333aa"
+      ]
+    }
+  },
+  {
+    "id": "memory_copy_basic",
+    "source": "tests/cases/memory_copy_basic.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0x2b20ef11",
+      "rendered_includes": [
+        "Program exited with code",
+        "0x2b20ef11"
+      ]
+    }
+  },
+  {
+    "id": "memory_fill_unaligned",
+    "source": "tests/cases/memory_fill_unaligned.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0xc39b4daa",
+      "rendered_includes": [
+        "Program exited with code",
+        "0xc39b4daa"
+      ]
+    }
+  },
+  {
+    "id": "memory_copy_backward_overlap",
+    "source": "tests/cases/memory_copy_backward_overlap.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0x222d2c2f",
+      "rendered_includes": [
+        "Program exited with code",
+        "0x222d2c2f"
+      ]
+    }
+  },
+  {
+    "id": "memory_copy_unaligned",
+    "source": "tests/cases/memory_copy_unaligned.wat",
+    "expect": {
+      "pc": -1,
+      "ra": "0x5a44cc5a",
+      "rendered_includes": [
+        "Program exited with code",
+        "0x5a44cc5a"
       ]
     }
   },

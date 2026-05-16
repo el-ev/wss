@@ -87,10 +87,13 @@ pub(super) fn validate_operator(
         | I64TruncSatF64S
         | I64TruncSatF64U => bail!("floating point not supported at {}", location),
         MemoryGrow { .. } => bail!("memory.grow not supported at {}", location),
+        MemoryFill { mem } => validate_memory_index(*mem, location)?,
+        MemoryCopy { dst_mem, src_mem } => {
+            validate_memory_index(*dst_mem, location)?;
+            validate_memory_index(*src_mem, location)?;
+        }
         MemoryInit { .. }
         | DataDrop { .. }
-        | MemoryCopy { .. }
-        | MemoryFill { .. }
         | TableInit { .. }
         | ElemDrop { .. }
         | TableCopy { .. }
@@ -443,6 +446,57 @@ mod tests {
         let throw_ref_err = validate_operator(&Operator::ThrowRef, &module, "loc")
             .expect_err("throw_ref should be rejected");
         assert!(format!("{throw_ref_err:#}").contains("throw_ref"));
+    }
+
+    #[test]
+    fn validator_accepts_memory_fill_for_memory_zero() {
+        let module = ModuleInfo::default();
+        validate_operator(&Operator::MemoryFill { mem: 0 }, &module, "loc").unwrap();
+    }
+
+    #[test]
+    fn validator_rejects_memory_fill_for_nonzero_memory() {
+        let module = ModuleInfo::default();
+        let err = validate_operator(&Operator::MemoryFill { mem: 1 }, &module, "loc")
+            .expect_err("memory.fill on memory != 0 must be rejected");
+        assert!(
+            format!("{err:#}").contains("multiple memories"),
+            "expected multi-memory rejection, got: {err:#}"
+        );
+    }
+
+    #[test]
+    fn validator_accepts_memory_copy_for_memory_zero() {
+        let module = ModuleInfo::default();
+        validate_operator(
+            &Operator::MemoryCopy {
+                dst_mem: 0,
+                src_mem: 0,
+            },
+            &module,
+            "loc",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn validator_rejects_memory_copy_with_nonzero_memory_index() {
+        let module = ModuleInfo::default();
+        for (dst, src) in [(0, 1), (1, 0), (1, 1)] {
+            let err = validate_operator(
+                &Operator::MemoryCopy {
+                    dst_mem: dst,
+                    src_mem: src,
+                },
+                &module,
+                "loc",
+            )
+            .expect_err("memory.copy across non-zero memory must be rejected");
+            assert!(
+                format!("{err:#}").contains("multiple memories"),
+                "expected multi-memory rejection, got: {err:#}"
+            );
+        }
     }
 
     #[test]

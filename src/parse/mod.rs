@@ -145,6 +145,307 @@ fn pop_typed_ref(
         .value)
 }
 
+/// Build a synthetic `block { loop { ... } }` AST tree that implements
+/// memory.fill's word-store fast path: while `n >= 4` write 4 bytes at
+/// a time using `i32.store`, decrement `n` by 4, advance `dst` by 4.
+///
+/// Wasm `i32.store` has no alignment trap (alignment is only a hint), so
+/// this is safe regardless of `dst` alignment. The remaining `n % 4`
+/// bytes are written by [`build_memory_fill_byte_loop`].
+fn build_memory_fill_word_loop(dst_local: u32, val32_local: u32, n_local: u32) -> Node {
+    let r = AstRef::new;
+    let loop_body = vec![
+        Node::LocalGet(n_local), // 0
+        Node::I32Const(4),       // 1
+        Node::Compare {
+            // 2: n < 4 (unsigned)
+            op: RelOp::LtU,
+            ty: ValType::I32,
+            lhs: r(0),
+            rhs: r(1),
+        },
+        Node::BrIf(1, r(2)),         // 3: exit if n < 4
+        Node::LocalGet(dst_local),   // 4
+        Node::LocalGet(val32_local), // 5
+        Node::Store {
+            // 6: i32.store [dst] = val32
+            ty: ValType::I32,
+            size: 32,
+            offset: 0,
+            value: r(5),
+            address: r(4),
+        },
+        Node::LocalGet(dst_local), // 7
+        Node::I32Const(4),         // 8
+        Node::Binary {
+            // 9: dst + 4
+            op: BinOp::Add,
+            ty: ValType::I32,
+            lhs: r(7),
+            rhs: r(8),
+        },
+        Node::LocalSet(dst_local, r(9)), // 10
+        Node::LocalGet(n_local),         // 11
+        Node::I32Const(4),               // 12
+        Node::Binary {
+            // 13: n - 4
+            op: BinOp::Sub,
+            ty: ValType::I32,
+            lhs: r(11),
+            rhs: r(12),
+        },
+        Node::LocalSet(n_local, r(13)), // 14
+        Node::Br(0),                    // 15: continue
+    ];
+    Node::Block(vec![Node::Loop(loop_body)])
+}
+
+/// Build the byte-store tail loop that drains `n % 4` remaining bytes
+/// after the word-store fast path.
+fn build_memory_fill_byte_loop(dst_local: u32, val_local: u32, n_local: u32) -> Node {
+    let r = AstRef::new;
+    let loop_body = vec![
+        Node::LocalGet(n_local), // 0
+        Node::Unary {
+            // 1: n == 0
+            op: UnOp::Eqz,
+            ty: ValType::I32,
+            val: r(0),
+        },
+        Node::BrIf(1, r(1)),       // 2: exit when n == 0
+        Node::LocalGet(dst_local), // 3
+        Node::LocalGet(val_local), // 4
+        Node::Store {
+            // 5: i32.store8 [dst] = val
+            ty: ValType::I32,
+            size: 8,
+            offset: 0,
+            value: r(4),
+            address: r(3),
+        },
+        Node::LocalGet(dst_local), // 6
+        Node::I32Const(1),         // 7
+        Node::Binary {
+            // 8: dst + 1
+            op: BinOp::Add,
+            ty: ValType::I32,
+            lhs: r(6),
+            rhs: r(7),
+        },
+        Node::LocalSet(dst_local, r(8)), // 9
+        Node::LocalGet(n_local),         // 10
+        Node::I32Const(1),               // 11
+        Node::Binary {
+            // 12: n - 1
+            op: BinOp::Sub,
+            ty: ValType::I32,
+            lhs: r(10),
+            rhs: r(11),
+        },
+        Node::LocalSet(n_local, r(12)), // 13
+        Node::Br(0),                    // 14: continue
+    ];
+    Node::Block(vec![Node::Loop(loop_body)])
+}
+
+/// Build the forward word-copy loop for `memory.copy`: while `n >= 4`,
+/// read 4 bytes from `[src]`, write to `[dst]`, advance both by 4.
+fn build_memory_copy_word_loop(dst_local: u32, src_local: u32, n_local: u32) -> Node {
+    let r = AstRef::new;
+    let loop_body = vec![
+        Node::LocalGet(n_local), // 0
+        Node::I32Const(4),       // 1
+        Node::Compare {
+            // 2: n < 4 (unsigned)
+            op: RelOp::LtU,
+            ty: ValType::I32,
+            lhs: r(0),
+            rhs: r(1),
+        },
+        Node::BrIf(1, r(2)),       // 3: exit if n < 4
+        Node::LocalGet(src_local), // 4
+        Node::Load {
+            // 5: word = i32.load [src]
+            ty: ValType::I32,
+            size: 32,
+            signed: false,
+            offset: 0,
+            address: r(4),
+        },
+        Node::LocalGet(dst_local), // 6
+        Node::Store {
+            // 7: i32.store [dst] = word
+            ty: ValType::I32,
+            size: 32,
+            offset: 0,
+            value: r(5),
+            address: r(6),
+        },
+        Node::LocalGet(dst_local), // 8
+        Node::I32Const(4),         // 9
+        Node::Binary {
+            // 10: dst + 4
+            op: BinOp::Add,
+            ty: ValType::I32,
+            lhs: r(8),
+            rhs: r(9),
+        },
+        Node::LocalSet(dst_local, r(10)), // 11
+        Node::LocalGet(src_local),        // 12
+        Node::I32Const(4),                // 13
+        Node::Binary {
+            // 14: src + 4
+            op: BinOp::Add,
+            ty: ValType::I32,
+            lhs: r(12),
+            rhs: r(13),
+        },
+        Node::LocalSet(src_local, r(14)), // 15
+        Node::LocalGet(n_local),          // 16
+        Node::I32Const(4),                // 17
+        Node::Binary {
+            // 18: n - 4
+            op: BinOp::Sub,
+            ty: ValType::I32,
+            lhs: r(16),
+            rhs: r(17),
+        },
+        Node::LocalSet(n_local, r(18)), // 19
+        Node::Br(0),                    // 20: continue
+    ];
+    Node::Block(vec![Node::Loop(loop_body)])
+}
+
+/// Build the forward byte-copy tail loop that drains `n % 4` bytes left
+/// over after [`build_memory_copy_word_loop`].
+fn build_memory_copy_byte_loop_forward(dst_local: u32, src_local: u32, n_local: u32) -> Node {
+    let r = AstRef::new;
+    let loop_body = vec![
+        Node::LocalGet(n_local), // 0
+        Node::Unary {
+            // 1: n == 0
+            op: UnOp::Eqz,
+            ty: ValType::I32,
+            val: r(0),
+        },
+        Node::BrIf(1, r(1)),       // 2: exit when n == 0
+        Node::LocalGet(src_local), // 3
+        Node::Load {
+            // 4: byte = i32.load8_u [src]
+            ty: ValType::I32,
+            size: 8,
+            signed: false,
+            offset: 0,
+            address: r(3),
+        },
+        Node::LocalGet(dst_local), // 5
+        Node::Store {
+            // 6: i32.store8 [dst] = byte
+            ty: ValType::I32,
+            size: 8,
+            offset: 0,
+            value: r(4),
+            address: r(5),
+        },
+        Node::LocalGet(dst_local), // 7
+        Node::I32Const(1),         // 8
+        Node::Binary {
+            // 9: dst + 1
+            op: BinOp::Add,
+            ty: ValType::I32,
+            lhs: r(7),
+            rhs: r(8),
+        },
+        Node::LocalSet(dst_local, r(9)), // 10
+        Node::LocalGet(src_local),       // 11
+        Node::I32Const(1),               // 12
+        Node::Binary {
+            // 13: src + 1
+            op: BinOp::Add,
+            ty: ValType::I32,
+            lhs: r(11),
+            rhs: r(12),
+        },
+        Node::LocalSet(src_local, r(13)), // 14
+        Node::LocalGet(n_local),          // 15
+        Node::I32Const(1),                // 16
+        Node::Binary {
+            // 17: n - 1
+            op: BinOp::Sub,
+            ty: ValType::I32,
+            lhs: r(15),
+            rhs: r(16),
+        },
+        Node::LocalSet(n_local, r(17)), // 18
+        Node::Br(0),                    // 19: continue
+    ];
+    Node::Block(vec![Node::Loop(loop_body)])
+}
+
+/// Build the backward byte-copy loop for the overlap case where `src < dst < src + n`.
+/// Decrements `n` first then copies `[src + n] -> [dst + n]`, so the region
+/// is walked from high address to low and bytes that would otherwise be
+/// clobbered get read before being overwritten.
+fn build_memory_copy_byte_loop_backward(dst_local: u32, src_local: u32, n_local: u32) -> Node {
+    let r = AstRef::new;
+    let loop_body = vec![
+        Node::LocalGet(n_local), // 0
+        Node::Unary {
+            // 1: n == 0
+            op: UnOp::Eqz,
+            ty: ValType::I32,
+            val: r(0),
+        },
+        Node::BrIf(1, r(1)),     // 2: exit when n == 0
+        Node::LocalGet(n_local), // 3
+        Node::I32Const(1),       // 4
+        Node::Binary {
+            // 5: n - 1
+            op: BinOp::Sub,
+            ty: ValType::I32,
+            lhs: r(3),
+            rhs: r(4),
+        },
+        Node::LocalSet(n_local, r(5)), // 6
+        Node::LocalGet(src_local),     // 7
+        Node::LocalGet(n_local),       // 8
+        Node::Binary {
+            // 9: src + n
+            op: BinOp::Add,
+            ty: ValType::I32,
+            lhs: r(7),
+            rhs: r(8),
+        },
+        Node::Load {
+            // 10: byte = i32.load8_u [src + n]
+            ty: ValType::I32,
+            size: 8,
+            signed: false,
+            offset: 0,
+            address: r(9),
+        },
+        Node::LocalGet(dst_local), // 11
+        Node::LocalGet(n_local),   // 12
+        Node::Binary {
+            // 13: dst + n
+            op: BinOp::Add,
+            ty: ValType::I32,
+            lhs: r(11),
+            rhs: r(12),
+        },
+        Node::Store {
+            // 14: i32.store8 [dst + n] = byte
+            ty: ValType::I32,
+            size: 8,
+            offset: 0,
+            value: r(10),
+            address: r(13),
+        },
+        Node::Br(0), // 15: continue
+    ];
+    Node::Block(vec![Node::Loop(loop_body)])
+}
+
 fn parse_function(
     module: &AstModule,
     func_index: usize,
@@ -496,6 +797,122 @@ fn parse_function(
                     offset: memarg.offset as usize,
                     value,
                     address,
+                });
+            }
+            Operator::MemoryFill { mem } => {
+                if mem != 0 {
+                    bail!("memory.fill: only memory 0 is supported");
+                }
+                let frame = current_frame_mut(&mut block_stack)?;
+                let n_ref = pop_typed_ref(frame, &mut ref_stack, ValType::I32, "memory.fill n")?;
+                let val_ref =
+                    pop_typed_ref(frame, &mut ref_stack, ValType::I32, "memory.fill val")?;
+                let dst_ref =
+                    pop_typed_ref(frame, &mut ref_stack, ValType::I32, "memory.fill dst")?;
+
+                locals.push(ValType::I32);
+                let dst_local = (locals.len() - 1) as u32;
+                locals.push(ValType::I32);
+                let val_local = (locals.len() - 1) as u32;
+                locals.push(ValType::I32);
+                let n_local = (locals.len() - 1) as u32;
+                locals.push(ValType::I32);
+                let val32_local = (locals.len() - 1) as u32;
+
+                let frame = current_frame_mut(&mut block_stack)?;
+                frame.emit(Node::LocalSet(n_local, n_ref));
+                frame.emit(Node::LocalSet(val_local, val_ref));
+                frame.emit(Node::LocalSet(dst_local, dst_ref));
+
+                // val32 = (val & 0xFF) * 0x01010101 — broadcast the low byte
+                // across all four lanes of an i32 so each word store paints
+                // four bytes at once.
+                let v = frame.emit(Node::LocalGet(val_local));
+                let mask = frame.emit(Node::I32Const(0xFF));
+                let masked = frame.emit(Node::Binary {
+                    op: BinOp::And,
+                    ty: ValType::I32,
+                    lhs: v,
+                    rhs: mask,
+                });
+                let broadcast = frame.emit(Node::I32Const(0x0101_0101));
+                let v32 = frame.emit(Node::Binary {
+                    op: BinOp::Mul,
+                    ty: ValType::I32,
+                    lhs: masked,
+                    rhs: broadcast,
+                });
+                frame.emit(Node::LocalSet(val32_local, v32));
+
+                frame.emit(build_memory_fill_word_loop(dst_local, val32_local, n_local));
+                frame.emit(build_memory_fill_byte_loop(dst_local, val_local, n_local));
+            }
+            Operator::MemoryCopy { dst_mem, src_mem } => {
+                if dst_mem != 0 || src_mem != 0 {
+                    bail!("memory.copy: only memory 0 is supported");
+                }
+                let frame = current_frame_mut(&mut block_stack)?;
+                let n_ref = pop_typed_ref(frame, &mut ref_stack, ValType::I32, "memory.copy n")?;
+                let src_ref =
+                    pop_typed_ref(frame, &mut ref_stack, ValType::I32, "memory.copy src")?;
+                let dst_ref =
+                    pop_typed_ref(frame, &mut ref_stack, ValType::I32, "memory.copy dst")?;
+
+                locals.push(ValType::I32);
+                let dst_local = (locals.len() - 1) as u32;
+                locals.push(ValType::I32);
+                let src_local = (locals.len() - 1) as u32;
+                locals.push(ValType::I32);
+                let n_local = (locals.len() - 1) as u32;
+
+                let frame = current_frame_mut(&mut block_stack)?;
+                frame.emit(Node::LocalSet(n_local, n_ref));
+                frame.emit(Node::LocalSet(src_local, src_ref));
+                frame.emit(Node::LocalSet(dst_local, dst_ref));
+
+                // need_backward = (dst > src) && ((dst - src) < n)
+                // Only the strict overlap case (src < dst < src + n) needs a
+                // backward walk; forward word+byte is correct and faster
+                // everywhere else.
+                let d1 = frame.emit(Node::LocalGet(dst_local));
+                let s1 = frame.emit(Node::LocalGet(src_local));
+                let dst_gt_src = frame.emit(Node::Compare {
+                    op: RelOp::GtU,
+                    ty: ValType::I32,
+                    lhs: d1,
+                    rhs: s1,
+                });
+                let d2 = frame.emit(Node::LocalGet(dst_local));
+                let s2 = frame.emit(Node::LocalGet(src_local));
+                let diff = frame.emit(Node::Binary {
+                    op: BinOp::Sub,
+                    ty: ValType::I32,
+                    lhs: d2,
+                    rhs: s2,
+                });
+                let nv = frame.emit(Node::LocalGet(n_local));
+                let diff_lt_n = frame.emit(Node::Compare {
+                    op: RelOp::LtU,
+                    ty: ValType::I32,
+                    lhs: diff,
+                    rhs: nv,
+                });
+                let need_backward = frame.emit(Node::Binary {
+                    op: BinOp::And,
+                    ty: ValType::I32,
+                    lhs: dst_gt_src,
+                    rhs: diff_lt_n,
+                });
+
+                frame.emit(Node::If {
+                    cond: need_backward,
+                    then_body: vec![build_memory_copy_byte_loop_backward(
+                        dst_local, src_local, n_local,
+                    )],
+                    else_body: vec![
+                        build_memory_copy_word_loop(dst_local, src_local, n_local),
+                        build_memory_copy_byte_loop_forward(dst_local, src_local, n_local),
+                    ],
                 });
             }
             Operator::TableSize { table } => {
@@ -1089,7 +1506,12 @@ fn parse_function(
 
 #[cfg(test)]
 mod tests {
-    use super::tag_has_i32_payload;
+    use super::{
+        build_memory_copy_byte_loop_backward, build_memory_copy_byte_loop_forward,
+        build_memory_copy_word_loop, build_memory_fill_byte_loop, build_memory_fill_word_loop,
+        tag_has_i32_payload,
+    };
+    use crate::ast::{BinOp, Node, RelOp, UnOp};
     use crate::module::{AstModule, FuncType, ModuleInfo, TagInfo};
     use wasmparser::ValType;
 
@@ -1110,6 +1532,225 @@ mod tests {
 
         let i32_payload = module_with_tag(&[ValType::I32], &[]);
         assert!(tag_has_i32_payload(&i32_payload, 0).expect("i32-payload tag should work"));
+    }
+
+    fn assert_block_loop(node: Node) -> Vec<Node> {
+        let body = match node {
+            Node::Block(body) => body,
+            other => panic!("expected Block at top level, got {other:?}"),
+        };
+        assert_eq!(body.len(), 1, "block must contain a single loop");
+        match &body[0] {
+            Node::Loop(body) => body.clone(),
+            other => panic!("expected Loop inside block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn memory_fill_word_loop_stores_val32_and_decs_by_four() {
+        let dst = 4u32;
+        let val32 = 7u32;
+        let n = 6u32;
+        let loop_body = assert_block_loop(build_memory_fill_word_loop(dst, val32, n));
+
+        assert!(matches!(loop_body[0], Node::LocalGet(l) if l == n));
+        assert!(matches!(loop_body[1], Node::I32Const(4)));
+        assert!(matches!(
+            loop_body[2],
+            Node::Compare {
+                op: RelOp::LtU,
+                ty: ValType::I32,
+                ..
+            }
+        ));
+        assert!(matches!(loop_body[3], Node::BrIf(1, _)));
+        assert!(matches!(loop_body[4], Node::LocalGet(l) if l == dst));
+        assert!(matches!(loop_body[5], Node::LocalGet(l) if l == val32));
+        match &loop_body[6] {
+            Node::Store {
+                ty: ValType::I32,
+                size: 32,
+                offset: 0,
+                ..
+            } => {}
+            other => panic!("expected i32.store of val32 at dst, got {other:?}"),
+        }
+        assert!(matches!(loop_body[10], Node::LocalSet(l, _) if l == dst));
+        assert!(matches!(loop_body[14], Node::LocalSet(l, _) if l == n));
+        assert!(matches!(loop_body[15], Node::Br(0)));
+        assert_eq!(loop_body.len(), 16);
+    }
+
+    #[test]
+    fn memory_fill_byte_loop_stores_val_and_decs_by_one() {
+        let dst = 4u32;
+        let val = 5u32;
+        let n = 6u32;
+        let loop_body = assert_block_loop(build_memory_fill_byte_loop(dst, val, n));
+
+        assert!(matches!(loop_body[0], Node::LocalGet(l) if l == n));
+        assert!(matches!(
+            loop_body[1],
+            Node::Unary {
+                op: UnOp::Eqz,
+                ty: ValType::I32,
+                ..
+            }
+        ));
+        assert!(matches!(loop_body[2], Node::BrIf(1, _)));
+        assert!(matches!(loop_body[3], Node::LocalGet(l) if l == dst));
+        assert!(matches!(loop_body[4], Node::LocalGet(l) if l == val));
+        match &loop_body[5] {
+            Node::Store {
+                ty: ValType::I32,
+                size: 8,
+                offset: 0,
+                ..
+            } => {}
+            other => panic!("expected i32.store8 of val at dst, got {other:?}"),
+        }
+        assert!(matches!(loop_body[9], Node::LocalSet(l, _) if l == dst));
+        assert!(matches!(loop_body[13], Node::LocalSet(l, _) if l == n));
+        assert!(matches!(loop_body[14], Node::Br(0)));
+        assert_eq!(loop_body.len(), 15);
+    }
+
+    #[test]
+    fn memory_copy_word_loop_reads_stores_and_advances_pair() {
+        let dst = 1u32;
+        let src = 2u32;
+        let n = 3u32;
+        let loop_body = assert_block_loop(build_memory_copy_word_loop(dst, src, n));
+
+        assert!(matches!(loop_body[0], Node::LocalGet(l) if l == n));
+        assert!(matches!(loop_body[1], Node::I32Const(4)));
+        assert!(matches!(
+            loop_body[2],
+            Node::Compare {
+                op: RelOp::LtU,
+                ty: ValType::I32,
+                ..
+            }
+        ));
+        assert!(matches!(loop_body[3], Node::BrIf(1, _)));
+        assert!(matches!(loop_body[4], Node::LocalGet(l) if l == src));
+        match &loop_body[5] {
+            Node::Load {
+                ty: ValType::I32,
+                size: 32,
+                signed: false,
+                offset: 0,
+                ..
+            } => {}
+            other => panic!("expected i32.load at src, got {other:?}"),
+        }
+        assert!(matches!(loop_body[6], Node::LocalGet(l) if l == dst));
+        match &loop_body[7] {
+            Node::Store {
+                ty: ValType::I32,
+                size: 32,
+                offset: 0,
+                ..
+            } => {}
+            other => panic!("expected i32.store at dst, got {other:?}"),
+        }
+        assert!(matches!(loop_body[11], Node::LocalSet(l, _) if l == dst));
+        assert!(matches!(loop_body[15], Node::LocalSet(l, _) if l == src));
+        assert!(matches!(loop_body[19], Node::LocalSet(l, _) if l == n));
+        assert!(matches!(loop_body[20], Node::Br(0)));
+        assert_eq!(loop_body.len(), 21);
+    }
+
+    #[test]
+    fn memory_copy_forward_byte_loop_walks_one_byte_at_a_time() {
+        let dst = 1u32;
+        let src = 2u32;
+        let n = 3u32;
+        let loop_body = assert_block_loop(build_memory_copy_byte_loop_forward(dst, src, n));
+
+        assert!(matches!(loop_body[0], Node::LocalGet(l) if l == n));
+        assert!(matches!(
+            loop_body[1],
+            Node::Unary {
+                op: UnOp::Eqz,
+                ty: ValType::I32,
+                ..
+            }
+        ));
+        assert!(matches!(loop_body[2], Node::BrIf(1, _)));
+        match &loop_body[4] {
+            Node::Load {
+                ty: ValType::I32,
+                size: 8,
+                signed: false,
+                ..
+            } => {}
+            other => panic!("expected i32.load8_u at src, got {other:?}"),
+        }
+        match &loop_body[6] {
+            Node::Store {
+                ty: ValType::I32,
+                size: 8,
+                offset: 0,
+                ..
+            } => {}
+            other => panic!("expected i32.store8 at dst, got {other:?}"),
+        }
+        assert!(matches!(loop_body[10], Node::LocalSet(l, _) if l == dst));
+        assert!(matches!(loop_body[14], Node::LocalSet(l, _) if l == src));
+        assert!(matches!(loop_body[18], Node::LocalSet(l, _) if l == n));
+        assert!(matches!(loop_body[19], Node::Br(0)));
+        assert_eq!(loop_body.len(), 20);
+    }
+
+    #[test]
+    fn memory_copy_backward_byte_loop_decrements_n_before_reading() {
+        let dst = 1u32;
+        let src = 2u32;
+        let n = 3u32;
+        let loop_body = assert_block_loop(build_memory_copy_byte_loop_backward(dst, src, n));
+
+        assert!(matches!(loop_body[0], Node::LocalGet(l) if l == n));
+        assert!(matches!(
+            loop_body[1],
+            Node::Unary {
+                op: UnOp::Eqz,
+                ty: ValType::I32,
+                ..
+            }
+        ));
+        assert!(matches!(loop_body[2], Node::BrIf(1, _)));
+        // n decrements first.
+        assert!(matches!(loop_body[3], Node::LocalGet(l) if l == n));
+        assert!(matches!(loop_body[4], Node::I32Const(1)));
+        assert!(matches!(
+            loop_body[5],
+            Node::Binary {
+                op: BinOp::Sub,
+                ty: ValType::I32,
+                ..
+            }
+        ));
+        assert!(matches!(loop_body[6], Node::LocalSet(l, _) if l == n));
+        // Then load src + n / store dst + n.
+        match &loop_body[10] {
+            Node::Load {
+                ty: ValType::I32,
+                size: 8,
+                ..
+            } => {}
+            other => panic!("expected i32.load8_u at src + n, got {other:?}"),
+        }
+        match &loop_body[14] {
+            Node::Store {
+                ty: ValType::I32,
+                size: 8,
+                ..
+            } => {}
+            other => panic!("expected i32.store8 at dst + n, got {other:?}"),
+        }
+        assert!(matches!(loop_body[15], Node::Br(0)));
+        assert_eq!(loop_body.len(), 16);
     }
 
     #[test]
