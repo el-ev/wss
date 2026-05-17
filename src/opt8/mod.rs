@@ -43,6 +43,7 @@ pub fn run(prog: &mut Ir8Program) {
         let mut changed = false;
         changed |= local_copy_propagation(prog);
         changed |= copy_elim(prog);
+        changed |= back_copy_coalesce(prog);
         changed |= instcombine(prog);
         changed |= combine_boolean_chains(prog);
         changed |= store_to_load_forwarding(prog);
@@ -55,6 +56,86 @@ pub fn run(prog: &mut Ir8Program) {
             return;
         }
     }
+}
+
+fn back_copy_coalesce(prog: &mut Ir8Program) -> bool {
+    let mut changed = false;
+    for blocks in &mut prog.func_blocks {
+        changed |= back_copy_coalesce_func(blocks);
+    }
+    changed
+}
+
+fn back_copy_coalesce_func(blocks: &mut [BasicBlock8]) -> bool {
+    let def_counts = collect_def_counts(blocks);
+    let use_counts = collect_use_counts(blocks);
+    let used_before_def = collect_regs_used_before_def(blocks);
+
+    let mut rewrites: Vec<(usize, usize, usize, Val8)> = Vec::new();
+    let mut srcs_taken: HashSet<Val8> = HashSet::new();
+    let mut dsts_taken: HashSet<Val8> = HashSet::new();
+
+    for (bb_idx, bb) in blocks.iter().enumerate() {
+        let mut local_def_idx: HashMap<Val8, usize> = HashMap::new();
+        for (i, inst) in bb.insts.iter().enumerate() {
+            if let Some(dst) = inst.dst {
+                local_def_idx.entry(dst).or_insert(i);
+            }
+        }
+
+        for (copy_idx, inst) in bb.insts.iter().enumerate() {
+            let (Some(dst), Inst8Kind::Copy(src)) = (inst.dst, inst.kind) else {
+                continue;
+            };
+            if dst.expect_vreg() < VREG_START {
+                continue;
+            }
+            if src.is_imm() || dst == src {
+                continue;
+            }
+            if def_counts.get(&dst).copied().unwrap_or(0) != 1 {
+                continue;
+            }
+            if used_before_def.contains(&dst) {
+                continue;
+            }
+            if use_counts.get(&src).copied().unwrap_or(0) != 1 {
+                continue;
+            }
+            if def_counts.get(&src).copied().unwrap_or(0) != 1 {
+                continue;
+            }
+            let Some(&def_idx) = local_def_idx.get(&src) else {
+                continue;
+            };
+            if def_idx >= copy_idx {
+                continue;
+            }
+            if srcs_taken.contains(&src)
+                || dsts_taken.contains(&dst)
+                || srcs_taken.contains(&dst)
+                || dsts_taken.contains(&src)
+            {
+                continue;
+            }
+            srcs_taken.insert(src);
+            dsts_taken.insert(dst);
+            rewrites.push((bb_idx, def_idx, copy_idx, dst));
+        }
+    }
+
+    if rewrites.is_empty() {
+        return false;
+    }
+
+    // Apply in (block, copy_idx desc) order so remove() doesn't shift earlier indices.
+    rewrites.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| b.2.cmp(&a.2)));
+    for (bb_idx, def_idx, copy_idx, dst) in rewrites {
+        blocks[bb_idx].insts[def_idx].dst = Some(dst);
+        blocks[bb_idx].insts.remove(copy_idx);
+    }
+
+    true
 }
 
 fn copy_elim(prog: &mut Ir8Program) -> bool {
