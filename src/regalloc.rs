@@ -73,7 +73,8 @@ pub fn regalloc(mut ir8: Ir8Program, max_phys_regs: u16) -> anyhow::Result<Ir8Pr
                 .or_insert(Interval { start: 0, end: 0 });
         }
 
-        let alloc = linear_scan(grouped);
+        let copy_partners = collect_copy_partners(blocks, func_id, &owners);
+        let alloc = linear_scan(grouped, &copy_partners);
         per_func_max_phys[func_id] = alloc.max_phys_group;
         allocations[func_id] = alloc.group_to_phys;
     }
@@ -89,6 +90,7 @@ pub fn regalloc(mut ir8: Ir8Program, max_phys_regs: u16) -> anyhow::Result<Ir8Pr
     }
 
     rewrite_vregs(&mut ir8, &owners, &allocations, &func_group_offsets)?;
+    dce_self_copies(&mut ir8);
     compact_physical_vregs(&mut ir8, max_phys_regs)?;
     ir8.cycles.clear();
 
@@ -446,7 +448,10 @@ fn group_intervals(intervals: &HashMap<Val8, Interval>) -> HashMap<GroupId, Inte
     grouped
 }
 
-fn linear_scan(group_intervals: HashMap<GroupId, Interval>) -> AllocationResult {
+fn linear_scan(
+    group_intervals: HashMap<GroupId, Interval>,
+    copy_partners: &HashMap<GroupId, Vec<GroupId>>,
+) -> AllocationResult {
     if group_intervals.is_empty() {
         return AllocationResult::default();
     }
@@ -479,7 +484,20 @@ fn linear_scan(group_intervals: HashMap<GroupId, Interval>) -> AllocationResult 
             }
         }
 
-        let phys_group = if let Some(&p) = free_phys.iter().next() {
+        // Prefer a phys group that a copy partner already holds when that
+        // phys is currently free; collapses cross-group rename copies into
+        // self-copies that the post-rewrite DCE deletes.
+        let biased = copy_partners.get(&group).and_then(|partners| {
+            partners.iter().find_map(|p| {
+                let phys = *group_to_phys.get(p)?;
+                free_phys.contains(&phys).then_some(phys)
+            })
+        });
+
+        let phys_group = if let Some(p) = biased {
+            free_phys.remove(&p);
+            p
+        } else if let Some(&p) = free_phys.iter().next() {
             free_phys.remove(&p);
             p
         } else {
@@ -501,6 +519,68 @@ fn linear_scan(group_intervals: HashMap<GroupId, Interval>) -> AllocationResult 
     AllocationResult {
         group_to_phys,
         max_phys_group,
+    }
+}
+
+fn collect_copy_partners(
+    blocks: &[BasicBlock8],
+    func_id: FuncId,
+    owners: &OwnerInfo,
+) -> HashMap<GroupId, Vec<GroupId>> {
+    let mut partners: HashMap<GroupId, Vec<GroupId>> = HashMap::new();
+    let mut seen: HashMap<GroupId, HashSet<GroupId>> = HashMap::new();
+
+    let mut record = |a: GroupId, b: GroupId| {
+        if seen.entry(a).or_default().insert(b) {
+            partners.entry(a).or_default().push(b);
+        }
+    };
+
+    for bb in blocks {
+        for inst in &bb.insts {
+            let Some(dst) = inst.dst else {
+                continue;
+            };
+            let Inst8Kind::Copy(src) = inst.kind else {
+                continue;
+            };
+            if src.is_imm() {
+                continue;
+            }
+            if !belongs_to_func(dst, func_id, owners) || !belongs_to_func(src, func_id, owners) {
+                continue;
+            }
+            let d = dst.expect_vreg();
+            let s = src.expect_vreg();
+            if d < VREG_START || s < VREG_START {
+                continue;
+            }
+            if d % 4 != s % 4 {
+                continue;
+            }
+            let dg = d / 4;
+            let sg = s / 4;
+            if dg == sg {
+                continue;
+            }
+            record(dg, sg);
+            record(sg, dg);
+        }
+    }
+
+    partners
+}
+
+// After regalloc rewrites virtual regs to physical, sweep self-copies
+// (`phys = copy phys`) that the copy-bias coalescer collapsed.
+fn dce_self_copies(prog: &mut Ir8Program) {
+    for blocks in &mut prog.func_blocks {
+        for bb in blocks.iter_mut() {
+            bb.insts.retain(|inst| match inst.kind {
+                Inst8Kind::Copy(src) => inst.dst != Some(src),
+                _ => true,
+            });
+        }
     }
 }
 
@@ -826,7 +906,7 @@ mod tests {
         let mut grouped = HashMap::new();
         grouped.insert(20, super::Interval { start: 1, end: 10 });
         grouped.insert(10, super::Interval { start: 1, end: 10 });
-        let alloc = super::linear_scan(grouped);
+        let alloc = super::linear_scan(grouped, &HashMap::new());
         assert_eq!(alloc.group_to_phys.get(&10), Some(&1));
         assert_eq!(alloc.group_to_phys.get(&20), Some(&2));
     }

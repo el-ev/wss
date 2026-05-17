@@ -30,11 +30,15 @@ impl PendingCycle {
         !self.ops.is_empty()
             && !profile.is_getchar
             && (!profile.is_putchar || !self.has_putchar)
-            && (self.has_mem_stores() == profile.is_store_mem)
+            && !(self.has_mem_stores() && profile.is_putchar)
+            && !(self.has_putchar && profile.is_store_mem)
             && (!profile.is_store_mem || self.mem_store_count < SCHEDULE_MAX_STORE_MEM_PER_CYCLE)
             && (self.ops.len() < SCHEDULE_MAX_OPS_PER_CYCLE)
             && (self.complexity + profile.complexity <= SCHEDULE_MAX_COMPLEXITY_PER_CYCLE)
-            && self.ops.iter().all(|prev| independent(prev, inst))
+            && self
+                .ops
+                .iter()
+                .all(|prev| can_share_cycle_after(prev, inst))
     }
 
     fn push(&mut self, inst: Inst8, profile: InstProfile) {
@@ -161,7 +165,7 @@ fn schedule_block_ops(insts: &[Inst8]) -> Vec<Vec<Inst8>> {
     let mut indeg: Vec<usize> = vec![0; n];
     for i in 0..n {
         for j in (i + 1)..n {
-            if !independent(&insts[i], &insts[j]) {
+            if must_order_before(&insts[i], &insts[j]) {
                 succs[i].push(j);
                 indeg[j] += 1;
             }
@@ -249,20 +253,35 @@ fn inst_complexity(kind: &Inst8Kind) -> usize {
     }
 }
 
-fn independent(a: &Inst8, b: &Inst8) -> bool {
-    no_register_hazard(a, b) && !effect_order_dependent(&a.kind, &b.kind)
+fn must_order_before(a: &Inst8, b: &Inst8) -> bool {
+    register_order_dependent(a, b) || effect_order_dependent(&a.kind, &b.kind)
 }
 
-fn no_register_hazard(a: &Inst8, b: &Inst8) -> bool {
+fn can_share_cycle_after(prev: &Inst8, next: &Inst8) -> bool {
+    no_same_cycle_register_hazard(prev, next)
+        && !same_cycle_effect_conflict_after(&prev.kind, &next.kind)
+}
+
+fn register_order_dependent(a: &Inst8, b: &Inst8) -> bool {
     let uses_a = a.uses();
     let defs_a = a.defs();
     let uses_b = b.uses();
     let defs_b = b.defs();
 
-    !defs_a
+    defs_a
         .iter()
         .any(|r| defs_b.contains(r) || uses_b.contains(r))
-        && !defs_b.iter().any(|r| uses_a.contains(r))
+        || defs_b.iter().any(|r| uses_a.contains(r))
+}
+
+fn no_same_cycle_register_hazard(prev: &Inst8, next: &Inst8) -> bool {
+    let defs_prev = prev.defs();
+    let uses_next = next.uses();
+    let defs_next = next.defs();
+
+    !defs_prev
+        .iter()
+        .any(|r| defs_next.contains(r) || uses_next.contains(r))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -328,6 +347,14 @@ impl CsAccess {
 }
 
 fn effect_order_dependent(a: &Inst8Kind, b: &Inst8Kind) -> bool {
+    effect_conflict(a, b, true)
+}
+
+fn same_cycle_effect_conflict_after(prev: &Inst8Kind, next: &Inst8Kind) -> bool {
+    effect_conflict(prev, next, false)
+}
+
+fn effect_conflict(a: &Inst8Kind, b: &Inst8Kind, reads_need_order: bool) -> bool {
     if let (Some(lhs), Some(rhs)) = (cs_access(a), cs_access(b)) {
         return match (lhs, rhs) {
             (CsAccess::StackPtrAdjust, _) | (_, CsAccess::StackPtrAdjust) => true,
@@ -350,6 +377,10 @@ fn effect_order_dependent(a: &Inst8Kind, b: &Inst8Kind) -> bool {
             return false;
         }
 
+        if !reads_need_order && !lhs.is_write() {
+            return false;
+        }
+
         // If both instructions use the same runtime address expression, we can
         // prove disjointness byte-by-byte and keep only true byte conflicts ordered.
         if lhs.addr() == rhs.addr() {
@@ -364,11 +395,17 @@ fn effect_order_dependent(a: &Inst8Kind, b: &Inst8Kind) -> bool {
         if !(lhs.is_write() || rhs.is_write()) {
             return false;
         }
+        if !reads_need_order && !lhs.is_write() {
+            return false;
+        }
         return lhs.key() == rhs.key();
     }
 
     if let (Some(lhs), Some(rhs)) = (eh_access(a), eh_access(b)) {
         if !(lhs.is_write() || rhs.is_write()) {
+            return false;
+        }
+        if !reads_need_order && !lhs.is_write() {
             return false;
         }
         return lhs.channel() == rhs.channel();
@@ -716,6 +753,80 @@ mod tests {
         let cycles = schedule_block_ops(&insts);
         assert_eq!(cycles.len(), 1);
         assert_eq!(cycles[0].len(), 4);
+    }
+
+    #[test]
+    fn schedule_packs_read_before_register_clobber() {
+        let insts = vec![
+            Inst8::with_dst(r(20), Inst8Kind::Add(r(10), r(11))),
+            Inst8::with_dst(r(10), Inst8Kind::Copy(r(12))),
+        ];
+
+        let cycles = schedule_block_ops(&insts);
+        assert_eq!(cycles.len(), 1);
+        assert_eq!(cycles[0].len(), 2);
+    }
+
+    #[test]
+    fn schedule_splits_write_before_register_read() {
+        let insts = vec![
+            Inst8::with_dst(r(10), Inst8Kind::Copy(r(12))),
+            Inst8::with_dst(r(20), Inst8Kind::Add(r(10), r(11))),
+        ];
+
+        let cycles = schedule_block_ops(&insts);
+        assert_eq!(cycles.len(), 2);
+        assert_eq!(cycles[0].len(), 1);
+        assert_eq!(cycles[1].len(), 1);
+    }
+
+    #[test]
+    fn schedule_packs_load_before_same_byte_store() {
+        let addr = Addr::new(r(10), r(11));
+        let insts = vec![
+            Inst8::with_dst(
+                r(20),
+                Inst8Kind::LoadMem {
+                    base: 0,
+                    addr,
+                    lane: 0,
+                },
+            ),
+            Inst8::no_dst(Inst8Kind::StoreMem {
+                base: 0,
+                addr,
+                lane: 0,
+                val: r(30),
+            }),
+        ];
+
+        let cycles = schedule_block_ops(&insts);
+        assert_eq!(cycles.len(), 1);
+        assert_eq!(cycles[0].len(), 2);
+    }
+
+    #[test]
+    fn schedule_packs_independent_compute_with_mem_stores() {
+        let addr = Addr::new(r(10), r(11));
+        let insts = vec![
+            Inst8::with_dst(r(20), Inst8Kind::Add(r(1), r(2))),
+            Inst8::no_dst(Inst8Kind::StoreMem {
+                base: 0,
+                addr,
+                lane: 0,
+                val: r(30),
+            }),
+            Inst8::no_dst(Inst8Kind::StoreMem {
+                base: 0,
+                addr,
+                lane: 1,
+                val: r(31),
+            }),
+        ];
+
+        let cycles = schedule_block_ops(&insts);
+        assert_eq!(cycles.len(), 1);
+        assert_eq!(cycles[0].len(), 3);
     }
 
     #[test]
