@@ -154,29 +154,69 @@ fn schedule_block_ops(insts: &[Inst8]) -> Vec<Vec<Inst8>> {
     if insts.is_empty() {
         return Vec::new();
     }
+    let n = insts.len();
+    let profiles: Vec<InstProfile> = insts.iter().map(InstProfile::from_inst).collect();
 
+    let mut succs: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let mut indeg: Vec<usize> = vec![0; n];
+    for i in 0..n {
+        for j in (i + 1)..n {
+            if !independent(&insts[i], &insts[j]) {
+                succs[i].push(j);
+                indeg[j] += 1;
+            }
+        }
+    }
+
+    let mut height: Vec<usize> = vec![1; n];
+    for i in (0..n).rev() {
+        let mut h = 1;
+        for &s in &succs[i] {
+            h = h.max(1 + height[s]);
+        }
+        height[i] = h;
+    }
+
+    let mut ready: Vec<usize> = (0..n).filter(|&i| indeg[i] == 0).collect();
     let mut cycles: Vec<Vec<Inst8>> = Vec::new();
     let mut current = PendingCycle::default();
 
-    for inst in insts {
-        let profile = InstProfile::from_inst(inst);
+    while !ready.is_empty() {
+        let pick = if current.ops.is_empty() {
+            ready
+                .iter()
+                .enumerate()
+                .max_by_key(|&(_, &i)| (height[i], std::cmp::Reverse(i)))
+                .map(|(idx, _)| idx)
+        } else {
+            ready
+                .iter()
+                .enumerate()
+                .filter(|&(_, &i)| current.can_append(&insts[i], profiles[i]))
+                .max_by_key(|&(_, &i)| (height[i], std::cmp::Reverse(i)))
+                .map(|(idx, _)| idx)
+        };
 
-        if current.can_append(inst, profile) {
-            current.push(inst.clone(), profile);
-            continue;
+        match pick {
+            Some(idx) => {
+                let i = ready.swap_remove(idx);
+                if profiles[i].is_getchar {
+                    debug_assert!(current.ops.is_empty());
+                    cycles.push(vec![insts[i].clone()]);
+                } else {
+                    current.push(insts[i].clone(), profiles[i]);
+                }
+                for &s in &succs[i] {
+                    indeg[s] -= 1;
+                    if indeg[s] == 0 {
+                        ready.push(s);
+                    }
+                }
+            }
+            None => {
+                cycles.push(current.take());
+            }
         }
-
-        if !current.ops.is_empty() {
-            cycles.push(current.take());
-        }
-
-        // Blocking input operation: dedicate a full cycle to getchar.
-        if profile.is_getchar {
-            cycles.push(vec![inst.clone()]);
-            continue;
-        }
-
-        current.push(inst.clone(), profile);
     }
 
     if !current.ops.is_empty() {
