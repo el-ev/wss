@@ -1157,3 +1157,66 @@ fn paren_if_needed_only_wraps_when_required() {
     assert_eq!(f("calc(1 + 2)"), "calc(1 + 2)");
     assert_eq!(f("a + b"), "(a + b)");
 }
+
+#[test]
+fn emit_html_coprocessor_division_retains_cop_a_and_cop_b_after_dce() {
+    use crate::ir8::*;
+    let cycle0 = Cycle {
+        pc: Pc::new(0),
+        ops: Vec::new(),
+        terminator: Terminator8::CallSetup {
+            callee_entry: CallTarget::Builtin(BuiltinId::DivU32),
+            cont: Pc::new(1),
+            args: vec![
+                Word::new(Val8::imm(10), Val8::imm(0), Val8::imm(0), Val8::imm(0)),
+                Word::new(Val8::imm(2), Val8::imm(0), Val8::imm(0), Val8::imm(0)),
+            ],
+            callee_arg_vregs: vec![
+                Word::new(Val8::reg(0), Val8::reg(1), Val8::reg(2), Val8::reg(3)),
+                Word::new(Val8::reg(4), Val8::reg(5), Val8::reg(6), Val8::reg(7)),
+            ],
+        },
+    };
+    let cycle1 = Cycle {
+        pc: Pc::new(1),
+        ops: Vec::new(),
+        terminator: Terminator8::Exit { val: None },
+    };
+    let program = Ir8Program {
+        entry_func: 0,
+        num_vregs: 8,
+        func_blocks: Vec::new(),
+        cycles: vec![cycle0, cycle1],
+        func_entries: Vec::new(),
+        func_num_locals: Vec::new(),
+        memory_end: 0,
+        init_bytes: Vec::new(),
+        global_init: Vec::new(),
+    };
+    let html = emit_program_with_config(
+        &program,
+        EmitConfig::default()
+            .with_js_coprocessor(true)
+            .expect("test config should be valid"),
+    )
+    .expect("emit should succeed");
+    assert!(
+        html.contains("--cop_a0:"),
+        "DCE must not remove --cop_a0 (read by JS coprocessor)"
+    );
+    assert!(
+        html.contains("--cop_b0:"),
+        "DCE must not remove --cop_b0 (read by JS coprocessor)"
+    );
+}
+
+#[test]
+fn emit_html_preserves_nested_calc_in_math_context() {
+    use crate::css::fold_document_values;
+    let input = " --x: min(1, calc(var(--a) + var(--b)));\n";
+    let result = fold_document_values(input);
+    assert!(
+        result.contains("calc("),
+        "nested calc() inside min() must be preserved for Chrome compatibility: {result}"
+    );
+}

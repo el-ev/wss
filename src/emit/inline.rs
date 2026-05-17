@@ -102,7 +102,10 @@ fn merge_refs(a: &HashMap<String, usize>, b: &HashMap<String, usize>) -> HashMap
 /// Names that look like custom properties never read via `var(...)` or
 /// `style(...)` from CSS but ARE read by the JS coprocessor / debugger
 /// runtime in base.html. They MUST survive DCE.
-const JS_READ_PROPERTIES: &[&str] = &["_1pc", "pc", "cop_op"];
+const JS_READ_PROPERTIES: &[&str] = &[
+    "_1pc", "pc", "cop_op", "cop_a0", "cop_a1", "cop_a2", "cop_a3", "cop_b0", "cop_b1", "cop_b2",
+    "cop_b3",
+];
 
 fn parse_trivial_slot_decl(line: &str) -> Option<(String, String)> {
     let trimmed = line.trim();
