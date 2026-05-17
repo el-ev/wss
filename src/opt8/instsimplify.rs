@@ -284,6 +284,14 @@ fn simplify_kind(kind: Inst8Kind, facts: &HashMap<Val8, RegFact>) -> Inst8Kind {
             val,
         },
         Inst8Kind::Putchar(v) => Inst8Kind::Putchar(v),
+        Inst8Kind::PutcharIf { val, enable } => match const_of(enable) {
+            // enable known true -> degrade to unconditional putchar
+            Some(c) if c != 0 => Inst8Kind::Putchar(val),
+            // enable known false -> effectively no-op; emit a self-copy
+            // sink that downstream DCE removes via dst-less self check.
+            Some(_) => Inst8Kind::PutcharIf { val, enable },
+            None => Inst8Kind::PutcharIf { val, enable },
+        },
         Inst8Kind::CsStore { offset, val } => Inst8Kind::CsStore { offset, val },
         Inst8Kind::CsLoad { offset } => Inst8Kind::CsLoad { offset },
         Inst8Kind::CsStorePc { offset, val } => Inst8Kind::CsStorePc { offset, val },

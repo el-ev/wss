@@ -49,6 +49,7 @@ impl<'a> Emitter<'a> {
         }
 
         self.emit_i2char(out);
+        self.emit_cond_char(out);
         self.emit_hex_digit(out);
         if self.uses_bitcount {
             self.emit_byte_clz_lookup(out);
@@ -134,6 +135,12 @@ impl<'a> Emitter<'a> {
                 cond
             );
         }
+    }
+
+    fn emit_cond_char(&self, out: &mut String) {
+        out.push_str(
+            "@function --cond_char(--c <integer>, --v <integer>) returns <string> { result: if(style(--c: 0): \"\"; else: --i2char(var(--v))); }\n",
+        );
     }
 
     fn emit_i2char(&self, out: &mut String) {

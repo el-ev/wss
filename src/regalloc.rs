@@ -682,6 +682,10 @@ fn map_inst_kind_vals(
         Inst8Kind::Copy(s) | Inst8Kind::BoolNot(s) | Inst8Kind::Putchar(s) => {
             *s = f(*s)?;
         }
+        Inst8Kind::PutcharIf { val, enable } => {
+            *val = f(*val)?;
+            *enable = f(*enable)?;
+        }
         Inst8Kind::Add32Byte { lhs, rhs, lane } | Inst8Kind::Sub32Byte { lhs, rhs, lane } => {
             map_word_vals_through_lane(lhs, *lane, f)?;
             map_word_vals_through_lane(rhs, *lane, f)?;

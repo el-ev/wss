@@ -385,7 +385,12 @@ impl<'a> Emitter<'a> {
                         }
                     }
                     Inst8Kind::Putchar(v) => {
-                        putchars.push(Self::val_expr(&reg_now, *v));
+                        putchars.push(format!(" --i2char({})", Self::val_expr(&reg_now, *v)));
+                    }
+                    Inst8Kind::PutcharIf { val, enable } => {
+                        let v_expr = Self::val_expr(&reg_now, *val);
+                        let c_expr = Self::val_expr(&reg_now, *enable);
+                        putchars.push(format!(" --cond_char({}, {})", c_expr, v_expr));
                     }
                     Inst8Kind::RandomByte { lane } => {
                         if let Some(dst) = op.dst {
@@ -593,10 +598,7 @@ impl<'a> Emitter<'a> {
             }
 
             if !putchars.is_empty() {
-                let append = putchars
-                    .iter()
-                    .map(|v| format!(" --i2char({})", v))
-                    .collect::<String>();
+                let append = putchars.concat();
                 let fb_expr = format!("var(--_1fb){}", append);
                 let _ = write!(fb_arms, "style(--_1pc: {}): {}; ", pc, fb_expr);
             }

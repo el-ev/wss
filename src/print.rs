@@ -779,6 +779,13 @@ fn print_inst8(out: &mut String, inst: &crate::ir8::Inst8) {
 
         Inst8Kind::Getchar => write!(out, "getchar").unwrap(),
         Inst8Kind::Putchar(v) => write!(out, "putchar {}", fmt_val8(*v)).unwrap(),
+        Inst8Kind::PutcharIf { val, enable } => write!(
+            out,
+            "putchar.if {} when {}",
+            fmt_val8(*val),
+            fmt_val8(*enable)
+        )
+        .unwrap(),
         Inst8Kind::RandomByte { lane } => write!(out, "rand.byte {}", lane).unwrap(),
 
         Inst8Kind::CsStore { offset, val } => {

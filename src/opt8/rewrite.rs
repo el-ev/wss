@@ -172,6 +172,10 @@ pub(super) fn rewrite_inst(mut inst: Inst8, subst: &HashMap<Val8, Val8>) -> Inst
             val: rw(subst, val),
         },
         Inst8Kind::Putchar(v) => Inst8Kind::Putchar(rw(subst, v)),
+        Inst8Kind::PutcharIf { val, enable } => Inst8Kind::PutcharIf {
+            val: rw(subst, val),
+            enable: rw(subst, enable),
+        },
 
         Inst8Kind::CsStore { offset, val } => Inst8Kind::CsStore {
             offset,
@@ -226,6 +230,7 @@ pub(super) fn has_side_effect(kind: &Inst8Kind) -> bool {
     matches!(
         kind,
         Inst8Kind::Putchar(_)
+            | Inst8Kind::PutcharIf { .. }
             | Inst8Kind::Getchar
             | Inst8Kind::StoreMem { .. }
             | Inst8Kind::GlobalSetByte { .. }
@@ -252,6 +257,10 @@ pub(super) fn inst_uses(kind: &Inst8Kind, live: &mut HashSet<Val8>) {
 
         Inst8Kind::Copy(s) | Inst8Kind::BoolNot(s) | Inst8Kind::Putchar(s) => {
             add_use(live, *s);
+        }
+        Inst8Kind::PutcharIf { val, enable } => {
+            add_use(live, *val);
+            add_use(live, *enable);
         }
         Inst8Kind::Add32Byte { lhs, rhs, lane } | Inst8Kind::Sub32Byte { lhs, rhs, lane } => {
             for reg in lhs.uses_through_lane(*lane) {

@@ -47,6 +47,7 @@ pub fn run(prog: &mut Ir8Program) {
         changed |= multi_def_zero_fold(prog);
         changed |= instcombine(prog);
         changed |= combine_boolean_chains(prog);
+        changed |= predicate_branch_putchar(prog);
         changed |= store_to_load_forwarding(prog);
         changed |= local_dead_mem_store_elim(prog);
         changed |= thread_empty_gotos(prog);
@@ -469,6 +470,126 @@ fn remove_unreachable_blocks(prog: &mut Ir8Program) -> bool {
     }
 
     changed
+}
+
+// If a conditional branch arm consists of exactly one `Putchar(v)` followed by
+// a `Goto(join)` and the arm has no other predecessors, hoist the putchar into
+// the predecessor as a `PutcharIf { val: v, enable: cond }` (or with a
+// `BoolNot` of cond when the put arm is the `if_false` side). The arm becomes
+// unreachable; `remove_unreachable_blocks` cleans it up. This unlocks
+// putchar batching across the (now-collapsed) diamond.
+fn predicate_branch_putchar(prog: &mut Ir8Program) -> bool {
+    let mut changed = false;
+    for func_id in 0..prog.func_blocks.len() {
+        loop {
+            if !predicate_branch_putchar_once(&mut prog.func_blocks[func_id]) {
+                break;
+            }
+            changed = true;
+        }
+    }
+    changed
+}
+
+fn predicate_branch_putchar_once(blocks: &mut Vec<BasicBlock8>) -> bool {
+    if blocks.len() < 2 {
+        return false;
+    }
+    let pc_to_idx: HashMap<Pc, usize> = blocks.iter().enumerate().map(|(i, b)| (b.id, i)).collect();
+
+    let mut term_pred_count = vec![0usize; blocks.len()];
+    let mut cs_store_pc_ref: HashSet<Pc> = HashSet::new();
+    for bb in blocks.iter() {
+        for succ in bb.terminator.successors() {
+            if let Some(&to) = pc_to_idx.get(&succ) {
+                term_pred_count[to] += 1;
+            }
+        }
+        for inst in &bb.insts {
+            if let Inst8Kind::CsStorePc { val, .. } = inst.kind {
+                cs_store_pc_ref.insert(val);
+            }
+        }
+    }
+
+    for i in 0..blocks.len() {
+        let Terminator8::Branch {
+            cond,
+            if_true,
+            if_false,
+        } = blocks[i].terminator
+        else {
+            continue;
+        };
+
+        // Try both arms: (arm_pc, join_pc, negate_cond).
+        let candidates = [(if_true, if_false, false), (if_false, if_true, true)];
+        for (arm_pc, join_pc, negate) in candidates {
+            let Some(&arm_idx) = pc_to_idx.get(&arm_pc) else {
+                continue;
+            };
+            if arm_idx == i {
+                continue;
+            }
+            if term_pred_count[arm_idx] != 1 || cs_store_pc_ref.contains(&arm_pc) {
+                continue;
+            }
+            let arm = &blocks[arm_idx];
+            let Terminator8::Goto(arm_target) = arm.terminator else {
+                continue;
+            };
+            if arm_target != join_pc {
+                continue;
+            }
+            if arm.insts.len() != 1 {
+                continue;
+            }
+            let Inst8Kind::Putchar(val) = arm.insts[0].kind else {
+                continue;
+            };
+
+            let enable = if negate {
+                let new_reg = next_vreg(blocks);
+                blocks[i]
+                    .insts
+                    .push(Inst8::with_dst(new_reg, Inst8Kind::BoolNot(cond)));
+                new_reg
+            } else {
+                cond
+            };
+            blocks[i]
+                .insts
+                .push(Inst8::no_dst(Inst8Kind::PutcharIf { val, enable }));
+            blocks[i].terminator = Terminator8::Goto(join_pc);
+            return true;
+        }
+    }
+
+    false
+}
+
+fn next_vreg(blocks: &[BasicBlock8]) -> Val8 {
+    let mut max = VREG_START;
+    for bb in blocks {
+        for inst in &bb.insts {
+            if let Some(dst) = inst.dst
+                && let Some(idx) = dst.reg_index()
+            {
+                max = max.max(idx + 1);
+            }
+            for r in inst.uses() {
+                if let Some(idx) = r.reg_index() {
+                    max = max.max(idx + 1);
+                }
+            }
+        }
+        for r in bb.terminator.uses().into_iter().chain(bb.terminator.defs()) {
+            if let Some(idx) = r.reg_index() {
+                max = max.max(idx + 1);
+            }
+        }
+    }
+    Val8::reg(max)
 }
 
 fn coalesce_linear_blocks(prog: &mut Ir8Program) -> bool {

@@ -20,7 +20,6 @@ struct ScheduledBlock {
 #[derive(Default)]
 struct PendingCycle {
     ops: Vec<Inst8>,
-    has_putchar: bool,
     complexity: usize,
     mem_store_count: usize,
 }
@@ -29,9 +28,6 @@ impl PendingCycle {
     fn can_append(&self, inst: &Inst8, profile: InstProfile) -> bool {
         !self.ops.is_empty()
             && !profile.is_getchar
-            && (!profile.is_putchar || !self.has_putchar)
-            && !(self.has_mem_stores() && profile.is_putchar)
-            && !(self.has_putchar && profile.is_store_mem)
             && (!profile.is_store_mem || self.mem_store_count < SCHEDULE_MAX_STORE_MEM_PER_CYCLE)
             && (self.ops.len() < SCHEDULE_MAX_OPS_PER_CYCLE)
             && (self.complexity + profile.complexity <= SCHEDULE_MAX_COMPLEXITY_PER_CYCLE)
@@ -42,7 +38,6 @@ impl PendingCycle {
     }
 
     fn push(&mut self, inst: Inst8, profile: InstProfile) {
-        self.has_putchar |= profile.is_putchar;
         self.mem_store_count += usize::from(profile.is_store_mem);
         self.complexity += profile.complexity;
         self.ops.push(inst);
@@ -53,16 +48,11 @@ impl PendingCycle {
         *self = Self::default();
         ops
     }
-
-    fn has_mem_stores(&self) -> bool {
-        self.mem_store_count != 0
-    }
 }
 
 #[derive(Clone, Copy)]
 struct InstProfile {
     is_getchar: bool,
-    is_putchar: bool,
     is_store_mem: bool,
     complexity: usize,
 }
@@ -72,7 +62,6 @@ impl InstProfile {
         let kind = &inst.kind;
         Self {
             is_getchar: matches!(kind, Inst8Kind::Getchar),
-            is_putchar: matches!(kind, Inst8Kind::Putchar(_)),
             is_store_mem: matches!(kind, Inst8Kind::StoreMem { .. }),
             complexity: inst_complexity(kind),
         }
@@ -241,7 +230,7 @@ fn inst_complexity(kind: &Inst8Kind) -> usize {
         | Inst8Kind::CsLoadPc { .. }
         | Inst8Kind::CsAlloc(_)
         | Inst8Kind::CsFree(_) => 2,
-        Inst8Kind::Getchar | Inst8Kind::Putchar(_) => 2,
+        Inst8Kind::Getchar | Inst8Kind::Putchar(_) | Inst8Kind::PutcharIf { .. } => 2,
         Inst8Kind::RandomByte { .. } => 1,
         Inst8Kind::ExcFlagSet { .. }
         | Inst8Kind::ExcFlagGet
@@ -367,8 +356,12 @@ fn effect_conflict(a: &Inst8Kind, b: &Inst8Kind, reads_need_order: bool) -> bool
         };
     }
 
-    // Keep I/O operations ordered with each other.
     if is_io_op(a) && is_io_op(b) {
+        let a_is_put = matches!(a, Inst8Kind::Putchar(_) | Inst8Kind::PutcharIf { .. });
+        let b_is_put = matches!(b, Inst8Kind::Putchar(_) | Inst8Kind::PutcharIf { .. });
+        if !reads_need_order && a_is_put && b_is_put {
+            return false;
+        }
         return true;
     }
 
@@ -474,7 +467,10 @@ fn cs_access(kind: &Inst8Kind) -> Option<CsAccess> {
 }
 
 fn is_io_op(kind: &Inst8Kind) -> bool {
-    matches!(kind, Inst8Kind::Getchar | Inst8Kind::Putchar(_))
+    matches!(
+        kind,
+        Inst8Kind::Getchar | Inst8Kind::Putchar(_) | Inst8Kind::PutcharIf { .. }
+    )
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -865,7 +861,7 @@ mod tests {
     }
 
     #[test]
-    fn schedule_splits_mem_store_and_putchar_cycles() {
+    fn schedule_packs_mem_stores_with_putchar_in_one_cycle() {
         let addr = Addr::new(r(10), r(11));
         let insts = vec![
             Inst8::no_dst(Inst8Kind::StoreMem {
@@ -884,10 +880,30 @@ mod tests {
         ];
 
         let cycles = schedule_block_ops(&insts);
-        assert_eq!(cycles.len(), 2);
-        assert_eq!(cycles[0].len(), 2);
-        assert_eq!(cycles[1].len(), 1);
-        assert!(matches!(cycles[1][0].kind, Inst8Kind::Putchar(_)));
+        assert_eq!(cycles.len(), 1);
+        assert_eq!(cycles[0].len(), 3);
+    }
+
+    #[test]
+    fn schedule_packs_multiple_putchars_in_one_cycle() {
+        let insts = vec![
+            Inst8::no_dst(Inst8Kind::Putchar(r(20))),
+            Inst8::no_dst(Inst8Kind::Putchar(r(21))),
+            Inst8::no_dst(Inst8Kind::Putchar(r(22))),
+        ];
+
+        let cycles = schedule_block_ops(&insts);
+        assert_eq!(cycles.len(), 1);
+        assert_eq!(cycles[0].len(), 3);
+        // IR order preserved: r20, r21, r22.
+        let order: Vec<u16> = cycles[0]
+            .iter()
+            .map(|op| match op.kind {
+                Inst8Kind::Putchar(v) => v.expect_vreg(),
+                _ => unreachable!(),
+            })
+            .collect();
+        assert_eq!(order, vec![20, 21, 22]);
     }
 
     #[test]
@@ -1035,8 +1051,8 @@ mod tests {
                             offset: 0,
                             val: Pc::new(1),
                         }),
-                        Inst8::no_dst(Inst8Kind::Putchar(r(0))),
-                        Inst8::no_dst(Inst8Kind::Putchar(r(0))),
+                        Inst8::with_dst(r(8), Inst8Kind::Add(r(0), r(1))),
+                        Inst8::no_dst(Inst8Kind::Putchar(r(8))),
                     ],
                     terminator: Terminator8::Goto(Pc::new(1)),
                 },

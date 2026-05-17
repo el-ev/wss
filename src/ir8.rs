@@ -331,6 +331,12 @@ impl Inst8 {
                 push_vreg(&mut out, *s);
                 out
             }
+            Inst8Kind::PutcharIf { val, enable } => {
+                let mut out = Vec::new();
+                push_vreg(&mut out, *val);
+                push_vreg(&mut out, *enable);
+                out
+            }
             Inst8Kind::Add32Byte { lhs, rhs, lane } | Inst8Kind::Sub32Byte { lhs, rhs, lane } => {
                 let mut out = lhs.uses_through_lane(*lane);
                 out.extend(rhs.uses_through_lane(*lane));
@@ -468,6 +474,13 @@ pub enum Inst8Kind {
 
     Getchar,
     Putchar(Val8),
+    /// Append `val` to the framebuffer only when `enable` is non-zero.
+    /// Created by opt8 when speculatively hoisting a one-putchar arm of a
+    /// conditional branch into its predecessor.
+    PutcharIf {
+        val: Val8,
+        enable: Val8,
+    },
     /// Read one byte lane from the animation-driven rand device.
     RandomByte {
         lane: u8,
