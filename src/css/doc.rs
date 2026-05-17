@@ -473,6 +473,102 @@ fn print_rule(r: &Rule, out: &mut String) {
 
 use std::collections::HashMap;
 
+/// Pre-order traversal of every node reachable from `node`. The
+/// callback observes each node before recursion descends into its
+/// children. Shared by every read-only value walker in this module —
+/// the recursion shape (which variants carry children, in what order)
+/// only lives here.
+fn visit_value(node: &Node, visit: &mut impl FnMut(&Node)) {
+    visit(node);
+    match node {
+        Node::Int(_) | Node::Raw(_) | Node::Style { .. } => {}
+        Node::Var { fallback, .. } => {
+            if let Some(fb) = fallback {
+                visit_value(fb, visit);
+            }
+        }
+        Node::Calc(inner) | Node::Paren(inner) => visit_value(inner, visit),
+        Node::MathFn { args, .. } | Node::Fn { args, .. } => {
+            for a in args {
+                visit_value(a, visit);
+            }
+        }
+        Node::Sum(terms) => {
+            for t in terms {
+                visit_value(&t.node, visit);
+            }
+        }
+        Node::Product(factors) => {
+            for f in factors {
+                visit_value(f, visit);
+            }
+        }
+        Node::Div(l, r) => {
+            visit_value(l, visit);
+            visit_value(r, visit);
+        }
+        Node::If { arms, default } => {
+            for arm in arms {
+                visit_value(&arm.cond, visit);
+                visit_value(&arm.value, visit);
+            }
+            visit_value(default, visit);
+        }
+        Node::Or(conds) => {
+            for c in conds {
+                visit_value(c, visit);
+            }
+        }
+    }
+}
+
+/// Mutable counterpart to [`visit_value`]. Callbacks mutate each
+/// node's fields in place; the recursion shape is fixed — callers
+/// must not swap node variants out from under it.
+fn visit_value_mut(node: &mut Node, visit: &mut impl FnMut(&mut Node)) {
+    visit(node);
+    match node {
+        Node::Int(_) | Node::Raw(_) | Node::Style { .. } => {}
+        Node::Var { fallback, .. } => {
+            if let Some(fb) = fallback {
+                visit_value_mut(fb, visit);
+            }
+        }
+        Node::Calc(inner) | Node::Paren(inner) => visit_value_mut(inner, visit),
+        Node::MathFn { args, .. } | Node::Fn { args, .. } => {
+            for a in args {
+                visit_value_mut(a, visit);
+            }
+        }
+        Node::Sum(terms) => {
+            for t in terms {
+                visit_value_mut(&mut t.node, visit);
+            }
+        }
+        Node::Product(factors) => {
+            for f in factors {
+                visit_value_mut(f, visit);
+            }
+        }
+        Node::Div(l, r) => {
+            visit_value_mut(l, visit);
+            visit_value_mut(r, visit);
+        }
+        Node::If { arms, default } => {
+            for arm in arms {
+                visit_value_mut(&mut arm.cond, visit);
+                visit_value_mut(&mut arm.value, visit);
+            }
+            visit_value_mut(default, visit);
+        }
+        Node::Or(conds) => {
+            for c in conds {
+                visit_value_mut(c, visit);
+            }
+        }
+    }
+}
+
 /// Count `var(--name)` and `style(--name: ...)` references across every
 /// value node in the document, plus every nested rule body.
 pub fn count_refs(doc: &Doc) -> HashMap<String, usize> {
@@ -516,58 +612,16 @@ fn walk_rule(rule: &Rule, counts: &mut HashMap<String, usize>) {
 }
 
 /// Walk a value Node and bump `counts[name]` for each Var or Style
-/// reference encountered.
+/// reference encountered. Raw-text chunks are scanned for embedded
+/// `var(--name)` / `style(--name: ...)` patterns we don't model
+/// structurally (e.g. inside `box-shadow: var(--mv-0), var(--mv-1)`).
 fn walk_value(node: &Node, counts: &mut HashMap<String, usize>) {
-    match node {
-        Node::Int(_) => {}
-        // Values our grammar didn't recognize (`box-shadow` lists,
-        // hex colors, `Npx` lengths, etc.) land here as raw strings.
-        // Scan their text for `var(--name)` and `style(--name: ...)`
-        // patterns so cross-references inside `box-shadow:
-        // var(--mv-0), var(--mv-1), ...` still register.
+    visit_value(node, &mut |n| match n {
+        Node::Var { name, .. } => bump_ref(counts, name),
+        Node::Style { prop, .. } => bump_ref(counts, prop),
         Node::Raw(s) => count_refs_in_text(s, counts),
-        Node::Var { name, fallback } => {
-            bump_ref(counts, name);
-            if let Some(fb) = fallback {
-                walk_value(fb, counts);
-            }
-        }
-        Node::Style { prop, .. } => {
-            bump_ref(counts, prop);
-        }
-        Node::Calc(inner) | Node::Paren(inner) => walk_value(inner, counts),
-        Node::MathFn { args, .. } | Node::Fn { args, .. } => {
-            for a in args {
-                walk_value(a, counts);
-            }
-        }
-        Node::Sum(terms) => {
-            for t in terms {
-                walk_value(&t.node, counts);
-            }
-        }
-        Node::Product(factors) => {
-            for f in factors {
-                walk_value(f, counts);
-            }
-        }
-        Node::Div(l, r) => {
-            walk_value(l, counts);
-            walk_value(r, counts);
-        }
-        Node::If { arms, default } => {
-            for arm in arms {
-                walk_value(&arm.cond, counts);
-                walk_value(&arm.value, counts);
-            }
-            walk_value(default, counts);
-        }
-        Node::Or(conds) => {
-            for c in conds {
-                walk_value(c, counts);
-            }
-        }
-    }
+        _ => {}
+    });
 }
 
 fn bump_ref(counts: &mut HashMap<String, usize>, full_name: &str) {
@@ -693,9 +747,9 @@ pub fn count_refs_in_text(s: &str, counts: &mut HashMap<String, usize>) {
 ///
 /// Returns the number of decls inlined.
 pub fn inline_single_use(doc: &mut Doc, seed_refs: &HashMap<String, usize>) -> usize {
-    let var_refs = count_var_refs_only(doc);
+    let (var_refs, text_refs) = count_var_and_text_refs(doc);
     let mut total_refs = var_refs.clone();
-    for (k, v) in count_text_refs_only(doc) {
+    for (k, v) in text_refs {
         *total_refs.entry(k).or_insert(0) += v;
     }
     for (k, v) in seed_refs {
@@ -724,164 +778,66 @@ pub fn inline_single_use(doc: &mut Doc, seed_refs: &HashMap<String, usize>) -> u
     substituted.len()
 }
 
-/// Like [`count_refs`] but only counts `Var` references — not the
-/// `style(--name: ...)` container queries. Used by inlining to make
-/// sure the lone ref is a `Var` we can structurally substitute, not
-/// a `Style` predicate or a `Raw`-text mention.
-fn count_var_refs_only(doc: &Doc) -> HashMap<String, usize> {
-    let mut counts = HashMap::new();
-    walk_items_var_only(&doc.items, &mut counts);
-    counts
+/// Single-pass counterpart to running `count_var_refs_only` and
+/// `count_text_refs_only` back to back. Returns `(var_refs, text_refs)`:
+///  - `var_refs` counts only `Var` references — the ones inlining can
+///    structurally substitute, not `Style` predicates or `Raw`-text
+///    mentions.
+///  - `text_refs` counts `style(--name: …)` props plus `--name` tokens
+///    scanned out of `Node::Raw` chunks and `Item`/`Body`/`DeclItem`
+///    `Verbatim` regions; those are the references inlining must
+///    *avoid* clobbering (we can't AST-substitute into raw text).
+fn count_var_and_text_refs(doc: &Doc) -> (HashMap<String, usize>, HashMap<String, usize>) {
+    let mut var_refs = HashMap::new();
+    let mut text_refs = HashMap::new();
+    walk_items_var_text(&doc.items, &mut var_refs, &mut text_refs);
+    (var_refs, text_refs)
 }
 
-fn walk_items_var_only(items: &[Item], counts: &mut HashMap<String, usize>) {
+fn walk_items_var_text(
+    items: &[Item],
+    var_refs: &mut HashMap<String, usize>,
+    text_refs: &mut HashMap<String, usize>,
+) {
     for item in items {
         match item {
-            Item::Rule(r) => walk_rule_var_only(r, counts),
-            Item::Decl(d) => walk_value_var_only(&d.value, counts),
-            Item::Verbatim(_) => {}
+            Item::Rule(r) => walk_rule_var_text(r, var_refs, text_refs),
+            Item::Decl(d) => walk_value_var_text(&d.value, var_refs, text_refs),
+            Item::Verbatim(s) => count_refs_in_text(s, text_refs),
         }
     }
 }
 
-fn walk_rule_var_only(rule: &Rule, counts: &mut HashMap<String, usize>) {
-    match &rule.body {
-        Body::Decls(items) => {
-            for di in items {
-                if let DeclItem::Decl(d) = di {
-                    walk_value_var_only(&d.value, counts);
-                }
-            }
-        }
-        Body::Nested(items) => walk_items_var_only(items, counts),
-        Body::Verbatim(_) => {}
-    }
-}
-
-fn walk_value_var_only(node: &Node, counts: &mut HashMap<String, usize>) {
-    match node {
-        Node::Int(_) | Node::Raw(_) | Node::Style { .. } => {}
-        Node::Var { name, fallback } => {
-            bump_ref(counts, name);
-            if let Some(fb) = fallback {
-                walk_value_var_only(fb, counts);
-            }
-        }
-        Node::Calc(inner) | Node::Paren(inner) => walk_value_var_only(inner, counts),
-        Node::MathFn { args, .. } | Node::Fn { args, .. } => {
-            for a in args {
-                walk_value_var_only(a, counts);
-            }
-        }
-        Node::Sum(terms) => {
-            for t in terms {
-                walk_value_var_only(&t.node, counts);
-            }
-        }
-        Node::Product(factors) => {
-            for f in factors {
-                walk_value_var_only(f, counts);
-            }
-        }
-        Node::Div(l, r) => {
-            walk_value_var_only(l, counts);
-            walk_value_var_only(r, counts);
-        }
-        Node::If { arms, default } => {
-            for arm in arms {
-                walk_value_var_only(&arm.cond, counts);
-                walk_value_var_only(&arm.value, counts);
-            }
-            walk_value_var_only(default, counts);
-        }
-        Node::Or(conds) => {
-            for c in conds {
-                walk_value_var_only(c, counts);
-            }
-        }
-    }
-}
-
-/// Count refs that come from `Node::Raw` text and `Body::Verbatim` /
-/// top-level `Item::Verbatim` regions. Used to seed the inline-
-/// candidate filter — anything mentioned in raw text is risky to
-/// inline because we can't AST-substitute into it.
-fn count_text_refs_only(doc: &Doc) -> HashMap<String, usize> {
-    let mut counts = HashMap::new();
-    walk_items_text_only(&doc.items, &mut counts);
-    counts
-}
-
-fn walk_items_text_only(items: &[Item], counts: &mut HashMap<String, usize>) {
-    for item in items {
-        match item {
-            Item::Rule(r) => walk_rule_text_only(r, counts),
-            Item::Verbatim(s) => count_refs_in_text(s, counts),
-            Item::Decl(d) => walk_value_text_only(&d.value, counts),
-        }
-    }
-}
-
-fn walk_rule_text_only(rule: &Rule, counts: &mut HashMap<String, usize>) {
+fn walk_rule_var_text(
+    rule: &Rule,
+    var_refs: &mut HashMap<String, usize>,
+    text_refs: &mut HashMap<String, usize>,
+) {
     match &rule.body {
         Body::Decls(items) => {
             for di in items {
                 match di {
-                    DeclItem::Verbatim(s) => count_refs_in_text(s, counts),
-                    DeclItem::Decl(d) => walk_value_text_only(&d.value, counts),
+                    DeclItem::Verbatim(s) => count_refs_in_text(s, text_refs),
+                    DeclItem::Decl(d) => walk_value_var_text(&d.value, var_refs, text_refs),
                 }
             }
         }
-        Body::Nested(items) => walk_items_text_only(items, counts),
-        Body::Verbatim(s) => count_refs_in_text(s, counts),
+        Body::Nested(items) => walk_items_var_text(items, var_refs, text_refs),
+        Body::Verbatim(s) => count_refs_in_text(s, text_refs),
     }
 }
 
-fn walk_value_text_only(node: &Node, counts: &mut HashMap<String, usize>) {
-    // Var/Style contribute to var_refs above, not text_refs. We only
-    // collect from Raw chunks and Style props here.
-    match node {
-        Node::Raw(s) => count_refs_in_text(s, counts),
-        Node::Style { prop, .. } => bump_ref(counts, prop),
-        Node::Int(_) => {}
-        Node::Var { fallback, .. } => {
-            if let Some(fb) = fallback {
-                walk_value_text_only(fb, counts);
-            }
-        }
-        Node::Calc(inner) | Node::Paren(inner) => walk_value_text_only(inner, counts),
-        Node::MathFn { args, .. } | Node::Fn { args, .. } => {
-            for a in args {
-                walk_value_text_only(a, counts);
-            }
-        }
-        Node::Sum(terms) => {
-            for t in terms {
-                walk_value_text_only(&t.node, counts);
-            }
-        }
-        Node::Product(factors) => {
-            for f in factors {
-                walk_value_text_only(f, counts);
-            }
-        }
-        Node::Div(l, r) => {
-            walk_value_text_only(l, counts);
-            walk_value_text_only(r, counts);
-        }
-        Node::If { arms, default } => {
-            for arm in arms {
-                walk_value_text_only(&arm.cond, counts);
-                walk_value_text_only(&arm.value, counts);
-            }
-            walk_value_text_only(default, counts);
-        }
-        Node::Or(conds) => {
-            for c in conds {
-                walk_value_text_only(c, counts);
-            }
-        }
-    }
+fn walk_value_var_text(
+    node: &Node,
+    var_refs: &mut HashMap<String, usize>,
+    text_refs: &mut HashMap<String, usize>,
+) {
+    visit_value(node, &mut |n| match n {
+        Node::Var { name, .. } => bump_ref(var_refs, name),
+        Node::Style { prop, .. } => bump_ref(text_refs, prop),
+        Node::Raw(s) => count_refs_in_text(s, text_refs),
+        _ => {}
+    });
 }
 
 fn collect_inline_candidates(
@@ -977,7 +933,7 @@ fn value_references_any(node: &Node, names: &std::collections::HashSet<String>) 
 }
 
 fn substitute_in_items(
-    items: &mut Vec<Item>,
+    items: &mut [Item],
     candidates: &HashMap<String, Node>,
     substituted: &mut std::collections::HashSet<String>,
 ) {
@@ -1097,6 +1053,260 @@ fn drop_inlined_in_rule(rule: &mut Rule, substituted: &std::collections::HashSet
         Body::Nested(items) => drop_inlined(items, substituted),
         Body::Verbatim(_) => {}
     }
+}
+
+/// Count every `--ident` reachable through the AST.
+pub fn count_custom_names(doc: &Doc, counts: &mut HashMap<String, usize>) {
+    count_custom_in_items(&doc.items, counts);
+}
+
+/// Apply `rename` to every `--ident` reachable through the AST.
+pub fn rename_custom_names(doc: &mut Doc, rename: &HashMap<String, String>) {
+    rename_in_items(&mut doc.items, rename);
+}
+
+/// Apply `transform` to every Verbatim text slot in the Doc.
+pub fn scrub_verbatim(doc: &mut Doc, transform: &impl Fn(&str) -> String) {
+    scrub_in_items(&mut doc.items, transform);
+}
+
+fn scrub_in_items(items: &mut [Item], transform: &impl Fn(&str) -> String) {
+    for item in items.iter_mut() {
+        match item {
+            Item::Verbatim(s) => *s = transform(s),
+            Item::Decl(_) => {}
+            Item::Rule(r) => {
+                r.head = transform(&r.head);
+                r.open_pad = transform(&r.open_pad);
+                match &mut r.body {
+                    Body::Decls(items) => {
+                        for di in items {
+                            if let DeclItem::Verbatim(s) = di {
+                                *s = transform(s);
+                            }
+                        }
+                    }
+                    Body::Nested(items) => scrub_in_items(items, transform),
+                    Body::Verbatim(s) => *s = transform(s),
+                }
+                r.close_pad = transform(&r.close_pad);
+            }
+        }
+    }
+}
+
+fn count_custom_in_items(items: &[Item], counts: &mut HashMap<String, usize>) {
+    for item in items {
+        match item {
+            Item::Verbatim(s) => scan_custom_in_text(s, counts),
+            Item::Decl(d) => {
+                bump_custom(counts, &d.name);
+                count_custom_in_value(&d.value, counts);
+            }
+            Item::Rule(r) => count_custom_in_rule(r, counts),
+        }
+    }
+}
+
+fn count_custom_in_rule(r: &Rule, counts: &mut HashMap<String, usize>) {
+    scan_custom_in_text(&r.head, counts);
+    scan_custom_in_text(&r.open_pad, counts);
+    match &r.body {
+        Body::Decls(items) => {
+            for di in items {
+                match di {
+                    DeclItem::Verbatim(s) => scan_custom_in_text(s, counts),
+                    DeclItem::Decl(d) => {
+                        bump_custom(counts, &d.name);
+                        count_custom_in_value(&d.value, counts);
+                    }
+                }
+            }
+        }
+        Body::Nested(items) => count_custom_in_items(items, counts),
+        Body::Verbatim(s) => scan_custom_in_text(s, counts),
+    }
+    scan_custom_in_text(&r.close_pad, counts);
+}
+
+fn count_custom_in_value(node: &Node, counts: &mut HashMap<String, usize>) {
+    visit_value(node, &mut |n| match n {
+        Node::Raw(s) => scan_custom_in_text(s, counts),
+        Node::Var { name, .. } => bump_custom(counts, name),
+        Node::Style { prop, value } => {
+            bump_custom(counts, prop);
+            scan_custom_in_text(value, counts);
+        }
+        Node::MathFn { name, .. } | Node::Fn { name, .. } => bump_custom(counts, name),
+        _ => {}
+    });
+}
+
+fn bump_custom(counts: &mut HashMap<String, usize>, full_name: &str) {
+    let Some(stripped) = full_name.strip_prefix("--") else {
+        return;
+    };
+    if stripped
+        .as_bytes()
+        .first()
+        .is_some_and(|&b| b.is_ascii_alphabetic() || b == b'_')
+    {
+        *counts.entry(stripped.to_string()).or_insert(0) += 1;
+    }
+}
+
+fn scan_custom_in_text(s: &str, counts: &mut HashMap<String, usize>) {
+    each_custom_token(s, |name| {
+        *counts.entry(name.to_string()).or_insert(0) += 1;
+    });
+}
+
+fn rename_in_items(items: &mut [Item], rename: &HashMap<String, String>) {
+    for item in items.iter_mut() {
+        match item {
+            Item::Verbatim(s) => *s = rewrite_custom_in_text(s, rename),
+            Item::Decl(d) => {
+                rename_full_name(&mut d.name, rename);
+                rename_in_value(&mut d.value, rename);
+            }
+            Item::Rule(r) => rename_in_rule(r, rename),
+        }
+    }
+}
+
+fn rename_in_rule(r: &mut Rule, rename: &HashMap<String, String>) {
+    r.head = rewrite_custom_in_text(&r.head, rename);
+    r.open_pad = rewrite_custom_in_text(&r.open_pad, rename);
+    match &mut r.body {
+        Body::Decls(items) => {
+            for di in items {
+                match di {
+                    DeclItem::Verbatim(s) => *s = rewrite_custom_in_text(s, rename),
+                    DeclItem::Decl(d) => {
+                        rename_full_name(&mut d.name, rename);
+                        rename_in_value(&mut d.value, rename);
+                    }
+                }
+            }
+        }
+        Body::Nested(items) => rename_in_items(items, rename),
+        Body::Verbatim(s) => *s = rewrite_custom_in_text(s, rename),
+    }
+    r.close_pad = rewrite_custom_in_text(&r.close_pad, rename);
+}
+
+fn rename_in_value(node: &mut Node, rename: &HashMap<String, String>) {
+    visit_value_mut(node, &mut |n| match n {
+        Node::Raw(s) => *s = rewrite_custom_in_text(s, rename),
+        Node::Var { name, .. } => rename_full_name(name, rename),
+        Node::Style { prop, value } => {
+            rename_full_name(prop, rename);
+            *value = rewrite_custom_in_text(value, rename);
+        }
+        Node::MathFn { name, .. } | Node::Fn { name, .. } => rename_full_name(name, rename),
+        _ => {}
+    });
+}
+
+fn rename_full_name(full_name: &mut String, rename: &HashMap<String, String>) {
+    if let Some(stripped) = full_name.strip_prefix("--")
+        && let Some(new) = rename.get(stripped)
+    {
+        let mut next = String::with_capacity(2 + new.len());
+        next.push_str("--");
+        next.push_str(new);
+        *full_name = next;
+    }
+}
+
+fn rewrite_custom_in_text(s: &str, rename: &HashMap<String, String>) -> String {
+    let mut out = String::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == b'"' || b == b'\'' {
+            let end = super::parse::skip_css_string(bytes, i);
+            out.push_str(&s[i..end]);
+            i = end;
+            continue;
+        }
+        if b == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+            let start = i;
+            i += 2;
+            while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                i += 1;
+            }
+            i = (i + 2).min(bytes.len());
+            out.push_str(&s[start..i]);
+            continue;
+        }
+        if b == b'-'
+            && i + 2 < bytes.len()
+            && bytes[i + 1] == b'-'
+            && is_custom_name_start(bytes[i + 2])
+        {
+            let start = i + 2;
+            let mut j = start;
+            while j < bytes.len() && is_custom_name_cont(bytes[j]) {
+                j += 1;
+            }
+            if let Some(new) = rename.get(&s[start..j]) {
+                out.push_str("--");
+                out.push_str(new);
+            } else {
+                out.push_str(&s[i..j]);
+            }
+            i = j;
+            continue;
+        }
+        out.push(b as char);
+        i += 1;
+    }
+    out
+}
+
+fn each_custom_token(s: &str, mut visit: impl FnMut(&str)) {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == b'"' || b == b'\'' {
+            i = super::parse::skip_css_string(bytes, i);
+            continue;
+        }
+        if b == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+            i += 2;
+            while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                i += 1;
+            }
+            i = (i + 2).min(bytes.len());
+            continue;
+        }
+        if b == b'-'
+            && i + 2 < bytes.len()
+            && bytes[i + 1] == b'-'
+            && is_custom_name_start(bytes[i + 2])
+        {
+            let start = i + 2;
+            let mut j = start;
+            while j < bytes.len() && is_custom_name_cont(bytes[j]) {
+                j += 1;
+            }
+            visit(&s[start..j]);
+            i = j;
+            continue;
+        }
+        i += 1;
+    }
+}
+
+pub(crate) fn is_custom_name_start(b: u8) -> bool {
+    b.is_ascii_alphabetic() || b == b'_'
+}
+
+pub(crate) fn is_custom_name_cont(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_' || b == b'-'
 }
 
 fn scan_text_for(
@@ -1411,5 +1621,18 @@ mod tests {
         }
         let printed = print_doc(&doc);
         assert!(printed.contains("--x: var(--a);"));
+    }
+
+    #[test]
+    fn roundtrips_comments_in_various_positions() {
+        for input in [
+            ".a { /* hi */ --x: 1; }",
+            "/* top */ .a { --x: 1; }",
+            ".a { --x: 1; /* between */ --y: 2; }",
+        ] {
+            let doc = parse_doc(input);
+            let printed = print_doc(&doc);
+            assert_eq!(printed, input, "comment-bearing fragment lost on roundtrip");
+        }
     }
 }

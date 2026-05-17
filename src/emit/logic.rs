@@ -829,8 +829,8 @@ impl<'a> Emitter<'a> {
                 }
             }
             Self::emit_slot_with_cse(out, "cri", &csr_idx_arms, "0");
-            for s in 0..self.max_cs_read_slots {
-                Self::emit_if_or_fallback(out, &format!("--crp{}", s), &csr_par_arms[s], "0");
+            for (s, arms) in csr_par_arms.iter().enumerate().take(self.max_cs_read_slots) {
+                Self::emit_if_or_fallback(out, &format!("--crp{}", s), arms, "0");
             }
             Self::emit_slot_with_cse(out, "cro", &csr_ok_arms, "0");
         }
@@ -1061,13 +1061,7 @@ impl<'a> Emitter<'a> {
             .unwrap_or_else(|| format!("var(--_1r{})", r.expect_vreg()))
     }
 
-    /// Peels redundant `calc(…)` and `min(1, …)` wrappers from a truthy-only
-    /// context (e.g. a `--sel` condition): `min(1, X) == 0` iff `X == 0` for
-    /// non-negative X, and `--sel` only cares about the zero / nonzero
-    /// distinction. We only strip a wrapper when the remaining inner
-    /// expression is itself a valid CSS value at the outermost level (a
-    /// number, `var(…)`, or function call) — otherwise we'd be left with a
-    /// bare arithmetic expression that isn't a legal `--sel` argument.
+    /// Strip redundant `calc(…)` / `min(1, …)` wrappers in a truthy context.
     fn strip_truthy_wrappers(s: &str) -> String {
         let mut cur = s.trim().to_string();
         loop {
@@ -1094,8 +1088,7 @@ impl<'a> Emitter<'a> {
         }
     }
 
-    /// True when `s` is a valid stand-alone CSS value at the outer level —
-    /// i.e. a numeric literal, a `var(…)`, or a `name(…)` function call.
+    /// True when `s` is an atomic CSS value (literal, `var(…)`, or fn call).
     fn is_atomic_css_value(s: &str) -> bool {
         let t = s.trim();
         if t.is_empty() {
@@ -1233,8 +1226,7 @@ impl<'a> Emitter<'a> {
         }
     }
 
-    /// Formats `var(name) + imm`, dropping the `calc()` wrapper and `+ 0`
-    /// when the offset is zero. Negative offsets use `- |imm|`.
+    /// Format `var(name) + imm`, eliding `calc()` when offset is zero.
     pub(super) fn var_with_offset(var: &str, imm: i64) -> String {
         if imm == 0 {
             var.to_string()
@@ -1245,10 +1237,7 @@ impl<'a> Emitter<'a> {
         }
     }
 
-    /// Parses an expression of the form `BASE`, `calc(BASE + N)`, or
-    /// `calc(BASE - N)` into its base and integer offset. Returns `None` if
-    /// the expression is not a calc-with-literal-offset shape. Bare
-    /// expressions return offset 0.
+    /// Split `calc(BASE ± N)` into (base, offset); bare exprs return offset 0.
     pub(super) fn try_split_calc_offset(s: &str) -> Option<(String, i64)> {
         let t = s.trim();
         let Some(inner) = t.strip_prefix("calc(").and_then(|x| x.strip_suffix(')')) else {
@@ -1279,9 +1268,7 @@ impl<'a> Emitter<'a> {
         Some((lhs.to_string(), if is_neg { -n } else { n }))
     }
 
-    /// Emits `--lt(l, r)` after folding constant offsets so a literal sits
-    /// on the side opposite the variable: `--lt(calc(B + N), K)` becomes
-    /// `--lt(B, K - N)`, symmetric for the swapped form.
+    /// Emit `--lt(l, r)` with constant-offset folding.
     pub(super) fn lt_expr(l: &str, r: &str) -> String {
         let (l, r) = (l.trim(), r.trim());
         if let (Ok(a), Ok(b)) = (l.parse::<i64>(), r.parse::<i64>()) {
@@ -1325,7 +1312,7 @@ impl<'a> Emitter<'a> {
         format!("--lt({}, {})", l, r)
     }
 
-    /// Like `lt_expr` but for `--ge`.
+    /// Emit `--ge(l, r)` with constant-offset folding.
     pub(super) fn ge_expr(l: &str, r: &str) -> String {
         let (l, r) = (l.trim(), r.trim());
         if let (Ok(a), Ok(b)) = (l.parse::<i64>(), r.parse::<i64>()) {
@@ -1368,9 +1355,7 @@ impl<'a> Emitter<'a> {
         format!("--ge({}, {})", l, r)
     }
 
-    /// Emits `--inrange(idx, k)`. When `idx` has a literal offset we inline
-    /// the definition so the offset folds into both bounds and the calc()
-    /// wrapper disappears from the per-argument evaluation.
+    /// Emit `--inrange(idx, k)`, folding literal offsets.
     pub(super) fn inrange_expr(idx: &str, k: i64) -> String {
         // Strip a trivial `+ 0` wrapper but keep the `--inrange` function
         // call; CSS evaluates the calc argument once into a local, while
@@ -1389,11 +1374,7 @@ impl<'a> Emitter<'a> {
         }
     }
 
-    /// Prepares `expr` for inclusion inside a surrounding `calc(...)`. When the
-    /// expression itself is already `calc(BODY)`, rewrites it as `(BODY)` so
-    /// we avoid emitting `calc(calc(BODY) ...)` redundancies.
-    /// Returns the boolean negation `1 - b`, folding when `b` is a literal
-    /// `"0"` or `"1"`. Avoids emitting `calc(1 - (0))`-style trivia.
+    /// Boolean negation `1 - b`, folding literal 0/1.
     pub(super) fn flip_bool(b: &str) -> String {
         match b.trim() {
             "0" => "1".to_string(),
@@ -1619,7 +1600,7 @@ impl<'a> Emitter<'a> {
         )
     }
 
-    /// Conservatively detect expressions that already evaluate to 0 or 1.
+    /// True if expression is known to be boolean (0 or 1).
     pub(super) fn is_bool_expr(s: &str) -> bool {
         let t = s.trim();
         if matches!(t, "0" | "1")
@@ -1763,10 +1744,7 @@ impl<'a> Emitter<'a> {
         carry
     }
 
-    /// Computes the byte-level borrow-out for one subtraction step:
-    ///   round(down, (255 - lhs + rhs + borrow_in) / 256)
-    /// Folds literal operands into the leading 255 constant so e.g.
-    /// `255 - var + 32` emits as `287 - var` rather than `255 - var + 32`.
+    /// Byte-level borrow-out for one subtraction step, folding literals.
     fn byte_borrow_step(lhs: &str, rhs: &str, borrow_in: &str) -> String {
         let mut const_sum: i64 = 255;
         let mut neg_terms: Vec<String> = Vec::new();
@@ -1926,8 +1904,7 @@ impl<'a> Emitter<'a> {
         format!("--byte_clz({})", Self::sanitize_byte_arg(byte))
     }
 
-    /// Normalises a byte expression for table-lookup helpers: drop the
-    /// defensive `+ 256, mod 256` wrap when the input is already in 0..=255.
+    /// Normalize byte expr for table-lookup, eliding redundant mod-256 wrap.
     fn sanitize_byte_arg(byte: &str) -> String {
         let trimmed = byte.trim();
         if Self::is_byte_valued_var(trimmed)
@@ -2396,7 +2373,7 @@ impl<'a> Emitter<'a> {
         }
     }
 
-    /// Computes `a ^ b` on bit-valued expressions using `mod(a + b, 2)`.
+    /// XOR on bit-valued expressions via `mod(a + b, 2)`.
     fn fold_xor_bit(a: &str, b: &str) -> String {
         match (a.trim(), b.trim()) {
             ("0", _) => b.to_string(),
@@ -2410,8 +2387,7 @@ impl<'a> Emitter<'a> {
         }
     }
 
-    /// Multiplies an expression by an integer constant, folding the trivial
-    /// `0 * x` and `1 * x` cases.
+    /// Multiply by integer constant, folding trivial cases.
     fn fold_mul_by_int(expr: &str, c: u32) -> String {
         if c == 0 || expr.trim() == "0" {
             return "0".to_string();

@@ -336,7 +336,7 @@ fn main() -> Result<()> {
     if let Some(seed) = take("randomize-pc", args.randomize_pc, 0xDEADBEEF) {
         dirty::randomize::randomize_pcs(&mut ir8, seed)?;
     }
-    if let Some(seed) = take("sparse-pc", args.sparse_pc, 0x5C47_7E_5EED) {
+    if let Some(seed) = take("sparse-pc", args.sparse_pc, 0x005C_477E_5EED) {
         dirty::randomize::sparsify_pcs(&mut ir8, seed)?;
     }
 

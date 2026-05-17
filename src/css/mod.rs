@@ -10,9 +10,10 @@ mod tests;
 
 #[allow(unused_imports)]
 pub use doc::{
-    Body, Decl, DeclItem, Doc, Item, Rule, count_refs, count_refs_in_text, dce, inline_single_use,
-    parse_doc, print_doc,
+    Body, Decl, DeclItem, Doc, Item, Rule, count_custom_names, count_refs, count_refs_in_text, dce,
+    inline_single_use, parse_doc, print_doc, rename_custom_names, scrub_verbatim,
 };
+pub(crate) use doc::{is_custom_name_cont, is_custom_name_start};
 pub use fold::fold;
 pub use parse::parse;
 pub(crate) use parse::skip_css_string;

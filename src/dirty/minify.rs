@@ -1,7 +1,11 @@
 use std::collections::{HashMap, HashSet};
 
 use super::{SplitMix64, fisher_yates};
-use crate::css::{Arm, Body, DeclItem, Doc, Item, Node, parse_doc, print_doc, skip_css_string};
+use crate::css::{
+    Arm, Body, DeclItem, Doc, Item, Node, count_custom_names, is_custom_name_cont,
+    is_custom_name_start, parse_doc, print_doc, rename_custom_names, scrub_verbatim,
+    skip_css_string,
+};
 
 const RESERVED: &[&str] = &[
     "cop_a", "cop_a0", "cop_a1", "cop_a2", "cop_a3", "cop_b", "cop_b0", "cop_b1", "cop_b2",
@@ -46,9 +50,7 @@ pub fn minify(html: &str, seed: u64) -> String {
     flatten_style_whitespace(&sorted)
 }
 
-/// Drop CSS `/* … */` inside `<style>` blocks and HTML `<!-- … -->`
-/// outside `<style>`/`<script>`. Defensive — KEEP markers are already
-/// stripped by `apply_template_features`.
+/// Strip CSS block comments and HTML comments.
 fn strip_comments(html: &str) -> String {
     let mut out = String::with_capacity(html.len());
     let bytes = html.as_bytes();
@@ -89,6 +91,14 @@ fn strip_comments(html: &str) -> String {
 }
 
 fn strip_css_block_comments(s: &str, out: &mut String) {
+    let mut doc = parse_doc(s);
+    scrub_verbatim(&mut doc, &strip_block_comments_in_text);
+    out.push_str(&print_doc(&doc));
+}
+
+/// Strip `/* … */` preserving string literals.
+fn strip_block_comments_in_text(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
     let bytes = s.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
@@ -110,10 +120,10 @@ fn strip_css_block_comments(s: &str, out: &mut String) {
         out.push(b as char);
         i += 1;
     }
+    out
 }
 
-/// Shuffle every `if()` arm-list whose conditions are mutually
-/// exclusive (see `mutually_exclusive_arms`).
+/// Shuffle mutually-exclusive `if()` arm-lists.
 pub fn shuffle_arms_in_styles(html: &str, seed: u64) -> String {
     transform_style_blocks(html, |doc| {
         let mut rng = SplitMix64::new(seed);
@@ -121,8 +131,7 @@ pub fn shuffle_arms_in_styles(html: &str, seed: u64) -> String {
     })
 }
 
-/// Reorder operands of commutative ops: `Sum`, `Product`, `min`/`max`/
-/// `hypot`, and `Or` chains.
+/// Shuffle operands of commutative ops.
 pub fn shuffle_commutative_ops(html: &str, seed: u64) -> String {
     transform_style_blocks(html, |doc| {
         let mut rng = SplitMix64::new(seed);
@@ -214,9 +223,7 @@ fn is_commutative_math_fn(name: &str) -> bool {
     matches!(name, "min" | "max" | "hypot")
 }
 
-/// Permute every `@property` / `@function` definition among the
-/// positions those at-rules originally occupied. Other rules and
-/// verbatim text stay anchored.
+/// Permute `@property`/`@function` definition order.
 pub fn shuffle_at_rule_order(html: &str, seed: u64) -> String {
     transform_style_blocks(html, |doc| {
         let mut rng = SplitMix64::new(seed);
@@ -256,10 +263,7 @@ fn is_shufflable_at_rule(item: &Item) -> bool {
     }
 }
 
-/// Inject a random integer fallback into every unfallbacked
-/// `var(--x)` whose `--x` is registered via `@property`. Unregistered
-/// names are skipped — WSS reads the unset previous-stage shadow as a
-/// sentinel; a fallback would replace it.
+/// Add random fallbacks to unfallbacked `var()` refs of registered properties.
 pub fn inject_var_fallbacks(html: &str, seed: u64) -> String {
     transform_style_blocks(html, |doc| {
         let registered = collect_registered_properties(doc);
@@ -318,10 +322,7 @@ fn inject_in_body(body: &mut Body, registered: &HashSet<String>, rng: &mut Split
     }
 }
 
-/// Inject unreachable decoy arms into every `<integer>`-returning
-/// LUT-shaped `@function`. Decoys key on the same predicate with a
-/// negative literal the runtime never passes; values read a real
-/// registered integer property.
+/// Inject unreachable decoy arms into LUT-shaped `@function`s.
 pub fn inject_lut_decoy_arms(html: &str, seed: u64) -> String {
     transform_style_blocks(html, |doc| {
         let candidates = collect_integer_var_candidates(doc);
@@ -421,10 +422,7 @@ fn bake_into_result(node: &mut Node, candidates: &[String], rng: &mut SplitMix64
     }
 }
 
-/// Split each PC-keyed `if()` chain into a parent decl plus helpers
-/// linked through `else: var(--helperN)`. Lazy `var()` resolution
-/// keeps total arm work unchanged. Helpers get `--__{N}` names that
-/// `--minify-vars` then renames.
+/// Split PC-keyed `if()` chains into helper-linked fragments.
 pub fn split_pc_branches(html: &str, seed: u64) -> String {
     transform_style_blocks(html, |doc| {
         let mut rng = SplitMix64::new(seed);
@@ -582,8 +580,7 @@ fn is_pc_prop(name: &str) -> bool {
     matches!(name, "--pc" | "--_0pc" | "--_1pc" | "--_2pc")
 }
 
-/// Strip comments and collapse whitespace inside `<script>` blocks.
-/// Preserves string / template / regex literals; keeps newlines for ASI.
+/// Minify JS inside `<script>` blocks (strip comments, collapse whitespace).
 pub fn minify_embedded_js(html: &str) -> String {
     let mut out = String::with_capacity(html.len());
     let mut search_from = 0;
@@ -730,8 +727,7 @@ fn skip_js_regex(bytes: &[u8], start: usize) -> usize {
     i
 }
 
-/// Whether `/` at this point opens a regex literal (vs division),
-/// decided by the preceding non-whitespace byte.
+/// Whether `/` here opens a regex (vs division).
 fn regex_allowed_after(prev: u8) -> bool {
     matches!(
         prev,
@@ -758,8 +754,7 @@ fn regex_allowed_after(prev: u8) -> bool {
     )
 }
 
-/// Shared `style(--p: K)` property all arm conditions key on, or
-/// `None` if the shape isn't a single-prop LUT.
+/// Shared `style(--p: K)` property across all arms, or `None`.
 fn lut_key_prop(arms: &[Arm]) -> Option<String> {
     let mut prop: Option<String> = None;
     for arm in arms {
@@ -823,30 +818,14 @@ fn inject_in_node(node: &mut Node, registered: &HashSet<String>, rng: &mut Split
     }
 }
 
-/// Replace every newline inside `<style>` blocks with a single space
-/// (preserving string literals).
+/// Collapse whitespace inside `<style>` blocks.
 fn flatten_style_whitespace(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut search_from = 0;
-    while let Some(rel) = s[search_from..].find("<style") {
-        let open_tag = search_from + rel;
-        let Some(gt_rel) = s[open_tag..].find('>') else {
-            break;
-        };
-        let body_start = open_tag + gt_rel + 1;
-        let Some(close_rel) = s[body_start..].find("</style>") else {
-            break;
-        };
-        let body_end = body_start + close_rel;
-        out.push_str(&s[search_from..body_start]);
-        flatten_css_run(&s[body_start..body_end], &mut out);
-        search_from = body_end;
-    }
-    out.push_str(&s[search_from..]);
-    out
+    transform_style_blocks(s, |doc| scrub_verbatim(doc, &collapse_whitespace_in_text))
 }
 
-fn flatten_css_run(s: &str, out: &mut String) {
+/// Collapse whitespace runs to a single space, preserving strings.
+fn collapse_whitespace_in_text(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
     let bytes = s.as_bytes();
     let mut i = 0;
     let mut last_was_space = false;
@@ -871,16 +850,44 @@ fn flatten_css_run(s: &str, out: &mut String) {
         last_was_space = false;
         i += 1;
     }
+    out
 }
 
+/// Count `--ident` occurrences across the HTML.
 fn scan_names(s: &str, counts: &mut HashMap<String, usize>) {
+    visit_style_blocks(s, |chunk, in_style| {
+        if in_style {
+            let doc = parse_doc(chunk);
+            count_custom_names(&doc, counts);
+        } else {
+            scan_names_raw(chunk, counts);
+        }
+    });
+}
+
+/// Rename `--ident` occurrences across the HTML.
+fn rewrite_names(s: &str, rename: &HashMap<String, String>) -> String {
+    let mut out = String::with_capacity(s.len());
+    visit_style_blocks(s, |chunk, in_style| {
+        if in_style {
+            let mut doc = parse_doc(chunk);
+            rename_custom_names(&mut doc, rename);
+            out.push_str(&print_doc(&doc));
+        } else {
+            out.push_str(&rewrite_names_raw(chunk, rename));
+        }
+    });
+    out
+}
+
+fn scan_names_raw(s: &str, counts: &mut HashMap<String, usize>) {
     let bytes = s.as_bytes();
     let mut i = 0;
     while i + 2 < bytes.len() {
-        if bytes[i] == b'-' && bytes[i + 1] == b'-' && is_ident_start(bytes[i + 2]) {
+        if bytes[i] == b'-' && bytes[i + 1] == b'-' && is_custom_name_start(bytes[i + 2]) {
             let start = i + 2;
             let mut j = start;
-            while j < bytes.len() && is_ident_cont(bytes[j]) {
+            while j < bytes.len() && is_custom_name_cont(bytes[j]) {
                 j += 1;
             }
             *counts.entry(s[start..j].to_string()).or_insert(0) += 1;
@@ -891,16 +898,16 @@ fn scan_names(s: &str, counts: &mut HashMap<String, usize>) {
     }
 }
 
-fn rewrite_names(s: &str, rename: &HashMap<String, String>) -> String {
+fn rewrite_names_raw(s: &str, rename: &HashMap<String, String>) -> String {
     let bytes = s.as_bytes();
     let mut out = String::with_capacity(s.len());
     let mut last = 0;
     let mut i = 0;
     while i + 2 < bytes.len() {
-        if bytes[i] == b'-' && bytes[i + 1] == b'-' && is_ident_start(bytes[i + 2]) {
+        if bytes[i] == b'-' && bytes[i + 1] == b'-' && is_custom_name_start(bytes[i + 2]) {
             let start = i + 2;
             let mut j = start;
-            while j < bytes.len() && is_ident_cont(bytes[j]) {
+            while j < bytes.len() && is_custom_name_cont(bytes[j]) {
                 j += 1;
             }
             if let Some(new) = rename.get(&s[start..j]) {
@@ -917,12 +924,24 @@ fn rewrite_names(s: &str, rename: &HashMap<String, String>) -> String {
     out
 }
 
-fn is_ident_start(b: u8) -> bool {
-    b.is_ascii_alphabetic() || b == b'_'
-}
-
-fn is_ident_cont(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || b == b'_' || b == b'-'
+/// Split `s` into `<style>` body regions (in_style=true) and the rest.
+fn visit_style_blocks(s: &str, mut visit: impl FnMut(&str, bool)) {
+    let mut cursor = 0;
+    while let Some(rel) = s[cursor..].find("<style") {
+        let open_tag = cursor + rel;
+        let Some(gt_rel) = s[open_tag..].find('>') else {
+            break;
+        };
+        let body_start = open_tag + gt_rel + 1;
+        let Some(close_rel) = s[body_start..].find("</style>") else {
+            break;
+        };
+        let body_end = body_start + close_rel;
+        visit(&s[cursor..body_start], false);
+        visit(&s[body_start..body_end], true);
+        cursor = body_end;
+    }
+    visit(&s[cursor..], false);
 }
 
 fn sort_style_decls(html: &str, seed: u64) -> String {
@@ -932,31 +951,19 @@ fn sort_style_decls(html: &str, seed: u64) -> String {
 
 fn transform_style_blocks(html: &str, mut transform: impl FnMut(&mut Doc)) -> String {
     let mut out = String::with_capacity(html.len());
-    let mut last = 0;
-    let mut search_from = 0;
-    while let Some(rel) = html[search_from..].find("<style") {
-        let open_tag = search_from + rel;
-        let Some(gt_rel) = html[open_tag..].find('>') else {
-            break;
-        };
-        let body_start = open_tag + gt_rel + 1;
-        let Some(close_rel) = html[body_start..].find("</style>") else {
-            break;
-        };
-        let body_end = body_start + close_rel;
-        out.push_str(&html[last..body_start]);
-        let mut doc = parse_doc(&html[body_start..body_end]);
-        transform(&mut doc);
-        out.push_str(&print_doc(&doc));
-        last = body_end;
-        search_from = body_end;
-    }
-    out.push_str(&html[last..]);
+    visit_style_blocks(html, |chunk, in_style| {
+        if in_style {
+            let mut doc = parse_doc(chunk);
+            transform(&mut doc);
+            out.push_str(&print_doc(&doc));
+        } else {
+            out.push_str(chunk);
+        }
+    });
     out
 }
 
-/// Walk every `Node::If` and shuffle arm-lists whose conditions are
-/// mutually exclusive single-prop `style()` queries.
+/// Shuffle mutually-exclusive `if()` arm-lists in a Doc.
 fn shuffle_doc_if_arms(doc: &mut Doc, rng: &mut SplitMix64) {
     for item in &mut doc.items {
         shuffle_in_item(item, rng);
@@ -1036,9 +1043,7 @@ fn shuffle_in_node(node: &mut Node, rng: &mut SplitMix64) {
     }
 }
 
-/// True iff every arm condition is `style(--p: K)` (or `Or` of same)
-/// keyed on a single shared `--p` with distinct `K`s — at most one arm
-/// matches any input, so order is irrelevant.
+/// True iff all arms key on a single `--p` with distinct values.
 fn mutually_exclusive_arms(arms: &[Arm]) -> bool {
     let mut prop: Option<String> = None;
     let mut seen: HashSet<String> = HashSet::new();
@@ -1104,8 +1109,7 @@ fn sort_body(body: &mut Body, randomize: bool, rng: &mut SplitMix64) {
     }
 }
 
-/// Sort `Item::Decl` entries alphabetically within each decl-region.
-/// Nested rules act as barriers; verbatim slots stay put.
+/// Sort decls alphabetically within each region (rules are barriers).
 fn sort_nested_items(items: &mut [Item]) {
     let n = items.len();
     let mut start = 0;
@@ -1143,8 +1147,7 @@ fn sort_decl_positions(items: &mut [Item]) {
     }
 }
 
-/// Reorder decls at their original positions: shuffled if `randomize`,
-/// alphabetical otherwise.
+/// Reorder decls: shuffled if `randomize`, alphabetical otherwise.
 fn order_decl_items(items: &mut [DeclItem], randomize: bool, rng: &mut SplitMix64) {
     let positions: Vec<usize> = items
         .iter()
