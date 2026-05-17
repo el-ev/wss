@@ -103,7 +103,7 @@ fn make_probe_script(
 
 fn infer_getchar_pcs(html: &str) -> Vec<i64> {
     let re = Regex::new(
-        r"style\(--_1pc:\s*(-?\d+)\):\s*--sel\(--ne\(var\(--kb,\s*-1\),\s*-1\),\s*mod\(var\(--kb,\s*-1\),\s*256\),",
+        r"style\(--_1pc:\s*(-?\d+)\):\s*--sel\(--ne\(var\(--kb(?:,\s*-1)?\),\s*-1\),\s*mod\(var\(--kb(?:,\s*-1)?\),\s*256\),",
     )
     .expect("getchar regex must compile");
     let mut pcs = Vec::new();
