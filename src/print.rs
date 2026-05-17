@@ -612,7 +612,11 @@ pub fn print_ir8_program(prog: &Ir8Program) -> String {
 
 pub fn print_program(prog: &Ir8Program) -> String {
     let mut out = String::new();
-    let entry = Pc::new(prog.entry_func as u16 * PC_STRIDE);
+    let entry = prog
+        .func_entries
+        .get(prog.entry_func as usize)
+        .copied()
+        .unwrap_or_else(|| Pc::new(prog.entry_func as u16 * PC_STRIDE));
     writeln!(out, "entry: $B{}", entry.index()).unwrap();
     writeln!(out, "num_regs: {}", prog.num_vregs).unwrap();
     writeln!(out, "cycles: {}", prog.cycles.len()).unwrap();
@@ -931,18 +935,9 @@ fn write_css_expr(node: &CssNode, math_ctx: bool, out: &mut String) {
             out.push(')');
         }
         CssNode::Calc(inner) => {
-            // Inside an existing math context the `calc(...)` wrapper is
-            // semantically redundant — `min(1, calc(a + b))` is identical
-            // to `min(1, a + b)`. Drop the wrapper here for a smaller
-            // output; the parser still accepts both forms, and Stage 3
-            // tests assert parse → print stability (not AST identity).
-            if math_ctx {
-                write_css_expr(inner, true, out);
-            } else {
-                out.push_str("calc(");
-                write_css_expr(inner, true, out);
-                out.push(')');
-            }
+            out.push_str("calc(");
+            write_css_expr(inner, true, out);
+            out.push(')');
         }
         CssNode::MathFn { name, args } => {
             out.push_str(name);

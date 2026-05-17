@@ -439,7 +439,7 @@ fn eh_access(kind: &Inst8Kind) -> Option<EhAccess> {
     })
 }
 
-fn rewrite_term_pcs(
+pub(crate) fn rewrite_term_pcs(
     term: Terminator8,
     first_pc_map: &HashMap<Pc, Pc>,
 ) -> anyhow::Result<Terminator8> {
@@ -497,7 +497,10 @@ fn map_call_target(
     })
 }
 
-fn rewrite_inst_pcs(inst: Inst8, first_pc_map: &HashMap<Pc, Pc>) -> anyhow::Result<Inst8> {
+pub(crate) fn rewrite_inst_pcs(
+    inst: Inst8,
+    first_pc_map: &HashMap<Pc, Pc>,
+) -> anyhow::Result<Inst8> {
     Ok(match inst.kind {
         Inst8Kind::CsStorePc { offset, val } => Inst8::no_dst(Inst8Kind::CsStorePc {
             offset,

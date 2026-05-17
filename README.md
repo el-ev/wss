@@ -77,7 +77,31 @@ Options:
 - `--js-coprocessor`: enable the JS coprocessor for `div`/`rem` and bitwise builtins. Conflicts with `--no-js-clock`.
 - `--js-clock-debugger`: enable the JS debugger popup. Conflicts with `--no-js-clock`.
 - `--no-visualizers`: omit the memory and callstack visualizers from the emitted runtime.
+- `--no-indicators`: drop the PC / SP / G0 indicator panel.
+- `--no-memory-trap`: omit the linear-memory bounds check. OOB reads return 0; OOB writes are dropped.
+- `--no-callstack-trap`: omit the callstack-overflow bounds check. OOB reads return 0; OOB writes are dropped.
 - `--max-phys-regs <N>`: register-allocation cap, including reserved `r0`-`r3`. Default: `256`
+- `--no-embed-compile-command`: skip the leading `<!-- compile command: … -->` and `<!-- seeds: … -->` header comments.
+
+### Obfuscation passes
+
+Optional post-pipeline rewrites. All conflict with `--js-clock-debugger`. Seeded flags take a bare form (random seed) or `--flag=<SEED>` (reproducible); resolved seeds are echoed in a `<!-- seeds: … -->` header when `--no-embed-compile-command` is not set.
+
+PC relabelling (mutually exclusive):
+
+- `--randomize-pc[=SEED]`: shuffle PC labels and renumber 1..N.
+- `--sparse-pc[=SEED]`: sample PC labels uniformly from the 16-bit space; also hides cycle count.
+
+CSS rewrites:
+
+- `--minify-vars[=SEED]`: rename custom properties to shortest idents; sort decls (shuffle `@property` bodies); strip comments; flatten `<style>` whitespace.
+- `--split-pc[=SEED]`: split PC-keyed `if()` chains via `--__{N}` helpers.
+- `--shuffle-arms[=SEED]`: permute mutually exclusive `if()` arms (LUTs).
+- `--shuffle-ops[=SEED]`: reorder commutative operands (`Sum`, `Product`, `min`/`max`/`hypot`, `or` chains).
+- `--shuffle-at-rules[=SEED]`: permute `@property` / `@function` positions.
+- `--decoy-fallbacks[=SEED]`: add dead integer fallbacks to `var()` reads of `@property`-registered names.
+- `--decoy-arms[=SEED]`: inject unreachable arms into `<integer>`-returning LUT `@function`s.
+- `--minify-js`: strip comments and collapse whitespace inside `<script>`.
 
 ## Testing
 

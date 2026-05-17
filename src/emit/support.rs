@@ -34,10 +34,18 @@ fn parse_property_name(line: &str) -> Option<&str> {
 
 impl<'a> Emitter<'a> {
     pub(super) fn emit_support(&self, out: &mut String) {
-        fn terminal_codes(uses_callstack: bool) -> impl Iterator<Item = TrapCode> {
+        fn terminal_codes(
+            uses_callstack: bool,
+            mem_trap: bool,
+            cs_trap: bool,
+        ) -> impl Iterator<Item = TrapCode> {
             TrapCode::TERMINAL
                 .into_iter()
-                .filter(move |code| uses_callstack || *code != TrapCode::CallstackOverflow)
+                .filter(move |code| match code {
+                    TrapCode::CallstackOverflow => uses_callstack && cs_trap,
+                    TrapCode::InvalidMemoryAccess => mem_trap,
+                    _ => true,
+                })
         }
 
         self.emit_i2char(out);
@@ -83,7 +91,8 @@ impl<'a> Emitter<'a> {
             self.emit_callstack_visualizer(out);
         }
 
-        let codes: Vec<TrapCode> = terminal_codes(self.uses_callstack).collect();
+        let codes: Vec<TrapCode> =
+            terminal_codes(self.uses_callstack, self.mem_trap, self.cs_trap).collect();
         out.push_str(".screen::after { white-space: pre-wrap; word-break: break-all; ");
         out.push_str("content: if(");
         for code in &codes {

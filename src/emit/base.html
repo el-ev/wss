@@ -92,6 +92,7 @@ body { margin: 0; background: #f5f5f5; font-family: ui-monospace, SFMono-Regular
 .input-hint::before { content: "i"; }
 @container style(--wait_input: 1) { .input-hint { opacity: 0.92; transform: translateY(0); } }
 /*__WSS_KEEP_KB_HINT_CSS_END__*/
+/*__WSS_KEEP_INDS_CSS_START__*/
 #ind-pc::before { counter-reset: ind-pc var(--pc); content: counter(ind-pc); }
 /*__WSS_KEEP_SP_INDICATOR_CSS_START__*/
 #ind-sp::before { counter-reset: ind-sp var(--cs_sp); content: counter(ind-sp); }
@@ -103,6 +104,7 @@ content: "0x"
 --hex(round(down, calc(var(--g0_1) / 16))) --hex(mod(var(--g0_1), 16))
 --hex(round(down, calc(var(--g0_0) / 16))) --hex(mod(var(--g0_0), 16));
 }
+/*__WSS_KEEP_INDS_CSS_END__*/
 
 @function --support-test() returns <integer> { result: calc(1 + 1); }
 @property --clk { syntax: "<integer>"; initial-value: 0; inherits: true; }
@@ -276,6 +278,7 @@ Please try an up-to-date Chromium-based browser.
     <div class="row"><button class="key space" data-key="32">Space</button></div>
 </div>
 <!--__WSS_KEEP_KB_HTML_END__-->
+<!--__WSS_KEEP_INDS_HTML_START__-->
 <div class="inds" aria-live="off">
     <div class="ind"><span class="k">PC</span><span id="ind-pc" class="v"></span></div>
     <!--__WSS_KEEP_SP_INDICATOR_HTML_START__-->
@@ -283,6 +286,7 @@ Please try an up-to-date Chromium-based browser.
     <!--__WSS_KEEP_SP_INDICATOR_HTML_END__-->
     <div class="ind"><span class="k">G0</span><span id="ind-g0" class="v"></span></div>
 </div>
+<!--__WSS_KEEP_INDS_HTML_END__-->
 <!--__WSS_KEEP_CS_VISUALIZER_HTML_START__-->
 <div class="csvis-frame"><div class="csvis"></div></div>
 <!--__WSS_KEEP_CS_VISUALIZER_HTML_END__-->

@@ -233,7 +233,7 @@ fn emit_html_includes_js_coprocessor_runtime_when_enabled() {
     assert!(html.contains("@property --cop_b3"));
     assert!(html.contains("@property --cop_o3"));
     assert!(!html.contains("const jsCoprocessorEnabled"));
-    assert!(html.contains(" --cop_op: "));
+    assert!(html.contains("--cop_op: "));
 }
 
 #[test]
@@ -488,14 +488,14 @@ fn emit_html_callstack_visualizer_tracks_read_and_write_slots() {
         html.contains("@function --csmerge(--idx <number>, --prev <number>) returns <integer>")
     );
     assert!(!html.contains("--csmerge_slot("));
-    assert!(!html.contains(" --csw_active:"));
-    assert!(html.contains(" --cswdp0:"));
+    assert!(!html.contains("--csw_active:"));
+    assert!(html.contains("--cswdp0:"));
     assert!(html.contains("@property --cswdp0 { syntax: \"<integer>\";"));
     // logic.rs flips the condition to `--cswdp0: 0` (no-store
     // cycle) so the dirty-page sum can be emitted without a
     // `min(1, …)` clamp.
     assert!(html.contains(&format!(
-        " {}: if(style(--cswdp0: 0): var({}); else: --csmerge(0, var({})));",
+        "{}: if(style(--cswdp0: 0): var({}); else: --csmerge(0, var({})));",
         cs0_name, cs0_shadow, cs0_shadow
     )));
 }
@@ -566,9 +566,7 @@ fn emit_html_includes_rng_when_random_is_used() {
     assert!(html.contains("@property --rng3"));
     assert!(html.contains("@keyframes rng-roll-0"));
     assert!(html.contains("rng-roll-0 257ms steps(256, jump-end) infinite"));
-    // Math-function args inherit math context, so the inner `calc(...)`
-    // gets stripped by the AST fold.
-    assert!(html.contains("mod(var(--rng0, 0) * var(--rng1, 0) + var(--rng2, 0) + 1, 256)"));
+    assert!(html.contains("mod(calc(var(--rng0, 0) * var(--rng1, 0) + var(--rng2, 0) + 1), 256)"));
     // Debugger is off by default in tests; the rand inspector should NOT
     // appear in this baseline (covered separately when both flags on).
     assert!(!html.contains("data-wss-debug-rng-u32"));
@@ -653,7 +651,7 @@ fn emit_html_omits_keyboard_ui_when_getchar_is_unused() {
     let program = minimal_exit_program();
     let html = emit_program(&program).expect("emit should succeed");
     assert!(!html.contains("@property --kb"));
-    assert!(html.contains(" --wait_input: 0;"));
+    assert!(html.contains("--wait_input: 0;"));
     assert!(!html.contains("class=\"kb\""));
     assert!(!html.contains("class=\"input-hint\""));
     assert!(!html.contains("data-key="));
@@ -684,7 +682,7 @@ fn emit_html_includes_keyboard_ui_when_getchar_is_used() {
     let html = emit_program(&program).expect("emit should succeed");
     assert!(html.contains("@property --kb"));
     assert!(html.contains("@property --wait_input"));
-    assert!(html.contains(" --wait_input: if("));
+    assert!(html.contains("--wait_input: if("));
     assert!(html.contains("--eq(var(--kb), -1)"));
     assert!(html.contains("@function --eqz(--a <number>) returns <integer>"));
     assert!(html.contains("@function --ne(--a <number>, --b <number>) returns <integer>"));
@@ -750,8 +748,8 @@ fn emit_html_untouched_registers_use_direct_fallback_without_empty_if() {
     let html = emit_program(&program).expect("emit should succeed");
     // `--_1r7` (= `var(--_2r7, 0)`) is single-use, so it gets inlined
     // into `--r7`, leaving `--r7: var(--_2r7, 0);`.
-    assert!(html.contains(" --r7: var(--_2r7, 0);"));
-    assert!(!html.contains(" --r7: if(else: var(--_2r7, 0));"));
+    assert!(html.contains("--r7: var(--_2r7, 0);"));
+    assert!(!html.contains("--r7: if(else: var(--_2r7, 0));"));
 }
 
 #[test]
@@ -969,10 +967,10 @@ fn emit_html_memory_store_merge_expr_stays_compact() {
         Emitter::cell_offset_hex_width((MEMORY_BYTES_CAP as usize).div_ceil(2)),
     );
     let m0_start = html
-        .find(&format!(" {}: ", m0_name))
+        .find(&format!("{}: ", m0_name))
         .expect("must emit first memory cell");
     let next_decl = html[m0_start + 1..]
-        .find(&format!(" {}: ", m1_name))
+        .find(&format!("{}: ", m1_name))
         .map(|idx| m0_start + 1 + idx)
         .or_else(|| html[m0_start..].find('\n').map(|idx| m0_start + idx))
         .unwrap_or(html.len());
@@ -1033,12 +1031,12 @@ fn emit_html_memory_store_merge_expr_flattens_slot_conditions() {
     // Dirty-page indicator is emitted as a raw sum (no `min(1, …)` clamp);
     // the consumer below tests `--mwdp0: 0` and swaps branches, so any
     // non-zero sum routes through the merge expression.
-    assert!(html.contains(" --mwdp0: calc("));
-    assert!(!html.contains(" --mwdp0: min(1,"));
+    assert!(html.contains("--mwdp0: calc("));
+    assert!(!html.contains("--mwdp0: min(1,"));
     assert!(html.contains("@property --mwdp0 { syntax: \"<integer>\";"));
-    assert!(!html.contains(" --mw_active:"));
+    assert!(!html.contains("--mw_active:"));
     assert!(html.contains(&format!(
-        " {}: if(style(--mwdp0: 0): var({}); else: --mmerge16(0, var({})));",
+        "{}: if(style(--mwdp0: 0): var({}); else: --mmerge16(0, var({})));",
         m0_name, m0_shadow, m0_shadow
     )));
     assert!(
@@ -1067,13 +1065,13 @@ fn emit_html_memory_store_merge_expr_uses_byte_helpers_when_no_writes() {
     // `--m000`, which now carries the `var(--_2m000, 0)` chain directly.
     let _ = m0_shadow;
     assert!(html.contains(&format!(
-        " {}: var(--_2{}, 0);",
+        "{}: var(--_2{}, 0);",
         m0_name,
         m0_name.trim_start_matches("--")
     )));
     assert!(!html.contains("@function --mmerge16("));
     assert!(!html.contains("@function --mmerge_byte("));
-    assert!(!html.contains(" --mw_active: if("));
+    assert!(!html.contains("--mw_active: if("));
 }
 
 #[test]
@@ -1111,7 +1109,7 @@ fn emit_html_return_falls_back_to_callstack_top_when_cs_load_pc_is_in_prior_cycl
     assert!(html.contains("style(--_1pc: 2): --sel(--inrange(var(--_1cs_sp), "));
     assert!(html.contains("--read_cs(var(--_1cs_sp))"));
     assert!(!html.contains("@function --csmerge("));
-    assert!(!html.contains(" --csw_active: if("));
+    assert!(!html.contains("--csw_active: if("));
 }
 
 #[test]

@@ -206,6 +206,21 @@ fn balanced_body<'a>() -> impl Parser<'a, &'a str, String, Err<'a>> + Clone {
                     depth -= 1;
                     input.next();
                 }
+                Some(q @ ('"' | '\'')) => {
+                    input.next();
+                    while let Some(c) = input.peek() {
+                        input.next();
+                        if c == '\\' {
+                            if input.peek().is_some() {
+                                input.next();
+                            }
+                            continue;
+                        }
+                        if c == q {
+                            break;
+                        }
+                    }
+                }
                 Some(_) => {
                     input.next();
                 }
@@ -238,7 +253,7 @@ fn parse_if_body(body: &str) -> Node {
             continue;
         };
         let cond = parse_cond(&arm[..idx]);
-        let value = parse(arm[idx + 2..].trim());
+        let value = parse(arm[idx + 1..].trim());
         arms.push(Arm { cond, value });
     }
     Node::If {
@@ -295,13 +310,20 @@ fn parse_paren_style_feature(s: &str) -> Option<Node> {
 fn top_level_colon(s: &str) -> Option<usize> {
     let bytes = s.as_bytes();
     let mut depth: i32 = 0;
-    for (i, &b) in bytes.iter().enumerate() {
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == b'"' || b == b'\'' {
+            i = skip_css_string(bytes, i);
+            continue;
+        }
         match b {
             b'(' => depth += 1,
             b')' => depth -= 1,
             b':' if depth == 0 => return Some(i),
             _ => {}
         }
+        i += 1;
     }
     None
 }
@@ -319,7 +341,13 @@ fn split_top_level(s: &str, sep: u8) -> Vec<&str> {
     let mut depth: i32 = 0;
     let mut start = 0;
     let bytes = s.as_bytes();
-    for (i, &b) in bytes.iter().enumerate() {
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == b'"' || b == b'\'' {
+            i = skip_css_string(bytes, i);
+            continue;
+        }
         match b {
             b'(' => depth += 1,
             b')' => depth -= 1,
@@ -329,24 +357,45 @@ fn split_top_level(s: &str, sep: u8) -> Vec<&str> {
             }
             _ => {}
         }
+        i += 1;
     }
     parts.push(&s[start..]);
     parts
+}
+
+pub(crate) fn skip_css_string(bytes: &[u8], start: usize) -> usize {
+    let quote = bytes[start];
+    let mut i = start + 1;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' if i + 1 < bytes.len() => i += 2,
+            c if c == quote => return i + 1,
+            _ => i += 1,
+        }
+    }
+    bytes.len()
 }
 
 fn find_arm_colon(arm: &str) -> Option<usize> {
     let bytes = arm.as_bytes();
     let mut depth: i32 = 0;
     let mut best = None;
-    for (i, &b) in bytes.iter().enumerate() {
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == b'"' || b == b'\'' {
+            i = skip_css_string(bytes, i);
+            continue;
+        }
         match b {
             b'(' => depth += 1,
             b')' => depth -= 1,
-            b':' if depth == 0 && bytes.get(i + 1) == Some(&b' ') => {
+            b':' if depth == 0 => {
                 best = Some(i);
             }
             _ => {}
         }
+        i += 1;
     }
     best
 }

@@ -16,6 +16,7 @@ use std::path::PathBuf;
 mod ast;
 mod constants;
 mod css;
+mod dirty;
 mod emit;
 mod ir;
 mod ir8;
@@ -28,6 +29,32 @@ mod print;
 mod regalloc;
 mod schedule;
 mod validate;
+
+/// A `--flag[=SEED]` argument: bare flag uses a random seed, `--flag=N` uses that seed.
+#[derive(Debug, Clone, Copy)]
+struct OptionalSeed(Option<u64>);
+
+impl OptionalSeed {
+    fn resolve(self, fallback: u64) -> u64 {
+        self.0.unwrap_or_else(|| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos() as u64)
+                .unwrap_or(fallback)
+        })
+    }
+}
+
+impl std::str::FromStr for OptionalSeed {
+    type Err = std::num::ParseIntError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.is_empty() {
+            Ok(Self(None))
+        } else {
+            Ok(Self(Some(s.parse()?)))
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, Default)]
 struct DumpConfig {
@@ -81,6 +108,103 @@ struct Cli {
         conflicts_with = "no_js_clock"
     )]
     js_clock_debugger: bool,
+    /// Permute the program counter labels assigned by the scheduler.
+    #[arg(
+        long = "randomize-pc",
+        num_args = 0..=1,
+        default_missing_value = "",
+        require_equals = true,
+        value_name = "SEED",
+        conflicts_with_all = ["js_clock_debugger", "sparse_pc"]
+    )]
+    randomize_pc: Option<OptionalSeed>,
+    /// Sample PC labels uniformly from the full 16-bit space.
+    #[arg(
+        long = "sparse-pc",
+        num_args = 0..=1,
+        default_missing_value = "",
+        require_equals = true,
+        value_name = "SEED",
+        conflicts_with = "js_clock_debugger"
+    )]
+    sparse_pc: Option<OptionalSeed>,
+    /// Rename CSS custom properties to short identifiers and alphabetise decls.
+    #[arg(
+        long = "minify-vars",
+        num_args = 0..=1,
+        default_missing_value = "",
+        require_equals = true,
+        value_name = "SEED",
+        conflicts_with = "js_clock_debugger"
+    )]
+    minify_vars: Option<OptionalSeed>,
+    /// Shuffle mutually exclusive `if()` arms.
+    #[arg(
+        long = "shuffle-arms",
+        num_args = 0..=1,
+        default_missing_value = "",
+        require_equals = true,
+        value_name = "SEED",
+        conflicts_with = "js_clock_debugger"
+    )]
+    shuffle_arms: Option<OptionalSeed>,
+    /// Reorder operands of commutative CSS operations.
+    #[arg(
+        long = "shuffle-ops",
+        num_args = 0..=1,
+        default_missing_value = "",
+        require_equals = true,
+        value_name = "SEED",
+        conflicts_with = "js_clock_debugger"
+    )]
+    shuffle_ops: Option<OptionalSeed>,
+    /// Permute `@property` and `@function` definitions.
+    #[arg(
+        long = "shuffle-at-rules",
+        num_args = 0..=1,
+        default_missing_value = "",
+        require_equals = true,
+        value_name = "SEED",
+        conflicts_with = "js_clock_debugger"
+    )]
+    shuffle_at_rules: Option<OptionalSeed>,
+    /// Add decoy integer fallbacks to `var()` references.
+    #[arg(
+        long = "decoy-fallbacks",
+        num_args = 0..=1,
+        default_missing_value = "",
+        require_equals = true,
+        value_name = "SEED",
+        conflicts_with = "js_clock_debugger"
+    )]
+    decoy_fallbacks: Option<OptionalSeed>,
+    /// Inject unreachable decoy arms into LUT `@function` definitions.
+    #[arg(
+        long = "decoy-arms",
+        num_args = 0..=1,
+        default_missing_value = "",
+        require_equals = true,
+        value_name = "SEED",
+        conflicts_with = "js_clock_debugger"
+    )]
+    decoy_arms: Option<OptionalSeed>,
+    /// Minify embedded `<script>` blocks.
+    #[arg(
+        long = "minify-js",
+        action = ArgAction::SetTrue,
+        conflicts_with = "js_clock_debugger"
+    )]
+    minify_js: bool,
+    /// Split PC-keyed `if()` chains into helper decls (`--__{N}`).
+    #[arg(
+        long = "split-pc",
+        num_args = 0..=1,
+        default_missing_value = "",
+        require_equals = true,
+        value_name = "SEED",
+        conflicts_with = "js_clock_debugger"
+    )]
+    split_pc: Option<OptionalSeed>,
     /// Max total physical regs (including reserved r0-r3) after register allocation.
     #[arg(long = "max-phys-regs", default_value_t = DEFAULT_MAX_PHYS_REGS)]
     max_phys_regs: u16,
@@ -90,6 +214,15 @@ struct Cli {
     /// Disable memory and callstack visualizers in the emitted runtime.
     #[arg(long = "no-visualizers", action = ArgAction::SetTrue)]
     no_visualizers: bool,
+    /// Skip the linear-memory bounds check; OOB accesses become silent.
+    #[arg(long = "no-memory-trap", action = ArgAction::SetTrue)]
+    no_memory_trap: bool,
+    /// Skip the callstack-overflow check; pushes past the cap wrap silently.
+    #[arg(long = "no-callstack-trap", action = ArgAction::SetTrue)]
+    no_callstack_trap: bool,
+    /// Drop the PC / SP / G0 indicator panel.
+    #[arg(long = "no-indicators", action = ArgAction::SetTrue)]
+    no_indicators: bool,
     /// Dump all compiler stages to stdout.
     #[arg(long, action = ArgAction::SetTrue)]
     dump_all: bool,
@@ -138,6 +271,9 @@ fn main() -> Result<()> {
         args.js_coprocessor,
         args.js_clock_debugger,
         !args.no_visualizers,
+        !args.no_memory_trap,
+        !args.no_callstack_trap,
+        !args.no_indicators,
     )?;
 
     let wasm_bytes = std::fs::read(&args.wasm_file).with_context(|| {
@@ -191,19 +327,62 @@ fn main() -> Result<()> {
     let mut ir8 = regalloc(ir8, args.max_phys_regs)?;
     schedule(&mut ir8)?;
 
+    let mut seeds_used: Vec<(&'static str, u64)> = Vec::new();
+    let mut take = |name: &'static str, slot: Option<OptionalSeed>, fallback: u64| {
+        let s = slot?.resolve(fallback);
+        seeds_used.push((name, s));
+        Some(s)
+    };
+    if let Some(seed) = take("randomize-pc", args.randomize_pc, 0xDEADBEEF) {
+        dirty::randomize::randomize_pcs(&mut ir8, seed)?;
+    }
+    if let Some(seed) = take("sparse-pc", args.sparse_pc, 0x5C47_7E_5EED) {
+        dirty::randomize::sparsify_pcs(&mut ir8, seed)?;
+    }
+
     if dump.program {
         println!("\n--- Program ---\n");
         print!("{}", print_program(&ir8));
     }
 
     let mut result = emit_program(&ir8, emit_config)?;
+    if let Some(seed) = take("split-pc", args.split_pc, 0x5912_5912) {
+        result = dirty::minify::split_pc_branches(&result, seed);
+    }
+    if let Some(seed) = take("minify-vars", args.minify_vars, 0xC0FFEE) {
+        result = dirty::minify::minify(&result, seed);
+    }
+    if let Some(seed) = take("shuffle-arms", args.shuffle_arms, 0xBADF00D) {
+        result = dirty::minify::shuffle_arms_in_styles(&result, seed);
+    }
+    if let Some(seed) = take("shuffle-ops", args.shuffle_ops, 0xFEEDFACE) {
+        result = dirty::minify::shuffle_commutative_ops(&result, seed);
+    }
+    if let Some(seed) = take("shuffle-at-rules", args.shuffle_at_rules, 0xD15EA5E) {
+        result = dirty::minify::shuffle_at_rule_order(&result, seed);
+    }
+    if let Some(seed) = take("decoy-fallbacks", args.decoy_fallbacks, 0xDEC0_FA11) {
+        result = dirty::minify::inject_var_fallbacks(&result, seed);
+    }
+    if let Some(seed) = take("decoy-arms", args.decoy_arms, 0xBADC_0DE0) {
+        result = dirty::minify::inject_lut_decoy_arms(&result, seed);
+    }
+    if args.minify_js {
+        result = dirty::minify::minify_embedded_js(&result);
+    }
     if !args.no_embed_compile_command {
         let cmd = std::env::args()
             .map(shell_quote)
             .collect::<Vec<_>>()
             .join(" ")
             .replace("-->", "--&gt;");
-        result = format!("<!-- compile command: {cmd} -->\n{result}");
+        let seeds_line = if seeds_used.is_empty() {
+            String::new()
+        } else {
+            let pairs: Vec<String> = seeds_used.iter().map(|(n, s)| format!("{n}={s}")).collect();
+            format!("\n<!-- seeds: {} -->", pairs.join(" "))
+        };
+        result = format!("<!-- compile command: {cmd} -->{seeds_line}\n{result}");
     }
     std::fs::write(&output_file, result)
         .with_context(|| format!("failed to write output HTML '{}'", output_file.display()))?;
@@ -290,5 +469,33 @@ mod tests {
             .expect_err("parse should fail");
 
         assert_eq!(err.kind(), ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn randomize_pc_conflicts_with_js_clock_debugger() {
+        let err =
+            Cli::try_parse_from(["wss", "input.wasm", "--randomize-pc", "--js-clock-debugger"])
+                .expect_err("parse should fail");
+
+        assert_eq!(err.kind(), ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn minify_vars_conflicts_with_js_clock_debugger() {
+        let err =
+            Cli::try_parse_from(["wss", "input.wasm", "--minify-vars", "--js-clock-debugger"])
+                .expect_err("parse should fail");
+
+        assert_eq!(err.kind(), ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn randomize_pc_and_minify_vars_coexist() {
+        let args = Cli::try_parse_from(["wss", "input.wasm", "--randomize-pc=42", "--minify-vars"])
+            .unwrap();
+
+        assert_eq!(args.randomize_pc.expect("set").0, Some(42));
+        assert!(args.minify_vars.is_some());
+        assert!(args.minify_vars.unwrap().0.is_none());
     }
 }

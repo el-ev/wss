@@ -23,6 +23,7 @@ use crate::constants::{
     DEFAULT_CALLSTACK_SLOTS_CAP, DEFAULT_JS_CLOCK_DEBUGGER_ENABLED, DEFAULT_JS_CLOCK_ENABLED,
     DEFAULT_JS_COPROCESSOR_ENABLED, DEFAULT_MEMORY_BYTES_CAP,
 };
+use crate::css::skip_css_string;
 use crate::ir8::{BuiltinId, CallTarget, Inst8Kind, Ir8Program, Terminator8, TrapCode, Val8, Word};
 
 const BASE_HTML: &str = include_str!("base.html");
@@ -48,6 +49,9 @@ pub struct EmitConfig {
     js_coprocessor: bool,
     js_clock_debugger: bool,
     visualizers: bool,
+    mem_trap: bool,
+    cs_trap: bool,
+    indicators: bool,
 }
 
 #[cfg(test)]
@@ -60,12 +64,16 @@ impl Default for EmitConfig {
             DEFAULT_JS_COPROCESSOR_ENABLED,
             DEFAULT_JS_CLOCK_DEBUGGER_ENABLED,
             true,
+            true,
+            true,
+            true,
         )
         .expect("default emit config should be valid")
     }
 }
 
 impl EmitConfig {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         memory_bytes_cap: u32,
         callstack_slots_cap: usize,
@@ -73,6 +81,9 @@ impl EmitConfig {
         js_coprocessor: bool,
         js_clock_debugger: bool,
         visualizers: bool,
+        mem_trap: bool,
+        cs_trap: bool,
+        indicators: bool,
     ) -> anyhow::Result<Self> {
         anyhow::ensure!(
             callstack_slots_cap > 0,
@@ -93,6 +104,9 @@ impl EmitConfig {
             js_coprocessor,
             js_clock_debugger,
             visualizers,
+            mem_trap,
+            cs_trap,
+            indicators,
         })
     }
 
@@ -120,6 +134,18 @@ impl EmitConfig {
         self.visualizers
     }
 
+    pub fn mem_trap(&self) -> bool {
+        self.mem_trap
+    }
+
+    pub fn cs_trap(&self) -> bool {
+        self.cs_trap
+    }
+
+    pub fn indicators(&self) -> bool {
+        self.indicators
+    }
+
     #[cfg(test)]
     pub fn with_memory_bytes_cap(self, memory_bytes_cap: u32) -> anyhow::Result<Self> {
         Self::new(
@@ -129,6 +155,9 @@ impl EmitConfig {
             self.js_coprocessor(),
             self.js_clock_debugger(),
             self.visualizers(),
+            self.mem_trap(),
+            self.cs_trap(),
+            self.indicators(),
         )
     }
 
@@ -141,6 +170,9 @@ impl EmitConfig {
             self.js_coprocessor(),
             self.js_clock_debugger(),
             self.visualizers(),
+            self.mem_trap(),
+            self.cs_trap(),
+            self.indicators(),
         )
     }
 
@@ -153,6 +185,9 @@ impl EmitConfig {
             js_coprocessor,
             self.js_clock_debugger(),
             self.visualizers(),
+            self.mem_trap(),
+            self.cs_trap(),
+            self.indicators(),
         )
     }
 
@@ -165,6 +200,9 @@ impl EmitConfig {
             self.js_coprocessor(),
             js_clock_debugger,
             self.visualizers(),
+            self.mem_trap(),
+            self.cs_trap(),
+            self.indicators(),
         )
     }
 }
@@ -212,6 +250,7 @@ keep_pairs! {
         (FN_MHI, "FN_MHI"),
         (FN_M16, "FN_M16"),
         (FN_MLOAD, "FN_MLOAD"),
+        (INDS_CSS, "INDS_CSS"),
         (SP_IND_CSS, "SP_INDICATOR_CSS"),
         (MEM_VIS_CSS, "MEM_VISUALIZER_CSS"),
         (CS_VIS_CSS, "CS_VISUALIZER_CSS"),
@@ -225,6 +264,7 @@ keep_pairs! {
         (JS_COPROCESSOR_RUNTIME, "JS_COPROCESSOR_RUNTIME")
     ],
     html: [
+        (INDS_HTML, "INDS_HTML"),
         (SP_IND_HTML, "SP_INDICATOR_HTML"),
         (MEM_VIS_HTML, "MEM_VISUALIZER_HTML"),
         (CS_VIS_HTML, "CS_VISUALIZER_HTML"),
@@ -337,6 +377,9 @@ struct Emitter<'a> {
     js_clock: bool,
     js_coprocessor: bool,
     js_clock_debugger: bool,
+    mem_trap: bool,
+    cs_trap: bool,
+    indicators: bool,
     features: TemplateFeatures,
     memory_end: u32,
     mem_names: Vec<String>,
@@ -372,7 +415,6 @@ pub fn emit_program(program: &Ir8Program, config: EmitConfig) -> anyhow::Result<
     logic_css.push_str(&group_arms);
 
     Emitter::collapse_slot_aliases(&mut logic_css, &mut support_css, &mut props_css);
-
     inline::inline_slot_indicators(&mut logic_css, &mut support_css);
     inline::fold_value_expressions(&mut logic_css, &mut support_css);
     inline::eliminate_dead_decls(&mut logic_css, &mut support_css, BASE_HTML);
@@ -392,7 +434,68 @@ pub fn emit_program(program: &Ir8Program, config: EmitConfig) -> anyhow::Result<
         String::from("{}")
     };
     let html = replace_placeholder_once(&html, DEBUGGER_CYCLES_PLACEHOLDER, &debugger_cycles)?;
-    emitter.apply_template_features(html)
+    let html = emitter.apply_template_features(html)?;
+    Ok(compact_style_whitespace(&html))
+}
+
+fn compact_style_whitespace(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut search_from = 0;
+    while let Some(rel) = s[search_from..].find("<style") {
+        let open_tag = search_from + rel;
+        let Some(gt_rel) = s[open_tag..].find('>') else {
+            break;
+        };
+        let body_start = open_tag + gt_rel + 1;
+        let Some(close_rel) = s[body_start..].find("</style>") else {
+            break;
+        };
+        let body_end = body_start + close_rel;
+        out.push_str(&s[search_from..body_start]);
+        compact_css_run(&s[body_start..body_end], &mut out);
+        search_from = body_end;
+    }
+    out.push_str(&s[search_from..]);
+    out
+}
+
+fn compact_css_run(s: &str, out: &mut String) {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    let mut last_was_ws = false;
+    let mut saw_newline = false;
+    let mut last_non_ws: Option<u8> = None;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == b'"' || b == b'\'' {
+            let end = skip_css_string(bytes, i);
+            out.push_str(&s[i..end]);
+            last_was_ws = false;
+            saw_newline = false;
+            last_non_ws = Some(bytes[end - 1]);
+            i = end;
+            continue;
+        }
+        if b == b' ' || b == b'\t' || b == b'\n' || b == b'\r' {
+            saw_newline |= b == b'\n';
+            if !last_was_ws {
+                let break_safe = matches!(last_non_ws, Some(b';' | b'{' | b'}'));
+                if saw_newline && break_safe {
+                    out.push('\n');
+                } else {
+                    out.push(' ');
+                }
+                last_was_ws = true;
+            }
+            i += 1;
+            continue;
+        }
+        out.push(b as char);
+        last_was_ws = false;
+        saw_newline = false;
+        last_non_ws = Some(b);
+        i += 1;
+    }
 }
 
 fn json_string(s: &str) -> String {
@@ -441,7 +544,11 @@ fn replace_placeholder_once(
 
 impl<'a> Emitter<'a> {
     fn new(program: &'a Ir8Program, config: EmitConfig) -> anyhow::Result<Self> {
-        let entry_pc = (program.entry_func as u16) * crate::ir8::PC_STRIDE;
+        let entry_pc = program
+            .func_entries
+            .get(program.entry_func as usize)
+            .map(|p| p.index())
+            .unwrap_or((program.entry_func as u16) * crate::ir8::PC_STRIDE);
 
         let memory_end = if config.memory_bytes_cap() == 0 {
             program.memory_end
@@ -528,6 +635,9 @@ impl<'a> Emitter<'a> {
             js_clock: config.js_clock(),
             js_coprocessor: config.js_coprocessor(),
             js_clock_debugger: config.js_clock_debugger(),
+            mem_trap: config.mem_trap(),
+            cs_trap: config.cs_trap(),
+            indicators: config.indicators(),
             features,
             memory_end,
             mem_names,
@@ -850,8 +960,16 @@ impl<'a> Emitter<'a> {
         section!(f.contains(TemplateFeatures::FN_MHI), FN_MHI);
         section!(f.contains(TemplateFeatures::FN_M16), FN_M16);
         section!(f.contains(TemplateFeatures::FN_MLOAD), FN_MLOAD);
-        section!(f.contains(TemplateFeatures::SP_INDICATOR), SP_IND_CSS);
-        section!(f.contains(TemplateFeatures::SP_INDICATOR), SP_IND_HTML);
+        section!(self.indicators, INDS_CSS);
+        section!(self.indicators, INDS_HTML);
+        section!(
+            self.indicators && f.contains(TemplateFeatures::SP_INDICATOR),
+            SP_IND_CSS
+        );
+        section!(
+            self.indicators && f.contains(TemplateFeatures::SP_INDICATOR),
+            SP_IND_HTML
+        );
         section!(f.contains(TemplateFeatures::MEM_VISUALIZER), MEM_VIS_CSS);
         section!(f.contains(TemplateFeatures::MEM_VISUALIZER), MEM_VIS_HTML);
         section!(f.contains(TemplateFeatures::CS_VISUALIZER), CS_VIS_CSS);

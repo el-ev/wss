@@ -1738,6 +1738,11 @@ fn build_wss_args(
         args.push("--js-coprocessor".to_string());
     }
     args.push("--no-visualizers".to_string());
+    if let Ok(extra) = env::var("WSS_EXTRA_ARGS") {
+        for tok in extra.split_whitespace() {
+            args.push(tok.to_string());
+        }
+    }
     args
 }
 

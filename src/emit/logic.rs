@@ -515,24 +515,26 @@ impl<'a> Emitter<'a> {
 
             let mut term = self.emit_terminator(cycle, &mut reg_now, loaded_pc_expr);
 
-            Self::dedupe_bounds_checks(&mut trap_mem_parts);
-            let trap_mem = Self::clamp_sum_or_zero(&trap_mem_parts);
+            if self.mem_trap {
+                Self::dedupe_bounds_checks(&mut trap_mem_parts);
+                let trap_mem = Self::clamp_sum_or_zero(&trap_mem_parts);
 
-            if trap_mem != "0" {
-                term.pc_expr = Self::sel_expr(
-                    &trap_mem,
-                    &TrapCode::InvalidMemoryAccess.pc().to_string(),
-                    &term.pc_expr,
-                );
+                if trap_mem != "0" {
+                    term.pc_expr = Self::sel_expr(
+                        &trap_mem,
+                        &TrapCode::InvalidMemoryAccess.pc().to_string(),
+                        &term.pc_expr,
+                    );
+                }
+                term.trap_expr = match (term.trap_expr.as_str(), trap_mem.as_str()) {
+                    ("0", "0") => "0".to_string(),
+                    ("0", _) => trap_mem.clone(),
+                    (_, "0") => term.trap_expr.clone(),
+                    _ => format!("min(1, calc(({}) + ({})))", term.trap_expr, trap_mem),
+                };
             }
-            term.trap_expr = match (term.trap_expr.as_str(), trap_mem.as_str()) {
-                ("0", "0") => "0".to_string(),
-                ("0", _) => trap_mem.clone(),
-                (_, "0") => term.trap_expr.clone(),
-                _ => format!("min(1, calc(({}) + ({})))", term.trap_expr, trap_mem),
-            };
 
-            if self.uses_callstack {
+            if self.uses_callstack && self.cs_trap {
                 Self::dedupe_bounds_checks(&mut trap_cs_parts);
                 let trap_cs = Self::clamp_sum_or_zero(&trap_cs_parts);
 
@@ -891,10 +893,6 @@ impl<'a> Emitter<'a> {
             let expr = if self.max_mem_store_slots == 0 {
                 prev.clone()
             } else {
-                // mwdpN != 0 implies some mso* is 1 at this PC, which implies
-                // mw_active = 1; so the outer `mw_active` check is redundant.
-                // Test against 0 (no store this cycle) so the dirty-page sum
-                // can be emitted without a `min(1, …)` clamp.
                 format!("if(style(--mwdp{}: 0): {}; else: {})", page, prev, merged)
             };
             let _ = write!(mem_line, " {}: {};", name, expr);

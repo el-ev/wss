@@ -15,6 +15,7 @@ pub use doc::{
 };
 pub use fold::fold;
 pub use parse::parse;
+pub(crate) use parse::skip_css_string;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Node {
@@ -144,18 +145,10 @@ pub fn fold_document_values(s: &str) -> String {
     let mut i = 0;
     let mut paren_depth: i32 = 0;
     while i < bytes.len() {
-        // Trigger on a `: ` (colon + space) at paren depth 0, the shape
-        // CSS property declarations use. Pseudo-class selectors like
-        // `:hover` do not match (no following space), and arm separators
-        // inside `if(...)` / `style(...)` are at deeper paren depth.
         if paren_depth == 0
             && bytes[i] == b':'
             && bytes.get(i + 1) == Some(&b' ')
             && i > 0
-            // Conservatively only fire when the colon is preceded by a
-            // property-name character (letter, digit, `-`, `_`). This
-            // avoids triggering on stray colons inside identifiers we
-            // don't model.
             && is_prop_name_byte(bytes[i - 1])
         {
             let value_start = i + 2;

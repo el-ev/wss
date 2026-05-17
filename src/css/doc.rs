@@ -281,10 +281,9 @@ fn classify_body(head: &str, inner: &str) -> Body {
         let mut p = DocParser::new(inner);
         return Body::Nested(p.parse_items_to_end());
     }
-    // Try to parse as a decl list. If we see a `{` anywhere at depth 0
-    // we can't be in a decl-only body; fall back to Verbatim.
     if contains_top_level_brace(inner) {
-        return Body::Verbatim(inner.to_string());
+        let mut p = DocParser::new(inner);
+        return Body::Nested(p.parse_items_to_end());
     }
     Body::Decls(parse_decl_items(inner))
 }
