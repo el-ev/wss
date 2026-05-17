@@ -175,14 +175,6 @@ impl FuncBuilder {
         }
     }
 
-    pub(super) fn set_word_from_byte(&mut self, dst: Word, src: Val8) {
-        let [lo, hi1, hi2, hi3] = dst.bytes();
-        self.emit(Inst8::with_dst(lo, Inst8Kind::Copy(src)));
-        for lane in [hi1, hi2, hi3] {
-            self.emit(Inst8::with_dst(lane, Inst8Kind::Copy(Val8::imm(0))));
-        }
-    }
-
     pub(super) fn copy_ret_to_value(&mut self, dst: ValueWords) {
         self.copy_word(dst.lo, RET_LO);
         if let Some(dst_hi) = dst.hi {
@@ -195,7 +187,7 @@ impl FuncBuilder {
     }
 
     pub(super) fn set_ret_from_byte(&mut self, src: Val8) {
-        self.set_word_from_byte(RET_LO, src);
+        self.copy_word(RET_LO, Word::narrow(src));
         self.copy_word(RET_HI, Word::from_u32_imm(0));
     }
 

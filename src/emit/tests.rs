@@ -1212,9 +1212,11 @@ fn emit_html_coprocessor_division_retains_cop_a_and_cop_b_after_dce() {
 
 #[test]
 fn emit_html_preserves_nested_calc_in_math_context() {
-    use crate::css::fold_document_values;
+    use crate::css::{fold_doc, parse_doc, print_doc};
     let input = " --x: min(1, calc(var(--a) + var(--b)));\n";
-    let result = fold_document_values(input);
+    let mut doc = parse_doc(input);
+    fold_doc(&mut doc);
+    let result = print_doc(&doc);
     assert!(
         result.contains("calc("),
         "nested calc() inside min() must be preserved for Chrome compatibility: {result}"

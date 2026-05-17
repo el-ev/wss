@@ -1,7 +1,5 @@
 use std::collections::HashMap;
 
-use crate::css::fold_document_values;
-
 const SLOT_PREFIXES: &[&str] = &["cri", "crp", "csi", "csp", "mri", "msc", "msp"];
 
 pub(super) fn inline_slot_indicators(logic: &mut String, support: &mut String) {
@@ -30,8 +28,14 @@ pub(super) fn inline_slot_indicators(logic: &mut String, support: &mut String) {
 
 /// Run the CSS AST fold over every property value in both buffers.
 pub(super) fn fold_value_expressions(logic: &mut String, support: &mut String) {
-    *support = fold_document_values(support);
-    *logic = fold_document_values(logic);
+    *support = fold_buffer(support);
+    *logic = fold_buffer(logic);
+}
+
+fn fold_buffer(s: &str) -> String {
+    let mut doc = crate::css::parse_doc(s);
+    crate::css::fold_doc(&mut doc);
+    crate::css::print_doc(&doc)
 }
 
 /// Remove `--name: <value>;` declarations that have no reader anywhere

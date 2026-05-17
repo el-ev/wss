@@ -3,18 +3,34 @@ use std::collections::{HashMap, HashSet};
 use super::{SplitMix64, fisher_yates};
 use crate::css::{
     Arm, Body, DeclItem, Doc, Item, Node, count_custom_names, is_custom_name_cont,
-    is_custom_name_start, parse_doc, print_doc, rename_custom_names, scrub_verbatim,
-    skip_css_string,
+    is_custom_name_start, rename_custom_names, scrub_verbatim, skip_css_string,
 };
+use crate::page::Page;
 
 const RESERVED: &[&str] = &[
     "cop_a", "cop_a0", "cop_a1", "cop_a2", "cop_a3", "cop_b", "cop_b0", "cop_b1", "cop_b2",
     "cop_b3",
 ];
 
-pub fn minify(html: &str, seed: u64) -> String {
+// =====================================================================
+// minify (variable renaming + cosmetic cleanup)
+// =====================================================================
+
+pub fn minify(page: &mut Page, seed: u64) {
+    rename_short(page, seed);
+    strip_comments_and_flatten(page);
+    sort_decls(page, seed);
+}
+
+fn rename_short(page: &mut Page, seed: u64) {
     let mut counts: HashMap<String, usize> = HashMap::new();
-    scan_names(html, &mut counts);
+    for doc in page.style_docs() {
+        count_custom_names(doc, &mut counts);
+    }
+
+    for s in page.text_and_scripts() {
+        scan_names_raw(s, &mut counts);
+    }
 
     let reserved: HashSet<&str> = RESERVED.iter().copied().collect();
     let mut names: Vec<(String, usize)> = counts
@@ -44,69 +60,74 @@ pub fn minify(html: &str, seed: u64) -> String {
         rename.insert(old, name_gen.next());
     }
 
-    let renamed = rewrite_names(html, &rename);
-    let stripped = strip_comments(&renamed);
-    let sorted = sort_style_decls(&stripped, seed);
-    flatten_style_whitespace(&sorted)
+    for doc in page.style_docs_mut() {
+        rename_custom_names(doc, &rename);
+    }
+    page.map_text_and_scripts(|s| rewrite_names_raw(s, &rename));
 }
 
-/// Strip CSS block comments and HTML comments.
-fn strip_comments(html: &str) -> String {
-    let mut out = String::with_capacity(html.len());
-    let bytes = html.as_bytes();
+fn scan_names_raw(s: &str, counts: &mut HashMap<String, usize>) {
+    let bytes = s.as_bytes();
     let mut i = 0;
-    while i < bytes.len() {
-        if let Some(rest) = html[i..].strip_prefix("<style") {
-            let tag_end = rest.find('>').map(|p| i + 6 + p + 1).unwrap_or(bytes.len());
-            let body_end = html[tag_end..]
-                .find("</style>")
-                .map(|p| tag_end + p)
-                .unwrap_or(bytes.len());
-            out.push_str(&html[i..tag_end]);
-            strip_css_block_comments(&html[tag_end..body_end], &mut out);
-            i = body_end;
-            continue;
-        }
-        if let Some(_rest) = html[i..].strip_prefix("<script") {
-            let close = html[i..]
-                .find("</script>")
-                .map(|p| i + p + "</script>".len())
-                .unwrap_or(bytes.len());
-            out.push_str(&html[i..close]);
-            i = close;
-            continue;
-        }
-        if html[i..].starts_with("<!--") {
-            if let Some(end) = html[i + 4..].find("-->") {
-                i += 4 + end + 3;
-                continue;
+    while i + 2 < bytes.len() {
+        if bytes[i] == b'-' && bytes[i + 1] == b'-' && is_custom_name_start(bytes[i + 2]) {
+            let start = i + 2;
+            let mut j = start;
+            while j < bytes.len() && is_custom_name_cont(bytes[j]) {
+                j += 1;
             }
-            break;
+            *counts.entry(s[start..j].to_string()).or_insert(0) += 1;
+            i = j;
+        } else {
+            i += 1;
         }
-        let next = bytes[i];
-        out.push(next as char);
-        i += 1;
     }
+}
+
+fn rewrite_names_raw(s: &str, rename: &HashMap<String, String>) -> String {
+    let bytes = s.as_bytes();
+    let mut out = String::with_capacity(s.len());
+    let mut last = 0;
+    let mut i = 0;
+    while i + 2 < bytes.len() {
+        if bytes[i] == b'-' && bytes[i + 1] == b'-' && is_custom_name_start(bytes[i + 2]) {
+            let start = i + 2;
+            let mut j = start;
+            while j < bytes.len() && is_custom_name_cont(bytes[j]) {
+                j += 1;
+            }
+            if let Some(new) = rename.get(&s[start..j]) {
+                out.push_str(&s[last..start]);
+                out.push_str(new);
+                last = j;
+            }
+            i = j;
+        } else {
+            i += 1;
+        }
+    }
+    out.push_str(&s[last..]);
     out
 }
 
-fn strip_css_block_comments(s: &str, out: &mut String) {
-    let mut doc = parse_doc(s);
-    scrub_verbatim(&mut doc, &strip_block_comments_in_text);
-    out.push_str(&print_doc(&doc));
+fn strip_comments_and_flatten(page: &mut Page) {
+    for doc in page.style_docs_mut() {
+        scrub_verbatim(doc, &strip_and_flatten_text);
+    }
 }
 
-/// Strip `/* … */` preserving string literals.
-fn strip_block_comments_in_text(s: &str) -> String {
+fn strip_and_flatten_text(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let bytes = s.as_bytes();
     let mut i = 0;
+    let mut last_was_space = false;
     while i < bytes.len() {
         let b = bytes[i];
         if b == b'"' || b == b'\'' {
             let end = skip_css_string(bytes, i);
             out.push_str(&s[i..end]);
             i = end;
+            last_was_space = false;
             continue;
         }
         if b == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
@@ -117,29 +138,105 @@ fn strip_block_comments_in_text(s: &str) -> String {
             i = (i + 2).min(bytes.len());
             continue;
         }
+        if matches!(b, b' ' | b'\t' | b'\n' | b'\r') {
+            if !last_was_space {
+                out.push(' ');
+                last_was_space = true;
+            }
+            i += 1;
+            continue;
+        }
         out.push(b as char);
+        last_was_space = false;
         i += 1;
     }
     out
 }
 
-/// Shuffle mutually-exclusive `if()` arm-lists.
-pub fn shuffle_arms_in_styles(html: &str, seed: u64) -> String {
-    transform_style_blocks(html, |doc| {
-        let mut rng = SplitMix64::new(seed);
+// =====================================================================
+// shuffle / decoy / split-pc passes (each operates on every Doc)
+// =====================================================================
+
+pub fn shuffle_arms_in_styles(page: &mut Page, seed: u64) {
+    let mut rng = SplitMix64::new(seed);
+    for doc in page.style_docs_mut() {
         shuffle_doc_if_arms(doc, &mut rng);
-    })
+    }
 }
 
-/// Shuffle operands of commutative ops.
-pub fn shuffle_commutative_ops(html: &str, seed: u64) -> String {
-    transform_style_blocks(html, |doc| {
-        let mut rng = SplitMix64::new(seed);
+pub fn shuffle_commutative_ops(page: &mut Page, seed: u64) {
+    let mut rng = SplitMix64::new(seed);
+    for doc in page.style_docs_mut() {
         for item in &mut doc.items {
             shuffle_commutative_in_item(item, &mut rng);
         }
-    })
+    }
 }
+
+pub fn shuffle_at_rule_order(page: &mut Page, seed: u64) {
+    let mut rng = SplitMix64::new(seed);
+    for doc in page.style_docs_mut() {
+        permute_at_rules(&mut doc.items, &mut rng);
+        for item in &mut doc.items {
+            if let Item::Rule(r) = item
+                && let Body::Nested(inner) = &mut r.body
+            {
+                permute_at_rules(inner, &mut rng);
+            }
+        }
+    }
+}
+
+pub fn inject_var_fallbacks(page: &mut Page, seed: u64) {
+    let mut registered: HashSet<String> = HashSet::new();
+    for doc in page.style_docs() {
+        collect_registered_properties(doc, &mut registered);
+    }
+    let mut rng = SplitMix64::new(seed);
+    for doc in page.style_docs_mut() {
+        for item in &mut doc.items {
+            inject_in_item(item, &registered, &mut rng);
+        }
+    }
+}
+
+pub fn inject_lut_decoy_arms(page: &mut Page, seed: u64) {
+    let mut candidates: Vec<String> = Vec::new();
+    for doc in page.style_docs() {
+        collect_integer_var_candidates(doc, &mut candidates);
+    }
+    if candidates.is_empty() {
+        return;
+    }
+    let mut rng = SplitMix64::new(seed);
+    for doc in page.style_docs_mut() {
+        for item in &mut doc.items {
+            bake_in_item(item, &candidates, &mut rng);
+        }
+    }
+}
+
+pub fn split_pc_branches(page: &mut Page, seed: u64) {
+    let mut rng = SplitMix64::new(seed);
+    let mut counter: u32 = 0;
+    for doc in page.style_docs_mut() {
+        for item in &mut doc.items {
+            split_pc_in_item(item, &mut counter, &mut rng);
+        }
+    }
+}
+
+pub fn minify_embedded_js(page: &mut Page) {
+    for body in page.scripts_mut() {
+        let mut out = String::with_capacity(body.len());
+        minify_js_run(body, &mut out);
+        *body = out;
+    }
+}
+
+// =====================================================================
+// shuffle_commutative_ops
+// =====================================================================
 
 fn shuffle_commutative_in_item(item: &mut Item, rng: &mut SplitMix64) {
     match item {
@@ -223,20 +320,9 @@ fn is_commutative_math_fn(name: &str) -> bool {
     matches!(name, "min" | "max" | "hypot")
 }
 
-/// Permute `@property`/`@function` definition order.
-pub fn shuffle_at_rule_order(html: &str, seed: u64) -> String {
-    transform_style_blocks(html, |doc| {
-        let mut rng = SplitMix64::new(seed);
-        permute_at_rules(&mut doc.items, &mut rng);
-        for item in &mut doc.items {
-            if let Item::Rule(r) = item
-                && let Body::Nested(inner) = &mut r.body
-            {
-                permute_at_rules(inner, &mut rng);
-            }
-        }
-    })
-}
+// =====================================================================
+// shuffle_at_rule_order
+// =====================================================================
 
 fn permute_at_rules(items: &mut [Item], rng: &mut SplitMix64) {
     let positions: Vec<usize> = items
@@ -263,19 +349,11 @@ fn is_shufflable_at_rule(item: &Item) -> bool {
     }
 }
 
-/// Add random fallbacks to unfallbacked `var()` refs of registered properties.
-pub fn inject_var_fallbacks(html: &str, seed: u64) -> String {
-    transform_style_blocks(html, |doc| {
-        let registered = collect_registered_properties(doc);
-        let mut rng = SplitMix64::new(seed);
-        for item in &mut doc.items {
-            inject_in_item(item, &registered, &mut rng);
-        }
-    })
-}
+// =====================================================================
+// inject_var_fallbacks
+// =====================================================================
 
-fn collect_registered_properties(doc: &Doc) -> HashSet<String> {
-    let mut out = HashSet::new();
+fn collect_registered_properties(doc: &Doc, out: &mut HashSet<String>) {
     for item in &doc.items {
         if let Item::Rule(r) = item {
             let head = r.head.trim_start();
@@ -287,7 +365,6 @@ fn collect_registered_properties(doc: &Doc) -> HashSet<String> {
             }
         }
     }
-    out
 }
 
 fn inject_in_item(item: &mut Item, registered: &HashSet<String>, rng: &mut SplitMix64) {
@@ -322,22 +399,60 @@ fn inject_in_body(body: &mut Body, registered: &HashSet<String>, rng: &mut Split
     }
 }
 
-/// Inject unreachable decoy arms into LUT-shaped `@function`s.
-pub fn inject_lut_decoy_arms(html: &str, seed: u64) -> String {
-    transform_style_blocks(html, |doc| {
-        let candidates = collect_integer_var_candidates(doc);
-        if candidates.is_empty() {
-            return;
+fn inject_in_node(node: &mut Node, registered: &HashSet<String>, rng: &mut SplitMix64) {
+    match node {
+        Node::Var { name, fallback } => {
+            if let Some(fb) = fallback {
+                inject_in_node(fb, registered, rng);
+            } else {
+                let key = name.strip_prefix("--").unwrap_or(name.as_str());
+                if registered.contains(key) {
+                    let n = (rng.next_u64() as i64) & 0xFFFF;
+                    *fallback = Some(Box::new(Node::Int(n)));
+                }
+            }
         }
-        let mut rng = SplitMix64::new(seed);
-        for item in &mut doc.items {
-            bake_in_item(item, &candidates, &mut rng);
+        Node::Calc(inner) | Node::Paren(inner) => inject_in_node(inner, registered, rng),
+        Node::MathFn { args, .. } | Node::Fn { args, .. } => {
+            for a in args {
+                inject_in_node(a, registered, rng);
+            }
         }
-    })
+        Node::Sum(terms) => {
+            for t in terms {
+                inject_in_node(&mut t.node, registered, rng);
+            }
+        }
+        Node::Product(factors) => {
+            for f in factors {
+                inject_in_node(f, registered, rng);
+            }
+        }
+        Node::Div(l, r) => {
+            inject_in_node(l, registered, rng);
+            inject_in_node(r, registered, rng);
+        }
+        Node::If { arms, default } => {
+            for arm in arms {
+                inject_in_node(&mut arm.cond, registered, rng);
+                inject_in_node(&mut arm.value, registered, rng);
+            }
+            inject_in_node(default, registered, rng);
+        }
+        Node::Or(conds) => {
+            for c in conds {
+                inject_in_node(c, registered, rng);
+            }
+        }
+        _ => {}
+    }
 }
 
-fn collect_integer_var_candidates(doc: &Doc) -> Vec<String> {
-    let mut out = Vec::new();
+// =====================================================================
+// inject_lut_decoy_arms
+// =====================================================================
+
+fn collect_integer_var_candidates(doc: &Doc, out: &mut Vec<String>) {
     for item in &doc.items {
         let Item::Rule(r) = item else { continue };
         let head = r.head.trim_start();
@@ -354,8 +469,10 @@ fn collect_integer_var_candidates(doc: &Doc) -> Vec<String> {
                 if d.name != "syntax" {
                     return false;
                 }
-                let v = d.value.to_css();
-                v.contains("<integer>") || v.contains("<number>")
+                match &d.value {
+                    Node::Raw(s) => s.contains("<integer>") || s.contains("<number>"),
+                    _ => false,
+                }
             })
         } else {
             false
@@ -364,7 +481,6 @@ fn collect_integer_var_candidates(doc: &Doc) -> Vec<String> {
             out.push(stripped.to_string());
         }
     }
-    out
 }
 
 fn bake_in_item(item: &mut Item, candidates: &[String], rng: &mut SplitMix64) {
@@ -422,16 +538,9 @@ fn bake_into_result(node: &mut Node, candidates: &[String], rng: &mut SplitMix64
     }
 }
 
-/// Split PC-keyed `if()` chains into helper-linked fragments.
-pub fn split_pc_branches(html: &str, seed: u64) -> String {
-    transform_style_blocks(html, |doc| {
-        let mut rng = SplitMix64::new(seed);
-        let mut counter: u32 = 0;
-        for item in &mut doc.items {
-            split_pc_in_item(item, &mut counter, &mut rng);
-        }
-    })
-}
+// =====================================================================
+// split_pc_branches
+// =====================================================================
 
 fn split_pc_in_item(item: &mut Item, counter: &mut u32, rng: &mut SplitMix64) {
     match item {
@@ -504,21 +613,16 @@ fn try_split_pc_decl(
     if !mutually_exclusive_arms(arms) {
         return None;
     }
-    // Only branches keyed on a PC-shaped prop. We don't know post-rename
-    // what name the PC takes, so we look at the candidate set of PC-like
-    // names; if minify renamed them already, this pass should run first.
     let prop = lut_key_prop(arms)?;
     if !is_pc_prop(&prop) {
         return None;
     }
-    // Random bucket count in [2, 4]; never more buckets than arms.
     let bucket_count = (2 + (rng.next_u64() as usize) % 3).min(arms.len());
     let mut chunks: Vec<Vec<Arm>> = chunk_arms(arms, bucket_count, rng);
     if chunks.len() < 2 {
         return None;
     }
     let first_chunk = chunks.remove(0);
-    // Build helper chain in reverse so each helper falls back to the next.
     let mut tail_default: Node = (**default).clone();
     let mut helpers_rev: Vec<crate::css::Decl> = Vec::with_capacity(chunks.len());
     for chunk in chunks.into_iter().rev() {
@@ -552,8 +656,6 @@ fn try_split_pc_decl(
 }
 
 fn chunk_arms(arms: &[Arm], bucket_count: usize, rng: &mut SplitMix64) -> Vec<Vec<Arm>> {
-    // Random partition: pick `bucket_count - 1` distinct split points
-    // in `1..arms.len()`. Always emit chunks of >= 1 arm.
     if arms.len() < bucket_count || bucket_count < 2 {
         return vec![arms.to_vec()];
     }
@@ -580,27 +682,9 @@ fn is_pc_prop(name: &str) -> bool {
     matches!(name, "--pc" | "--_0pc" | "--_1pc" | "--_2pc")
 }
 
-/// Minify JS inside `<script>` blocks (strip comments, collapse whitespace).
-pub fn minify_embedded_js(html: &str) -> String {
-    let mut out = String::with_capacity(html.len());
-    let mut search_from = 0;
-    while let Some(rel) = html[search_from..].find("<script") {
-        let open_tag = search_from + rel;
-        let Some(gt_rel) = html[open_tag..].find('>') else {
-            break;
-        };
-        let body_start = open_tag + gt_rel + 1;
-        let Some(close_rel) = html[body_start..].find("</script>") else {
-            break;
-        };
-        let body_end = body_start + close_rel;
-        out.push_str(&html[search_from..body_start]);
-        minify_js_run(&html[body_start..body_end], &mut out);
-        search_from = body_end;
-    }
-    out.push_str(&html[search_from..]);
-    out
-}
+// =====================================================================
+// minify_embedded_js
+// =====================================================================
 
 fn minify_js_run(s: &str, out: &mut String) {
     let bytes = s.as_bytes();
@@ -670,9 +754,6 @@ fn skip_js_string(bytes: &[u8], start: usize) -> usize {
             continue;
         }
         if quote == b'`' && b == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'{' {
-            // template interpolation — skip the `${...}` expression as
-            // balanced braces, with nested strings recognised so a `}`
-            // inside `"…}"` doesn't close the placeholder early.
             i += 2;
             let mut depth = 1;
             while i < bytes.len() && depth > 0 {
@@ -727,7 +808,6 @@ fn skip_js_regex(bytes: &[u8], start: usize) -> usize {
     i
 }
 
-/// Whether `/` here opens a regex (vs division).
 fn regex_allowed_after(prev: u8) -> bool {
     matches!(
         prev,
@@ -754,7 +834,10 @@ fn regex_allowed_after(prev: u8) -> bool {
     )
 }
 
-/// Shared `style(--p: K)` property across all arms, or `None`.
+// =====================================================================
+// shared helpers
+// =====================================================================
+
 fn lut_key_prop(arms: &[Arm]) -> Option<String> {
     let mut prop: Option<String> = None;
     for arm in arms {
@@ -769,201 +852,46 @@ fn lut_key_prop(arms: &[Arm]) -> Option<String> {
     prop
 }
 
-fn inject_in_node(node: &mut Node, registered: &HashSet<String>, rng: &mut SplitMix64) {
+fn collect_style_terms(node: &Node) -> Vec<(String, String)> {
     match node {
-        Node::Var { name, fallback } => {
-            if let Some(fb) = fallback {
-                inject_in_node(fb, registered, rng);
-            } else {
-                let key = name.strip_prefix("--").unwrap_or(name.as_str());
-                if registered.contains(key) {
-                    let n = (rng.next_u64() as i64) & 0xFFFF;
-                    *fallback = Some(Box::new(Node::Int(n)));
-                }
-            }
-        }
-        Node::Calc(inner) | Node::Paren(inner) => inject_in_node(inner, registered, rng),
-        Node::MathFn { args, .. } | Node::Fn { args, .. } => {
-            for a in args {
-                inject_in_node(a, registered, rng);
-            }
-        }
-        Node::Sum(terms) => {
-            for t in terms {
-                inject_in_node(&mut t.node, registered, rng);
-            }
-        }
-        Node::Product(factors) => {
-            for f in factors {
-                inject_in_node(f, registered, rng);
-            }
-        }
-        Node::Div(l, r) => {
-            inject_in_node(l, registered, rng);
-            inject_in_node(r, registered, rng);
-        }
-        Node::If { arms, default } => {
-            for arm in arms {
-                inject_in_node(&mut arm.cond, registered, rng);
-                inject_in_node(&mut arm.value, registered, rng);
-            }
-            inject_in_node(default, registered, rng);
-        }
+        Node::Style { prop, value } => vec![(prop.clone(), value.clone())],
         Node::Or(conds) => {
+            let mut out = Vec::new();
             for c in conds {
-                inject_in_node(c, registered, rng);
+                let inner = collect_style_terms(c);
+                if inner.is_empty() {
+                    return Vec::new();
+                }
+                out.extend(inner);
             }
+            out
         }
-        _ => {}
+        _ => Vec::new(),
     }
 }
 
-/// Collapse whitespace inside `<style>` blocks.
-fn flatten_style_whitespace(s: &str) -> String {
-    transform_style_blocks(s, |doc| scrub_verbatim(doc, &collapse_whitespace_in_text))
-}
-
-/// Collapse whitespace runs to a single space, preserving strings.
-fn collapse_whitespace_in_text(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let bytes = s.as_bytes();
-    let mut i = 0;
-    let mut last_was_space = false;
-    while i < bytes.len() {
-        let b = bytes[i];
-        if b == b'"' || b == b'\'' {
-            let end = skip_css_string(bytes, i);
-            out.push_str(&s[i..end]);
-            i = end;
-            last_was_space = false;
-            continue;
+fn mutually_exclusive_arms(arms: &[Arm]) -> bool {
+    let mut prop: Option<String> = None;
+    let mut seen: HashSet<String> = HashSet::new();
+    for arm in arms {
+        let styles = collect_style_terms(&arm.cond);
+        if styles.is_empty() {
+            return false;
         }
-        if matches!(b, b' ' | b'\t' | b'\n' | b'\r') {
-            if !last_was_space {
-                out.push(' ');
-                last_was_space = true;
+        for (p, v) in styles {
+            match &prop {
+                None => prop = Some(p.clone()),
+                Some(prev) if prev == &p => {}
+                _ => return false,
             }
-            i += 1;
-            continue;
-        }
-        out.push(b as char);
-        last_was_space = false;
-        i += 1;
-    }
-    out
-}
-
-/// Count `--ident` occurrences across the HTML.
-fn scan_names(s: &str, counts: &mut HashMap<String, usize>) {
-    visit_style_blocks(s, |chunk, in_style| {
-        if in_style {
-            let doc = parse_doc(chunk);
-            count_custom_names(&doc, counts);
-        } else {
-            scan_names_raw(chunk, counts);
-        }
-    });
-}
-
-/// Rename `--ident` occurrences across the HTML.
-fn rewrite_names(s: &str, rename: &HashMap<String, String>) -> String {
-    let mut out = String::with_capacity(s.len());
-    visit_style_blocks(s, |chunk, in_style| {
-        if in_style {
-            let mut doc = parse_doc(chunk);
-            rename_custom_names(&mut doc, rename);
-            out.push_str(&print_doc(&doc));
-        } else {
-            out.push_str(&rewrite_names_raw(chunk, rename));
-        }
-    });
-    out
-}
-
-fn scan_names_raw(s: &str, counts: &mut HashMap<String, usize>) {
-    let bytes = s.as_bytes();
-    let mut i = 0;
-    while i + 2 < bytes.len() {
-        if bytes[i] == b'-' && bytes[i + 1] == b'-' && is_custom_name_start(bytes[i + 2]) {
-            let start = i + 2;
-            let mut j = start;
-            while j < bytes.len() && is_custom_name_cont(bytes[j]) {
-                j += 1;
+            if !seen.insert(v) {
+                return false;
             }
-            *counts.entry(s[start..j].to_string()).or_insert(0) += 1;
-            i = j;
-        } else {
-            i += 1;
         }
     }
+    true
 }
 
-fn rewrite_names_raw(s: &str, rename: &HashMap<String, String>) -> String {
-    let bytes = s.as_bytes();
-    let mut out = String::with_capacity(s.len());
-    let mut last = 0;
-    let mut i = 0;
-    while i + 2 < bytes.len() {
-        if bytes[i] == b'-' && bytes[i + 1] == b'-' && is_custom_name_start(bytes[i + 2]) {
-            let start = i + 2;
-            let mut j = start;
-            while j < bytes.len() && is_custom_name_cont(bytes[j]) {
-                j += 1;
-            }
-            if let Some(new) = rename.get(&s[start..j]) {
-                out.push_str(&s[last..start]);
-                out.push_str(new);
-                last = j;
-            }
-            i = j;
-        } else {
-            i += 1;
-        }
-    }
-    out.push_str(&s[last..]);
-    out
-}
-
-/// Split `s` into `<style>` body regions (in_style=true) and the rest.
-fn visit_style_blocks(s: &str, mut visit: impl FnMut(&str, bool)) {
-    let mut cursor = 0;
-    while let Some(rel) = s[cursor..].find("<style") {
-        let open_tag = cursor + rel;
-        let Some(gt_rel) = s[open_tag..].find('>') else {
-            break;
-        };
-        let body_start = open_tag + gt_rel + 1;
-        let Some(close_rel) = s[body_start..].find("</style>") else {
-            break;
-        };
-        let body_end = body_start + close_rel;
-        visit(&s[cursor..body_start], false);
-        visit(&s[body_start..body_end], true);
-        cursor = body_end;
-    }
-    visit(&s[cursor..], false);
-}
-
-fn sort_style_decls(html: &str, seed: u64) -> String {
-    let mut rng = SplitMix64::new(seed ^ 0xA5A5_5A5A_DEAD_BEEF);
-    transform_style_blocks(html, |doc| sort_doc_decls(doc, &mut rng))
-}
-
-fn transform_style_blocks(html: &str, mut transform: impl FnMut(&mut Doc)) -> String {
-    let mut out = String::with_capacity(html.len());
-    visit_style_blocks(html, |chunk, in_style| {
-        if in_style {
-            let mut doc = parse_doc(chunk);
-            transform(&mut doc);
-            out.push_str(&print_doc(&doc));
-        } else {
-            out.push_str(chunk);
-        }
-    });
-    out
-}
-
-/// Shuffle mutually-exclusive `if()` arm-lists in a Doc.
 fn shuffle_doc_if_arms(doc: &mut Doc, rng: &mut SplitMix64) {
     for item in &mut doc.items {
         shuffle_in_item(item, rng);
@@ -1004,11 +932,8 @@ fn shuffle_in_node(node: &mut Node, rng: &mut SplitMix64) {
                 shuffle_in_node(&mut arm.value, rng);
             }
             shuffle_in_node(default, rng);
-            if mutually_exclusive_arms(arms) && arms.len() > 1 {
-                for i in (1..arms.len()).rev() {
-                    let j = (rng.next_u64() as usize) % (i + 1);
-                    arms.swap(i, j);
-                }
+            if mutually_exclusive_arms(arms) {
+                fisher_yates(arms, rng);
             }
         }
         Node::Calc(inner) | Node::Paren(inner) => shuffle_in_node(inner, rng),
@@ -1043,44 +968,14 @@ fn shuffle_in_node(node: &mut Node, rng: &mut SplitMix64) {
     }
 }
 
-/// True iff all arms key on a single `--p` with distinct values.
-fn mutually_exclusive_arms(arms: &[Arm]) -> bool {
-    let mut prop: Option<String> = None;
-    let mut seen: HashSet<String> = HashSet::new();
-    for arm in arms {
-        let styles = collect_style_terms(&arm.cond);
-        if styles.is_empty() {
-            return false;
-        }
-        for (p, v) in styles {
-            match &prop {
-                None => prop = Some(p.clone()),
-                Some(prev) if prev == &p => {}
-                _ => return false,
-            }
-            if !seen.insert(v) {
-                return false;
-            }
-        }
-    }
-    true
-}
+// =====================================================================
+// minify sort_decls
+// =====================================================================
 
-fn collect_style_terms(node: &Node) -> Vec<(String, String)> {
-    match node {
-        Node::Style { prop, value } => vec![(prop.clone(), value.clone())],
-        Node::Or(conds) => {
-            let mut out = Vec::new();
-            for c in conds {
-                let inner = collect_style_terms(c);
-                if inner.is_empty() {
-                    return Vec::new();
-                }
-                out.extend(inner);
-            }
-            out
-        }
-        _ => Vec::new(),
+fn sort_decls(page: &mut Page, seed: u64) {
+    let mut rng = SplitMix64::new(seed ^ 0xA5A5_5A5A_DEAD_BEEF);
+    for doc in page.style_docs_mut() {
+        sort_doc_decls(doc, &mut rng);
     }
 }
 
@@ -1109,7 +1004,6 @@ fn sort_body(body: &mut Body, randomize: bool, rng: &mut SplitMix64) {
     }
 }
 
-/// Sort decls alphabetically within each region (rules are barriers).
 fn sort_nested_items(items: &mut [Item]) {
     let n = items.len();
     let mut start = 0;
@@ -1147,7 +1041,6 @@ fn sort_decl_positions(items: &mut [Item]) {
     }
 }
 
-/// Reorder decls: shuffled if `randomize`, alphabetical otherwise.
 fn order_decl_items(items: &mut [DeclItem], randomize: bool, rng: &mut SplitMix64) {
     let positions: Vec<usize> = items
         .iter()
@@ -1173,6 +1066,10 @@ fn order_decl_items(items: &mut [DeclItem], randomize: bool, rng: &mut SplitMix6
         items[i] = DeclItem::Decl(d);
     }
 }
+
+// =====================================================================
+// short-name generator
+// =====================================================================
 
 struct ShortNameGen<'a> {
     counter: usize,
@@ -1212,9 +1109,19 @@ fn encode(mut n: usize) -> String {
     String::from_utf8(buf).unwrap()
 }
 
+// =====================================================================
+// tests
+// =====================================================================
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn run(html: &str, mut f: impl FnMut(&mut Page)) -> String {
+        let mut page = Page::from_html(html);
+        f(&mut page);
+        page.print()
+    }
 
     #[test]
     fn encode_short_names() {
@@ -1231,7 +1138,7 @@ mod tests {
     #[test]
     fn rename_skips_reserved() {
         let css = "<style>:root{--cop_a:1;--m0000:2;--m0000-x:3;--m0001:var(--m0000);}</style>";
-        let out = minify(css, 0);
+        let out = run(css, |p| minify(p, 0));
         assert!(out.contains("--cop_a"));
         assert!(!out.contains("--m0000"));
         assert!(out.contains("--a"));
@@ -1240,7 +1147,7 @@ mod tests {
     #[test]
     fn rename_frequency_assigns_shortest_to_hottest() {
         let css = "<style>:root{--rare:1;--hot:var(--hot);--hot2:var(--hot);}</style>";
-        let out = minify(css, 0);
+        let out = run(css, |p| minify(p, 0));
         assert!(out.contains("--a:"));
         assert!(out.contains("var(--a)"));
     }
@@ -1248,7 +1155,7 @@ mod tests {
     #[test]
     fn sort_decls_alphabetical() {
         let css = "<style>:root{--z:1;--a:2;--m:3;}</style>";
-        let out = minify(css, 0);
+        let out = run(css, |p| minify(p, 0));
         let body_start = out.find('{').unwrap();
         let body_end = out.find('}').unwrap();
         let body = &out[body_start..body_end];
@@ -1261,7 +1168,217 @@ mod tests {
     #[test]
     fn placeholder_markers_untouched() {
         let css = "<style>:root{--__WSS_KEEP_X__: 1;--foo:2;}</style>";
-        let out = minify(css, 0);
+        let out = run(css, |p| minify(p, 0));
         assert!(out.contains("--__WSS_KEEP_X__"));
+    }
+
+    #[test]
+    fn rename_propagates_into_script_string_literals() {
+        // A name used in both <style> and a JS string literal must be
+        // renamed in both places, so the JS still references the live
+        // CSS property after minify.
+        let css = "<style>:root{--myprop: 1;}</style>\
+                   <script>const v = getComputedStyle(e).getPropertyValue('--myprop');</script>";
+        let out = run(css, |p| minify(p, 0));
+        // The original name has been renamed everywhere.
+        assert!(!out.contains("--myprop"));
+        // The new name appears in both segments — find it.
+        let new_name = out
+            .split("--")
+            .nth(1)
+            .and_then(|s| s.split(|c: char| !c.is_ascii_alphanumeric()).next())
+            .unwrap();
+        let token = format!("--{new_name}");
+        let occurrences = out.matches(&token).count();
+        assert!(occurrences >= 2, "expected >=2 occurrences in {out}");
+    }
+
+    #[test]
+    fn rename_propagates_into_shell_html() {
+        // CSS variables referenced from HTML attributes (counter-reset,
+        // style attributes, etc.) must rename consistently.
+        let css = "<style>:root{--foo: 1;}</style>\
+                   <div style=\"counter-reset: ind-foo var(--foo); width: 10px;\">x</div>";
+        let out = run(css, |p| minify(p, 0));
+        assert!(!out.contains("--foo"));
+    }
+
+    #[test]
+    fn strip_comments_removes_block_comments_in_style() {
+        let css = "<style>/* gone */:root{--x: 1;/* also gone */}</style>";
+        let out = run(css, |p| minify(p, 0));
+        assert!(!out.contains("gone"));
+    }
+
+    #[test]
+    fn strip_comments_preserves_strings() {
+        let css = "<style>:root{--label: \"/* not a comment */\";}</style>";
+        let out = run(css, |p| minify(p, 0));
+        assert!(
+            out.contains("/* not a comment */"),
+            "string contents stripped: {out}"
+        );
+    }
+
+    #[test]
+    fn flatten_whitespace_collapses_runs() {
+        let css = "<style>:root  {\n    --x:    1;\n}</style>";
+        let out = run(css, |p| minify(p, 0));
+        // The body should not contain consecutive spaces or any newlines
+        // after flattening.
+        assert!(!out.contains("  "), "double space: {out}");
+        assert!(!out.contains('\n'), "newline left: {out}");
+    }
+
+    #[test]
+    fn shuffle_arms_is_seed_deterministic() {
+        let css = "<style>.a { --x: if(style(--p: 1): 1; style(--p: 2): 2; style(--p: 3): 3; style(--p: 4): 4; else: 0); }</style>";
+        let a = run(css, |p| shuffle_arms_in_styles(p, 42));
+        let b = run(css, |p| shuffle_arms_in_styles(p, 42));
+        assert_eq!(a, b, "same seed must produce same output");
+    }
+
+    #[test]
+    fn shuffle_arms_changes_with_seed() {
+        // With enough arms, different seeds should produce different
+        // orderings.
+        let css = "<style>.a { --x: if(style(--p: 1): 1; style(--p: 2): 2; style(--p: 3): 3; style(--p: 4): 4; style(--p: 5): 5; style(--p: 6): 6; else: 0); }</style>";
+        let a = run(css, |p| shuffle_arms_in_styles(p, 1));
+        let b = run(css, |p| shuffle_arms_in_styles(p, 999));
+        assert_ne!(a, b, "different seeds should differ");
+    }
+
+    #[test]
+    fn shuffle_arms_preserves_arm_set() {
+        // The bag of (cond, value) pairs is invariant under shuffle.
+        let css = "<style>.a { --x: if(style(--p: 1): 10; style(--p: 2): 20; style(--p: 3): 30; else: 0); }</style>";
+        let out = run(css, |p| shuffle_arms_in_styles(p, 7));
+        for expected in [
+            "style(--p: 1): 10",
+            "style(--p: 2): 20",
+            "style(--p: 3): 30",
+        ] {
+            assert!(out.contains(expected), "missing arm: {expected} in {out}");
+        }
+    }
+
+    #[test]
+    fn shuffle_commutative_keeps_set() {
+        // For an addition, the operand set is invariant under shuffle.
+        let css = "<style>.a { --x: calc(11 + 22 + 33 + 44); }</style>";
+        let out = run(css, |p| shuffle_commutative_ops(p, 5));
+        for n in ["11", "22", "33", "44"] {
+            assert!(out.contains(n), "lost {n} in {out}");
+        }
+    }
+
+    #[test]
+    fn shuffle_at_rule_order_keeps_set() {
+        let css = "<style>@property --a { syntax: \"<integer>\"; initial-value: 0; inherits: true; }\
+                   @property --b { syntax: \"<integer>\"; initial-value: 0; inherits: true; }\
+                   @property --c { syntax: \"<integer>\"; initial-value: 0; inherits: true; }</style>";
+        let out = run(css, |p| shuffle_at_rule_order(p, 11));
+        for n in ["--a", "--b", "--c"] {
+            assert!(out.contains(n));
+        }
+    }
+
+    #[test]
+    fn inject_var_fallbacks_only_touches_registered() {
+        let css = "<style>@property --reg { syntax: \"<integer>\"; initial-value: 0; inherits: true; }\
+                   .x { --y: var(--reg); --z: var(--unreg); }</style>";
+        let out = run(css, |p| inject_var_fallbacks(p, 3));
+        // The registered Var must gain a fallback.
+        assert!(out.contains("var(--reg, "), "no fallback on --reg: {out}");
+        // The unregistered Var must NOT gain a fallback.
+        assert!(out.contains("var(--unreg);"), "unreg got fallback: {out}");
+    }
+
+    #[test]
+    fn inject_lut_decoy_arms_grows_function() {
+        // A LUT-shaped @function with enough arms to satisfy the
+        // decoy_count clamp must receive at least two new arms.
+        let arms = (0..16)
+            .map(|i| format!("style(--_1pc: {i}): {i};"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let css = format!(
+            "<style>@property --src {{ syntax: \"<integer>\"; initial-value: 0; inherits: true; }}\
+             @function --lut() returns <integer> {{ result: if({arms} else: 0); }}</style>"
+        );
+        let out = run(&css, |p| inject_lut_decoy_arms(p, 17));
+        // Count `style(--_1pc:` occurrences — should be >16 after
+        // decoys are inserted.
+        let occurrences = out.matches("style(--_1pc:").count();
+        assert!(
+            occurrences > 16,
+            "expected decoy arms inserted; got {occurrences}: {out}"
+        );
+    }
+
+    #[test]
+    fn split_pc_branches_no_op_on_short_chain() {
+        let css = "<style>.x { --pc: if(style(--pc: 0): 1; style(--pc: 1): 2; else: 0); }</style>";
+        let out = run(css, |p| split_pc_branches(p, 5));
+        // Two arms is below the split threshold; the helper prefix
+        // `--__` must not appear.
+        assert!(!out.contains("--__"), "unexpected helper: {out}");
+    }
+
+    #[test]
+    fn split_pc_branches_emits_helpers() {
+        // 5 arms with PC-shaped prop should split into multiple buckets.
+        let css = "<style>.x { --pc: if(style(--pc: 0): 0; style(--pc: 1): 1; style(--pc: 2): 2; style(--pc: 3): 3; style(--pc: 4): 4; else: -1); }</style>";
+        let out = run(css, |p| split_pc_branches(p, 1));
+        assert!(out.contains("--__"), "expected helper decl: {out}");
+    }
+
+    #[test]
+    fn minify_js_collapses_whitespace_in_script() {
+        let html = "<script>\n  let   x   =   1;\n  let   y   =   2;\n</script>";
+        let out = run(html, minify_embedded_js);
+        assert!(!out.contains("   "), "whitespace not collapsed: {out}");
+        assert!(out.contains("let x = 1;"));
+    }
+
+    #[test]
+    fn minify_js_preserves_string_contents() {
+        let html = "<script>const s = '  spaced  string  ';</script>";
+        let out = run(html, minify_embedded_js);
+        assert!(
+            out.contains("'  spaced  string  '"),
+            "string spacing lost: {out}"
+        );
+    }
+
+    #[test]
+    fn minify_js_strips_comments() {
+        let html = "<script>// kill me\nvar x = 1; /* and me */ var y = 2;</script>";
+        let out = run(html, minify_embedded_js);
+        assert!(!out.contains("kill me"));
+        assert!(!out.contains("and me"));
+    }
+
+    #[test]
+    fn full_pipeline_chain_runs_each_pass_once() {
+        // Sequence each pass on one Page and verify the page still
+        // parses & prints cleanly. This is a smoke test that the new
+        // pipeline doesn't corrupt the AST when passes are chained.
+        let html = "<style>\
+            @property --pc { syntax: \"<integer>\"; initial-value: 0; inherits: true; }\
+            .x { --pc: if(style(--pc: 0): 0; style(--pc: 1): 1; style(--pc: 2): 2; style(--pc: 3): 3; else: -1); --y: calc(1 + 2 + 3); }\
+        </style><script>const v = '--pc';</script>";
+        let mut page = Page::from_html(html);
+        split_pc_branches(&mut page, 1);
+        shuffle_arms_in_styles(&mut page, 2);
+        shuffle_commutative_ops(&mut page, 3);
+        shuffle_at_rule_order(&mut page, 4);
+        inject_var_fallbacks(&mut page, 5);
+        minify(&mut page, 6);
+        minify_embedded_js(&mut page);
+        let out = page.print();
+        // Sanity: must still be a well-formed HTML+style fragment.
+        assert!(out.contains("<style>") && out.contains("</style>"));
+        assert!(out.contains("<script>") && out.contains("</script>"));
     }
 }

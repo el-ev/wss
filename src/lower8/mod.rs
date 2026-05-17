@@ -969,10 +969,8 @@ fn bool_not(b: &mut FuncBuilder, bit: Val8) -> Val8 {
     dst
 }
 
-fn bool_to_word(b: &mut FuncBuilder, bit: Val8) -> Word {
-    let dst = b.alloc_word();
-    b.set_word_from_byte(dst, bit);
-    dst
+fn bool_to_word(_b: &mut FuncBuilder, bit: Val8) -> Word {
+    Word::narrow(bit)
 }
 
 fn lower_eq32(b: &mut FuncBuilder, lhs: Word, rhs: Word) -> Word {
@@ -2226,21 +2224,14 @@ mod tests {
             .collect();
         assert_eq!(loads, vec![(5, 0)], "load8_s should load only one byte");
 
-        let b1_fill = match find_inst_def_kind(blocks, ret.b1) {
-            Inst8Kind::Copy(src) => *src,
-            other => panic!("expected b1 sign fill copy, got {other:?}"),
-        };
-        let b2_fill = match find_inst_def_kind(blocks, ret.b2) {
-            Inst8Kind::Copy(src) => *src,
-            other => panic!("expected b2 sign fill copy, got {other:?}"),
-        };
-        let b3_fill = match find_inst_def_kind(blocks, ret.b3) {
-            Inst8Kind::Copy(src) => *src,
-            other => panic!("expected b3 sign fill copy, got {other:?}"),
-        };
-        assert_eq!(b1_fill, b2_fill);
-        assert_eq!(b1_fill, b3_fill);
-        let is_neg = match find_inst_def_kind(blocks, b1_fill) {
+        assert_eq!(ret.b1, ret.b2, "sign-fill lanes should share the same byte");
+        assert_eq!(ret.b1, ret.b3);
+        assert!(
+            !ret.b1.is_imm(),
+            "sign-fill should be a computed vreg, got {:?}",
+            ret.b1
+        );
+        let is_neg = match find_inst_def_kind(blocks, ret.b1) {
             Inst8Kind::Sub(zero, is_neg) if zero.imm_value() == Some(0) => *is_neg,
             other => panic!(
                 "expected sign fill to come from subtracting a boolean from zero, got {other:?}"
@@ -2287,16 +2278,13 @@ mod tests {
             "load16_s should load exactly two bytes"
         );
 
-        let b2_fill = match find_inst_def_kind(blocks, ret.b2) {
-            Inst8Kind::Copy(src) => *src,
-            other => panic!("expected b2 sign fill copy, got {other:?}"),
-        };
-        let b3_fill = match find_inst_def_kind(blocks, ret.b3) {
-            Inst8Kind::Copy(src) => *src,
-            other => panic!("expected b3 sign fill copy, got {other:?}"),
-        };
-        assert_eq!(b2_fill, b3_fill);
-        let is_neg = match find_inst_def_kind(blocks, b2_fill) {
+        assert_eq!(ret.b2, ret.b3, "sign-fill lanes should share the same byte");
+        assert!(
+            !ret.b2.is_imm(),
+            "sign-fill should be a computed vreg, got {:?}",
+            ret.b2
+        );
+        let is_neg = match find_inst_def_kind(blocks, ret.b2) {
             Inst8Kind::Sub(zero, is_neg) if zero.imm_value() == Some(0) => *is_neg,
             other => panic!(
                 "expected sign fill to come from subtracting a boolean from zero, got {other:?}"
@@ -2343,19 +2331,8 @@ mod tests {
             "load16_u should load two bytes"
         );
 
-        let b2_fill = match find_inst_def_kind(blocks, ret.b2) {
-            Inst8Kind::Copy(src) => *src,
-            other => panic!("expected b2 zero fill copy, got {other:?}"),
-        };
-        let b3_fill = match find_inst_def_kind(blocks, ret.b3) {
-            Inst8Kind::Copy(src) => *src,
-            other => panic!("expected b3 zero fill copy, got {other:?}"),
-        };
-        assert_eq!(b2_fill, b3_fill);
-        assert!(
-            b2_fill == Val8::imm(0),
-            "expected zero extension fill to be constant zero"
-        );
+        assert_eq!(ret.b2, Val8::imm(0), "load16_u b2 should be immediate zero");
+        assert_eq!(ret.b3, Val8::imm(0), "load16_u b3 should be immediate zero");
     }
 
     #[test]

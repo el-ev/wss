@@ -44,6 +44,7 @@ pub fn run(prog: &mut Ir8Program) {
         changed |= local_copy_propagation(prog);
         changed |= copy_elim(prog);
         changed |= back_copy_coalesce(prog);
+        changed |= multi_def_zero_fold(prog);
         changed |= instcombine(prog);
         changed |= combine_boolean_chains(prog);
         changed |= store_to_load_forwarding(prog);
@@ -138,6 +139,92 @@ fn back_copy_coalesce_func(blocks: &mut [BasicBlock8]) -> bool {
     true
 }
 
+fn multi_def_zero_fold(prog: &mut Ir8Program) -> bool {
+    let mut changed = false;
+    for blocks in &mut prog.func_blocks {
+        changed |= multi_def_zero_fold_func(blocks);
+    }
+    changed
+}
+
+fn multi_def_zero_fold_func(blocks: &mut [BasicBlock8]) -> bool {
+    let used_before_def = collect_regs_used_before_def(blocks);
+
+    let mut const_def: HashMap<Val8, u8> = HashMap::new();
+    let mut conflicted: HashSet<Val8> = HashSet::new();
+
+    let mut note_def = |dst: Val8, imm: Option<u8>, conflicted: &mut HashSet<Val8>| {
+        if dst.is_imm() || dst.expect_vreg() < VREG_START || conflicted.contains(&dst) {
+            return;
+        }
+        match imm {
+            Some(v) => match const_def.get(&dst).copied() {
+                Some(prev) if prev == v => {}
+                Some(_) => {
+                    conflicted.insert(dst);
+                    const_def.remove(&dst);
+                }
+                None => {
+                    const_def.insert(dst, v);
+                }
+            },
+            None => {
+                conflicted.insert(dst);
+                const_def.remove(&dst);
+            }
+        }
+    };
+
+    for bb in blocks.iter() {
+        for inst in &bb.insts {
+            let Some(dst) = inst.dst else {
+                continue;
+            };
+            let imm = match inst.kind {
+                Inst8Kind::Copy(src) => src.imm_value(),
+                _ => None,
+            };
+            note_def(dst, imm, &mut conflicted);
+        }
+        for r in bb.terminator.defs() {
+            note_def(r, None, &mut conflicted);
+        }
+    }
+
+    let subst: HashMap<Val8, Val8> = const_def
+        .into_iter()
+        .filter(|(dst, _)| !used_before_def.contains(dst))
+        .map(|(dst, v)| (dst, Val8::imm(v)))
+        .collect();
+
+    if subst.is_empty() {
+        return false;
+    }
+
+    rewrite_blocks_with_subst(blocks, &subst);
+
+    let use_counts = collect_use_counts(blocks);
+    for bb in blocks.iter_mut() {
+        bb.insts.retain(|inst| {
+            let Some(dst) = inst.dst else {
+                return true;
+            };
+            match inst.kind {
+                Inst8Kind::Copy(src) if src == dst => false,
+                Inst8Kind::Copy(_)
+                    if dst.expect_vreg() >= VREG_START
+                        && use_counts.get(&dst).copied().unwrap_or(0) == 0 =>
+                {
+                    false
+                }
+                _ => true,
+            }
+        });
+    }
+
+    true
+}
+
 fn copy_elim(prog: &mut Ir8Program) -> bool {
     let mut changed = false;
 
@@ -171,6 +258,14 @@ fn run_block_pass(prog: &mut Ir8Program, pass: fn(&mut BasicBlock8) -> bool) -> 
         }
     }
     changed
+}
+
+fn mem_byte_offset(base: u16, lane: u8) -> u32 {
+    u32::from(base) + u32::from(lane)
+}
+
+fn addr_uses_reg(addr: Addr, reg: Val8) -> bool {
+    reg == addr.lo || reg == addr.hi
 }
 
 fn eliminate_global_copies(blocks: &mut [BasicBlock8]) -> bool {
@@ -449,7 +544,7 @@ fn stlf_block(bb: &mut BasicBlock8) -> bool {
     for inst in bb.insts.iter_mut() {
         match inst.kind {
             Inst8Kind::LoadMem { base, addr, lane } if tracked_addr == Some(addr) => {
-                let offset = (base as u32) + (lane as u32);
+                let offset = mem_byte_offset(base, lane);
                 if let Some(&stored_val) = forwarded.get(&offset) {
                     inst.kind = Inst8Kind::Copy(stored_val);
                     changed = true;
@@ -461,7 +556,7 @@ fn stlf_block(bb: &mut BasicBlock8) -> bool {
                 lane,
                 val,
             } => {
-                let offset = (base as u32) + (lane as u32);
+                let offset = mem_byte_offset(base, lane);
                 if tracked_addr.is_some() && tracked_addr != Some(addr) {
                     forwarded.clear();
                 }
@@ -474,7 +569,7 @@ fn stlf_block(bb: &mut BasicBlock8) -> bool {
         if let Some(dst) = inst.dst
             && let Some(a) = tracked_addr
         {
-            if dst == a.lo || dst == a.hi {
+            if addr_uses_reg(a, dst) {
                 forwarded.clear();
                 tracked_addr = None;
             } else {
@@ -509,7 +604,7 @@ fn local_dead_mem_store_elim_block(bb: &mut BasicBlock8) -> bool {
             Inst8Kind::StoreMem {
                 base, addr, lane, ..
             } => {
-                let offset = (base as u32) + (lane as u32);
+                let offset = mem_byte_offset(base, lane);
                 if tracked_addr == Some(addr) && tracked_offsets.contains(&offset) {
                     keep[i] = false;
                     changed = true;
@@ -524,7 +619,7 @@ fn local_dead_mem_store_elim_block(bb: &mut BasicBlock8) -> bool {
             }
             Inst8Kind::LoadMem { base, addr, lane } => {
                 if tracked_addr == Some(addr) {
-                    let offset = (base as u32) + (lane as u32);
+                    let offset = mem_byte_offset(base, lane);
                     tracked_offsets.remove(&offset);
                     if tracked_offsets.is_empty() {
                         tracked_addr = None;
@@ -539,7 +634,7 @@ fn local_dead_mem_store_elim_block(bb: &mut BasicBlock8) -> bool {
 
         if let Some(dst) = inst.dst
             && let Some(a) = tracked_addr
-            && (dst == a.lo || dst == a.hi)
+            && addr_uses_reg(a, dst)
         {
             tracked_offsets.clear();
             tracked_addr = None;

@@ -24,6 +24,7 @@ mod lower;
 mod lower8;
 mod module;
 mod opt8;
+mod page;
 mod parse;
 mod print;
 mod regalloc;
@@ -345,31 +346,33 @@ fn main() -> Result<()> {
         print!("{}", print_program(&ir8));
     }
 
-    let mut result = emit_program(&ir8, emit_config)?;
+    let html = emit_program(&ir8, emit_config)?;
+    let mut page = page::Page::from_html(&html);
     if let Some(seed) = take("split-pc", args.split_pc, 0x5912_5912) {
-        result = dirty::minify::split_pc_branches(&result, seed);
+        dirty::minify::split_pc_branches(&mut page, seed);
     }
     if let Some(seed) = take("minify-vars", args.minify_vars, 0xC0FFEE) {
-        result = dirty::minify::minify(&result, seed);
+        dirty::minify::minify(&mut page, seed);
     }
     if let Some(seed) = take("shuffle-arms", args.shuffle_arms, 0xBADF00D) {
-        result = dirty::minify::shuffle_arms_in_styles(&result, seed);
+        dirty::minify::shuffle_arms_in_styles(&mut page, seed);
     }
     if let Some(seed) = take("shuffle-ops", args.shuffle_ops, 0xFEEDFACE) {
-        result = dirty::minify::shuffle_commutative_ops(&result, seed);
+        dirty::minify::shuffle_commutative_ops(&mut page, seed);
     }
     if let Some(seed) = take("shuffle-at-rules", args.shuffle_at_rules, 0xD15EA5E) {
-        result = dirty::minify::shuffle_at_rule_order(&result, seed);
+        dirty::minify::shuffle_at_rule_order(&mut page, seed);
     }
     if let Some(seed) = take("decoy-fallbacks", args.decoy_fallbacks, 0xDEC0_FA11) {
-        result = dirty::minify::inject_var_fallbacks(&result, seed);
+        dirty::minify::inject_var_fallbacks(&mut page, seed);
     }
     if let Some(seed) = take("decoy-arms", args.decoy_arms, 0xBADC_0DE0) {
-        result = dirty::minify::inject_lut_decoy_arms(&result, seed);
+        dirty::minify::inject_lut_decoy_arms(&mut page, seed);
     }
     if args.minify_js {
-        result = dirty::minify::minify_embedded_js(&result);
+        dirty::minify::minify_embedded_js(&mut page);
     }
+    let mut result = page.print();
     if !args.no_embed_compile_command {
         let cmd = std::env::args()
             .map(shell_quote)

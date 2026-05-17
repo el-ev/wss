@@ -68,6 +68,29 @@ impl Word {
             b3: Val8::imm(((value >> 24) & 0xff) as u8),
         }
     }
+
+    // Zero-extend a single byte into a Word. b1..b3 are immediate zero, so
+    // downstream ops materialize the zeros as literals instead of vreg fills.
+    pub const fn narrow(b0: Val8) -> Self {
+        Self {
+            b0,
+            b1: Val8::imm(0),
+            b2: Val8::imm(0),
+            b3: Val8::imm(0),
+        }
+    }
+
+    // Build a Word with `b0` as the low byte and a shared `fill` byte
+    // replicated into b1..b3. Useful for sign-extension where all high
+    // lanes share the same computed fill value.
+    pub const fn with_fill(b0: Val8, fill: Val8) -> Self {
+        Self {
+            b0,
+            b1: fill,
+            b2: fill,
+            b3: fill,
+        }
+    }
     pub fn bytes(self) -> [Val8; 4] {
         [self.b0, self.b1, self.b2, self.b3]
     }

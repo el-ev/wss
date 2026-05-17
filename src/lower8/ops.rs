@@ -82,9 +82,7 @@ pub(super) fn lower_inst(
         Inst::ExcFlagGet => {
             let flag = b.alloc_reg();
             b.emit(Inst8::with_dst(flag, Inst8Kind::ExcFlagGet));
-            let dst = b.alloc_word();
-            b.set_word_from_byte(dst, flag);
-            b.set_word(iref, dst);
+            b.set_word(iref, Word::narrow(flag));
             Ok(())
         }
         Inst::ExcTagGet => {
@@ -433,36 +431,37 @@ fn lower_memory_inst(b: &mut FuncBuilder, inst: &Inst, iref: IrNode) -> anyhow::
                 dst
             };
             if *ty == wasmparser::ValType::I32 {
-                let dst = b.alloc_word();
+                let b0 = b.alloc_reg();
                 b.emit(Inst8::with_dst(
-                    dst.b0,
+                    b0,
                     Inst8Kind::LoadMem {
                         base,
                         addr: a,
                         lane: 0,
                     },
                 ));
-                if width == 1 {
-                    let fill = lower_load_fill_byte(b, dst.b0, *signed);
-                    b.emit(Inst8::with_dst(dst.b1, Inst8Kind::Copy(fill)));
-                    b.emit(Inst8::with_dst(dst.b2, Inst8Kind::Copy(fill)));
-                    b.emit(Inst8::with_dst(dst.b3, Inst8Kind::Copy(fill)));
+                let word = if width == 1 {
+                    let fill = lower_load_fill_byte(b, b0, *signed);
+                    Word::with_fill(b0, fill)
                 } else if width == 2 {
+                    let b1 = b.alloc_reg();
                     b.emit(Inst8::with_dst(
-                        dst.b1,
+                        b1,
                         Inst8Kind::LoadMem {
                             base,
                             addr: a,
                             lane: 1,
                         },
                     ));
-                    let fill = lower_load_fill_byte(b, dst.b1, *signed);
-                    b.emit(Inst8::with_dst(dst.b2, Inst8Kind::Copy(fill)));
-                    b.emit(Inst8::with_dst(dst.b3, Inst8Kind::Copy(fill)));
+                    let fill = lower_load_fill_byte(b, b1, *signed);
+                    Word::new(b0, b1, fill, fill)
                 } else {
                     let base_hi = base + 2;
+                    let b1 = b.alloc_reg();
+                    let b2 = b.alloc_reg();
+                    let b3 = b.alloc_reg();
                     b.emit(Inst8::with_dst(
-                        dst.b1,
+                        b1,
                         Inst8Kind::LoadMem {
                             base,
                             addr: a,
@@ -470,7 +469,7 @@ fn lower_memory_inst(b: &mut FuncBuilder, inst: &Inst, iref: IrNode) -> anyhow::
                         },
                     ));
                     b.emit(Inst8::with_dst(
-                        dst.b2,
+                        b2,
                         Inst8Kind::LoadMem {
                             base: base_hi,
                             addr: a,
@@ -478,15 +477,16 @@ fn lower_memory_inst(b: &mut FuncBuilder, inst: &Inst, iref: IrNode) -> anyhow::
                         },
                     ));
                     b.emit(Inst8::with_dst(
-                        dst.b3,
+                        b3,
                         Inst8Kind::LoadMem {
                             base: base_hi,
                             addr: a,
                             lane: 1,
                         },
                     ));
-                }
-                b.set_word(iref, dst);
+                    Word::new(b0, b1, b2, b3)
+                };
+                b.set_word(iref, word);
             } else {
                 let value = match width {
                     8 => {
@@ -500,9 +500,10 @@ fn lower_memory_inst(b: &mut FuncBuilder, inst: &Inst, iref: IrNode) -> anyhow::
                         ValueWords::two(lo, Word::new(fill, fill, fill, fill))
                     }
                     2 => {
-                        let lo = b.alloc_word();
+                        let b0 = b.alloc_reg();
+                        let b1 = b.alloc_reg();
                         b.emit(Inst8::with_dst(
-                            lo.b0,
+                            b0,
                             Inst8Kind::LoadMem {
                                 base,
                                 addr: a,
@@ -510,29 +511,29 @@ fn lower_memory_inst(b: &mut FuncBuilder, inst: &Inst, iref: IrNode) -> anyhow::
                             },
                         ));
                         b.emit(Inst8::with_dst(
-                            lo.b1,
+                            b1,
                             Inst8Kind::LoadMem {
                                 base,
                                 addr: a,
                                 lane: 1,
                             },
                         ));
-                        let fill = lower_load_fill_byte(b, lo.b1, *signed);
-                        let lo_ext = Word::new(lo.b0, lo.b1, fill, fill);
+                        let fill = lower_load_fill_byte(b, b1, *signed);
+                        let lo_ext = Word::new(b0, b1, fill, fill);
                         ValueWords::two(lo_ext, Word::new(fill, fill, fill, fill))
                     }
                     1 => {
-                        let lo = b.alloc_word();
+                        let b0 = b.alloc_reg();
                         b.emit(Inst8::with_dst(
-                            lo.b0,
+                            b0,
                             Inst8Kind::LoadMem {
                                 base,
                                 addr: a,
                                 lane: 0,
                             },
                         ));
-                        let fill = lower_load_fill_byte(b, lo.b0, *signed);
-                        let lo_ext = Word::new(lo.b0, fill, fill, fill);
+                        let fill = lower_load_fill_byte(b, b0, *signed);
+                        let lo_ext = Word::with_fill(b0, fill);
                         ValueWords::two(lo_ext, Word::new(fill, fill, fill, fill))
                     }
                     _ => unreachable!("unsupported i64 load width {}", width),
@@ -629,16 +630,12 @@ fn lower_call_io_inst(
         Inst::Putchar(val_ref) => {
             let val = b.get_word(*val_ref);
             b.emit(Inst8::no_dst(Inst8Kind::Putchar(val.b0)));
-            let dst = b.alloc_word();
-            b.set_word_from_byte(dst, val.b0);
-            b.set_word(iref, dst);
+            b.set_word(iref, Word::narrow(val.b0));
         }
         Inst::Getchar => {
             let ch = b.alloc_reg();
             b.emit(Inst8::with_dst(ch, Inst8Kind::Getchar));
-            let dst = b.alloc_word();
-            b.set_word_from_byte(dst, ch);
-            b.set_word(iref, dst);
+            b.set_word(iref, Word::narrow(ch));
         }
         Inst::Random => {
             let dst = b.alloc_word();

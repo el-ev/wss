@@ -4,8 +4,6 @@ use chumsky::prelude::*;
 
 use super::{Arm, Node, Sign, Term};
 
-/// Parse a CSS value expression. On failure, the entire input is
-/// preserved as [`Node::Raw`].
 pub fn parse(input: &str) -> Node {
     let trimmed = input.trim();
     match atom_parser()
@@ -168,14 +166,6 @@ fn bare_ident<'a>() -> impl Parser<'a, &'a str, Node, Err<'a>> + Clone {
     css_ident().map(|s: &str| Node::Raw(s.to_string()))
 }
 
-// ---------------------------------------------------------------------
-// `if(...)` and `style(...)` have grammars (semicolon-separated arms,
-// `else:` default, raw-text values inside `style(...)`) that don't fit
-// chumsky's pure-combinator model neatly. We read the parenthesized
-// body as a single balanced slice via [`balanced_body`] and then split
-// it with small hand-rolled helpers.
-// ---------------------------------------------------------------------
-
 fn if_call<'a>() -> impl Parser<'a, &'a str, Node, Err<'a>> + Clone {
     just("if(")
         .ignore_then(balanced_body())
@@ -264,10 +254,6 @@ fn parse_if_body(body: &str) -> Node {
 
 fn parse_style_body(body: &str) -> Node {
     let trimmed = body.trim();
-    // Compact-or form: `style((--p: 1) or (--p: 2) or ...)`. We parse
-    // each `(--p: v)` clause as a Style and wrap the whole thing in
-    // `Or` so it round-trips back through the printer's same-prop
-    // collapse rule.
     if trimmed.starts_with('(') {
         let clauses = split_top_level_or(trimmed);
         let parsed: Option<Vec<Node>> = clauses
@@ -293,8 +279,6 @@ fn parse_style_body(body: &str) -> Node {
     Node::Raw(format!("style({})", body))
 }
 
-/// Parse one `(--p: v)` clause from inside a compact `style()` query.
-/// Returns `None` if the clause doesn't match the shape.
 fn parse_paren_style_feature(s: &str) -> Option<Node> {
     let inner = s.strip_prefix('(').and_then(|x| x.strip_suffix(')'))?;
     let inner = inner.trim();
@@ -306,7 +290,6 @@ fn parse_paren_style_feature(s: &str) -> Option<Node> {
     })
 }
 
-/// Find the first `:` at paren depth 0 in `s`. Returns its byte offset.
 fn top_level_colon(s: &str) -> Option<usize> {
     let bytes = s.as_bytes();
     let mut depth: i32 = 0;
