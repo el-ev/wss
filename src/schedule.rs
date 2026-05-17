@@ -826,6 +826,25 @@ mod tests {
     }
 
     #[test]
+    fn schedule_packs_more_than_sixteen_independent_mem_stores() {
+        let addr = Addr::new(r(10), r(11));
+        let insts: Vec<Inst8> = (0..17)
+            .map(|i| {
+                Inst8::no_dst(Inst8Kind::StoreMem {
+                    base: i,
+                    addr,
+                    lane: 0,
+                    val: r(20 + i),
+                })
+            })
+            .collect();
+
+        let cycles = schedule_block_ops(&insts);
+        assert_eq!(cycles.len(), 1);
+        assert_eq!(cycles[0].len(), 17);
+    }
+
+    #[test]
     fn schedule_splits_compute_from_mem_store_cycle() {
         let addr = Addr::new(r(10), r(11));
         let insts = vec![

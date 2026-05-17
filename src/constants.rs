@@ -12,4 +12,4 @@ pub const DEFAULT_MAX_PHYS_REGS: u16 = 256;
 
 pub const SCHEDULE_MAX_OPS_PER_CYCLE: usize = 64;
 pub const SCHEDULE_MAX_COMPLEXITY_PER_CYCLE: usize = 64;
-pub const SCHEDULE_MAX_STORE_MEM_PER_CYCLE: usize = 16;
+pub const SCHEDULE_MAX_STORE_MEM_PER_CYCLE: usize = 32;
