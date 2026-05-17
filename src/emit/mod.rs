@@ -16,7 +16,7 @@ use std::fmt::Write;
 
 use anyhow::Context;
 use bitflags::bitflags;
-use paste::paste;
+use pastey::paste;
 
 #[cfg(test)]
 use crate::constants::{
