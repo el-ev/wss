@@ -1102,4 +1102,40 @@ mod tests {
             .expect("expected CsStorePc in first cycle");
         assert_eq!(cs_store_val.index(), 2);
     }
+
+    #[test]
+    fn schedule_splits_load_from_dependent_putchar() {
+        let addr = Addr::new(r(10), r(11));
+        let insts = vec![
+            Inst8::with_dst(
+                r(20),
+                Inst8Kind::LoadMem {
+                    base: 0,
+                    addr,
+                    lane: 0,
+                },
+            ),
+            Inst8::no_dst(Inst8Kind::Putchar(r(20))),
+        ];
+
+        let cycles = schedule_block_ops(&insts);
+        assert_eq!(cycles.len(), 2);
+    }
+
+    #[test]
+    fn schedule_splits_add_from_dependent_store() {
+        let addr = Addr::new(r(10), r(11));
+        let insts = vec![
+            Inst8::with_dst(r(20), Inst8Kind::Add(r(1), r(2))),
+            Inst8::no_dst(Inst8Kind::StoreMem {
+                base: 0,
+                addr,
+                lane: 0,
+                val: r(20),
+            }),
+        ];
+
+        let cycles = schedule_block_ops(&insts);
+        assert_eq!(cycles.len(), 2);
+    }
 }

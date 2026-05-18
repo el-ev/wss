@@ -55,9 +55,10 @@ pub fn run(prog: &mut Ir8Program) {
         changed |= remove_unreachable_blocks(prog);
         changed |= coalesce_linear_blocks(prog);
         if !changed {
-            return;
+            break;
         }
     }
+    unroll_printf_loop(prog);
 }
 
 fn back_copy_coalesce(prog: &mut Ir8Program) -> bool {
@@ -491,7 +492,7 @@ fn predicate_branch_putchar(prog: &mut Ir8Program) -> bool {
     changed
 }
 
-fn predicate_branch_putchar_once(blocks: &mut Vec<BasicBlock8>) -> bool {
+fn predicate_branch_putchar_once(blocks: &mut [BasicBlock8]) -> bool {
     if blocks.len() < 2 {
         return false;
     }
@@ -590,6 +591,394 @@ fn next_vreg(blocks: &[BasicBlock8]) -> Val8 {
         }
     }
     Val8::reg(max)
+}
+
+const MAX_UNROLLS_PER_FUNC: usize = 8;
+
+fn unroll_printf_loop(prog: &mut Ir8Program) -> bool {
+    let mut changed = false;
+    let mut next_vreg = prog.num_vregs.max(VREG_START);
+    for blocks in &mut prog.func_blocks {
+        let mut count = 0;
+        let mut pending: Vec<(usize, PrintLoopShape)> = Vec::new();
+        for (i, bb) in blocks.iter().enumerate() {
+            if count >= MAX_UNROLLS_PER_FUNC {
+                break;
+            }
+            if let Some(shape) = analyze_print_loop(bb) {
+                pending.push((i, shape));
+                count += 1;
+            }
+        }
+        let mut new_blocks: Vec<BasicBlock8> = Vec::new();
+        let mut next_pc = blocks.iter().map(|b| b.id.index() + 1).max().unwrap_or(0);
+        for (idx, shape) in &pending {
+            let base = next_vreg;
+            let drain_pc = if shape.put_before_load {
+                let pc = Pc::new(next_pc);
+                next_pc += 1;
+                Some(pc)
+            } else {
+                None
+            };
+            let (rewritten, rw) =
+                rewrite_print_loop(&blocks[*idx], shape, &mut next_vreg, drain_pc);
+            if next_vreg != base {
+                blocks[*idx] = rewritten;
+                changed = true;
+                if shape.put_before_load {
+                    let drain_pc = drain_pc.unwrap();
+                    init_predecessors(blocks, &new_blocks, shape);
+                    new_blocks.push(make_drain_block(drain_pc, shape, &rw));
+                }
+            }
+        }
+        blocks.extend(new_blocks);
+    }
+    if changed {
+        prog.num_vregs = next_vreg;
+    }
+    changed
+}
+
+fn init_predecessors(blocks: &mut [BasicBlock8], extra: &[BasicBlock8], shape: &PrintLoopShape) {
+    let loop_pc = shape.self_pc;
+    let loop_bb = blocks
+        .iter()
+        .chain(extra.iter())
+        .find(|b| b.id == loop_pc)
+        .expect("loop block must exist");
+    let enable_regs: Vec<Val8> = loop_bb
+        .insts
+        .iter()
+        .filter_map(|inst| match inst.kind {
+            Inst8Kind::PutcharIf { enable, .. } => Some(enable),
+            _ => None,
+        })
+        .collect();
+    if enable_regs.is_empty() {
+        return;
+    }
+    let zero = Val8::imm(0);
+    for bb in blocks.iter_mut() {
+        if bb.id == loop_pc {
+            continue;
+        }
+        if !bb.terminator.successors().contains(&loop_pc) {
+            continue;
+        }
+        for &e in &enable_regs {
+            bb.insts.push(Inst8::with_dst(e, Inst8Kind::Copy(zero)));
+        }
+    }
+}
+
+fn make_drain_block(drain_pc: Pc, shape: &PrintLoopShape, rw: &RewriteVregs) -> BasicBlock8 {
+    debug_assert!(shape.put_before_load);
+    let insts = vec![
+        Inst8::no_dst(Inst8Kind::PutcharIf {
+            val: shape.putchar_val,
+            enable: rw.n1,
+        }),
+        Inst8::no_dst(Inst8Kind::PutcharIf {
+            val: rw.c2,
+            enable: rw.e2,
+        }),
+        Inst8::no_dst(Inst8Kind::PutcharIf {
+            val: rw.c3,
+            enable: rw.e3,
+        }),
+        Inst8::no_dst(Inst8Kind::PutcharIf {
+            val: rw.c4,
+            enable: rw.e4,
+        }),
+    ];
+    BasicBlock8 {
+        id: drain_pc,
+        insts,
+        terminator: Terminator8::Goto(shape.exit_pc),
+    }
+}
+
+struct PrintLoopShape {
+    load_idx: usize,
+    load_base: u16,
+    load_addr: Addr,
+    load_dst: Val8,
+    putchar_idx: usize,
+    putchar_val: Val8,
+    counter_inc_idxs: [usize; 4],
+    counter: Word,
+    self_pc: Pc,
+    exit_pc: Pc,
+    branch_cond: Val8,
+    put_before_load: bool,
+}
+
+struct RewriteVregs {
+    n1: Val8,
+    c2: Val8,
+    c3: Val8,
+    c4: Val8,
+    e2: Val8,
+    e3: Val8,
+    e4: Val8,
+}
+
+fn analyze_print_loop(bb: &BasicBlock8) -> Option<PrintLoopShape> {
+    let Terminator8::Branch {
+        cond,
+        if_true,
+        if_false,
+    } = bb.terminator
+    else {
+        return None;
+    };
+    if if_true != bb.id {
+        return None;
+    }
+
+    let mut putchar_idx: Option<(usize, Val8)> = None;
+    let mut load_info: Option<(usize, u16, Addr, Val8)> = None;
+    let mut adds_plus1: Vec<(usize, u8, Word, Val8)> = Vec::new();
+
+    for (idx, inst) in bb.insts.iter().enumerate() {
+        match inst.kind {
+            Inst8Kind::Putchar(v) => {
+                if putchar_idx.is_some() {
+                    return None;
+                }
+                putchar_idx = Some((idx, v));
+            }
+            Inst8Kind::PutcharIf { .. } | Inst8Kind::Getchar => return None,
+            Inst8Kind::LoadMem {
+                base,
+                addr,
+                lane: 0,
+            } => {
+                if load_info.is_some() {
+                    return None;
+                }
+                load_info = Some((idx, base, addr, inst.dst?));
+            }
+            Inst8Kind::LoadMem { .. } | Inst8Kind::StoreMem { .. } => return None,
+            Inst8Kind::Add32Byte { lhs, rhs, lane } if rhs == Word::from_u32_imm(1) => {
+                adds_plus1.push((idx, lane, lhs, inst.dst?));
+            }
+            _ => {
+                if rewrite::has_side_effect(&inst.kind) {
+                    return None;
+                }
+            }
+        }
+    }
+
+    let (putchar_idx, putchar_val) = putchar_idx?;
+    let (load_idx, load_base, load_addr, load_dst) = load_info?;
+
+    // Putchar must use the loaded byte (directly or via copy chain).
+    if putchar_val != load_dst {
+        let is_copy_chain = bb.insts.iter().any(|inst| {
+            matches!(inst.kind, Inst8Kind::Copy(src) if src == load_dst)
+                && inst.dst == Some(putchar_val)
+        });
+        if !is_copy_chain {
+            return None;
+        }
+    }
+
+    if adds_plus1.len() != 4 {
+        return None;
+    }
+    let counter = adds_plus1[0].2;
+    if !adds_plus1.iter().all(|(_, _, lhs, _)| *lhs == counter) {
+        return None;
+    }
+    let mut counter_inc_idxs = [0usize; 4];
+    let mut seen_lanes = [false; 4];
+    for &(idx, lane, _, _) in &adds_plus1 {
+        if lane > 3 || seen_lanes[lane as usize] {
+            return None;
+        }
+        seen_lanes[lane as usize] = true;
+        counter_inc_idxs[lane as usize] = idx;
+    }
+
+    // The load address must depend on the counter.
+    let defs: HashMap<Val8, &Inst8> = bb
+        .insts
+        .iter()
+        .filter_map(|inst| inst.dst.map(|d| (d, inst)))
+        .collect();
+    let counter_bytes = [counter.b0, counter.b1, counter.b2, counter.b3];
+    let depends_on_counter = |v: Val8| -> bool {
+        if counter_bytes.contains(&v) {
+            return true;
+        }
+        if let Some(inst) = defs.get(&v) {
+            inst.uses().iter().any(|u| counter_bytes.contains(u))
+        } else {
+            false
+        }
+    };
+    if !depends_on_counter(load_addr.lo) && !depends_on_counter(load_addr.hi) {
+        return None;
+    }
+
+    Some(PrintLoopShape {
+        load_idx,
+        load_base,
+        load_addr,
+        load_dst,
+        putchar_idx,
+        putchar_val,
+        counter_inc_idxs,
+        counter,
+        self_pc: if_true,
+        exit_pc: if_false,
+        branch_cond: cond,
+        put_before_load: putchar_idx < load_idx,
+    })
+}
+
+fn rewrite_print_loop(
+    bb: &BasicBlock8,
+    shape: &PrintLoopShape,
+    next_vreg: &mut u16,
+    drain_pc: Option<Pc>,
+) -> (BasicBlock8, RewriteVregs) {
+    let mut alloc = || {
+        let v = Val8::reg(*next_vreg);
+        *next_vreg += 1;
+        v
+    };
+
+    let c2 = alloc();
+    let c3 = alloc();
+    let c4 = alloc();
+    let n1 = alloc();
+    let e2 = alloc();
+    let e3 = alloc();
+    let e4 = alloc();
+    let combined = alloc();
+
+    let rw = RewriteVregs {
+        n1,
+        c2,
+        c3,
+        c4,
+        e2,
+        e3,
+        e4,
+    };
+
+    let zero = Val8::imm(0);
+    let four = Word::from_u32_imm(4);
+    let mk_and = |dst: Val8, vals: &[Val8]| {
+        Inst8::with_dst(dst, bool::make_bool_kind(bool::BoolOp::And, vals).unwrap())
+    };
+
+    let special = [
+        shape.load_idx,
+        shape.putchar_idx,
+        shape.counter_inc_idxs[0],
+        shape.counter_inc_idxs[1],
+        shape.counter_inc_idxs[2],
+        shape.counter_inc_idxs[3],
+    ];
+
+    let emit_loads_and_alive = |new_insts: &mut Vec<Inst8>, next_vreg: &mut u16| {
+        let base = shape.load_base;
+        new_insts.push(Inst8::with_dst(
+            shape.load_dst,
+            Inst8Kind::LoadMem {
+                base,
+                addr: shape.load_addr,
+                lane: 0,
+            },
+        ));
+        for &(dst, off) in &[(c2, 1u16), (c3, 2), (c4, 3)] {
+            new_insts.push(Inst8::with_dst(
+                dst,
+                Inst8Kind::LoadMem {
+                    base: base + off,
+                    addr: shape.load_addr,
+                    lane: 0,
+                },
+            ));
+        }
+        let n2 = Val8::reg(*next_vreg);
+        *next_vreg += 1;
+        let n3 = Val8::reg(*next_vreg);
+        *next_vreg += 1;
+        let n4 = Val8::reg(*next_vreg);
+        *next_vreg += 1;
+        new_insts.push(Inst8::with_dst(n1, Inst8Kind::Ne(shape.load_dst, zero)));
+        new_insts.push(Inst8::with_dst(n2, Inst8Kind::Ne(c2, zero)));
+        new_insts.push(Inst8::with_dst(n3, Inst8Kind::Ne(c3, zero)));
+        new_insts.push(Inst8::with_dst(n4, Inst8Kind::Ne(c4, zero)));
+        new_insts.push(mk_and(e2, &[n1, n2]));
+        new_insts.push(mk_and(e3, &[n1, n2, n3]));
+        new_insts.push(mk_and(e4, &[n1, n2, n3, n4]));
+    };
+
+    let emit_putchars = |new_insts: &mut Vec<Inst8>| {
+        new_insts.push(Inst8::no_dst(Inst8Kind::Putchar(shape.putchar_val)));
+        new_insts.push(Inst8::no_dst(Inst8Kind::PutcharIf {
+            val: c2,
+            enable: e2,
+        }));
+        new_insts.push(Inst8::no_dst(Inst8Kind::PutcharIf {
+            val: c3,
+            enable: e3,
+        }));
+        new_insts.push(Inst8::no_dst(Inst8Kind::PutcharIf {
+            val: c4,
+            enable: e4,
+        }));
+    };
+
+    let mut new_insts: Vec<Inst8> = Vec::with_capacity(bb.insts.len() + 20);
+    for (idx, inst) in bb.insts.iter().enumerate() {
+        if idx == shape.load_idx {
+            emit_loads_and_alive(&mut new_insts, next_vreg);
+            continue;
+        }
+        if idx == shape.putchar_idx {
+            emit_putchars(&mut new_insts);
+            continue;
+        }
+        if special.contains(&idx) {
+            if let Inst8Kind::Add32Byte { lane, .. } = inst.kind {
+                new_insts.push(Inst8::with_dst(
+                    inst.dst.unwrap(),
+                    Inst8Kind::Add32Byte {
+                        lhs: shape.counter,
+                        rhs: four,
+                        lane,
+                    },
+                ));
+            }
+            continue;
+        }
+        new_insts.push(inst.clone());
+    }
+
+    new_insts.push(mk_and(combined, &[shape.branch_cond, e4]));
+
+    let exit_target = drain_pc.unwrap_or(shape.exit_pc);
+    (
+        BasicBlock8 {
+            id: bb.id,
+            insts: new_insts,
+            terminator: Terminator8::Branch {
+                cond: combined,
+                if_true: shape.self_pc,
+                if_false: exit_target,
+            },
+        },
+        rw,
+    )
 }
 
 fn coalesce_linear_blocks(prog: &mut Ir8Program) -> bool {

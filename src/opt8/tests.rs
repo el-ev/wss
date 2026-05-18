@@ -1,6 +1,6 @@
 use super::{
-    copy_elim, dead_code_elim, instcombine::instcombine, local_dead_mem_store_elim, run,
-    store_to_load_forwarding, thread_empty_gotos_func,
+    copy_elim, dead_code_elim, instcombine::instcombine, local_dead_mem_store_elim,
+    predicate_branch_putchar, run, store_to_load_forwarding, thread_empty_gotos_func,
 };
 use crate::ir8::{
     Addr, BasicBlock8, BoolNary8, BuiltinId, CallTarget, Inst8, Inst8Kind, Ir8Program, Pc,
@@ -1492,4 +1492,485 @@ fn opt8_stlf_clears_on_store_to_different_addr() {
     }]);
 
     assert!(!store_to_load_forwarding(&mut prog));
+}
+
+#[test]
+fn opt8_predicate_branch_putchar_hoists_then_arm() {
+    // $B0: ... ; branch r10 -> $B1 (putchar) / $B2 (join)
+    // $B1: putchar '!'; goto $B2
+    // $B2: putchar r20; exit
+    let mut prog = mk_prog(vec![
+        BasicBlock8 {
+            id: Pc::new(0),
+            insts: vec![],
+            terminator: Terminator8::Branch {
+                cond: r(10),
+                if_true: Pc::new(1),
+                if_false: Pc::new(2),
+            },
+        },
+        BasicBlock8 {
+            id: Pc::new(1),
+            insts: vec![Inst8::no_dst(Inst8Kind::Putchar(Val8::imm(0x21)))],
+            terminator: Terminator8::Goto(Pc::new(2)),
+        },
+        BasicBlock8 {
+            id: Pc::new(2),
+            insts: vec![Inst8::no_dst(Inst8Kind::Putchar(r(20)))],
+            terminator: Terminator8::Exit { val: None },
+        },
+    ]);
+
+    assert!(predicate_branch_putchar(&mut prog));
+
+    // Block 0 now ends in PutcharIf + Goto(2).
+    let b0 = &prog.func_blocks[0][0];
+    assert_eq!(b0.insts.len(), 1);
+    let putif = match b0.insts[0].kind {
+        Inst8Kind::PutcharIf { val, enable } => (val.imm_value(), enable),
+        ref other => panic!("expected PutcharIf, got {other:?}"),
+    };
+    assert_eq!(putif.0, Some(0x21));
+    assert_eq!(putif.1, r(10));
+    assert!(matches!(b0.terminator, Terminator8::Goto(p) if p == Pc::new(2)));
+}
+
+#[test]
+fn opt8_predicate_branch_putchar_inverts_else_arm() {
+    // $B0 branch cond -> $B_join / $B_put. The arm is if_false; needs BoolNot.
+    let mut prog = mk_prog(vec![
+        BasicBlock8 {
+            id: Pc::new(0),
+            insts: vec![],
+            terminator: Terminator8::Branch {
+                cond: r(10),
+                if_true: Pc::new(2),
+                if_false: Pc::new(1),
+            },
+        },
+        BasicBlock8 {
+            id: Pc::new(1),
+            insts: vec![Inst8::no_dst(Inst8Kind::Putchar(Val8::imm(0x5c)))],
+            terminator: Terminator8::Goto(Pc::new(2)),
+        },
+        BasicBlock8 {
+            id: Pc::new(2),
+            insts: vec![],
+            terminator: Terminator8::Exit { val: None },
+        },
+    ]);
+
+    assert!(predicate_branch_putchar(&mut prog));
+
+    let b0 = &prog.func_blocks[0][0];
+    // Expect: BoolNot to a fresh vreg, then PutcharIf using that vreg.
+    assert_eq!(b0.insts.len(), 2);
+    let neg_dst = match (b0.insts[0].dst, b0.insts[0].kind) {
+        (Some(d), Inst8Kind::BoolNot(s)) if s == r(10) => d,
+        _ => panic!("expected BoolNot of r10"),
+    };
+    match b0.insts[1].kind {
+        Inst8Kind::PutcharIf { val, enable } => {
+            assert_eq!(val.imm_value(), Some(0x5c));
+            assert_eq!(enable, neg_dst);
+        }
+        ref other => panic!("expected PutcharIf, got {other:?}"),
+    }
+}
+
+#[test]
+fn opt8_predicate_branch_putchar_skips_when_arm_has_extra_insts() {
+    let mut prog = mk_prog(vec![
+        BasicBlock8 {
+            id: Pc::new(0),
+            insts: vec![],
+            terminator: Terminator8::Branch {
+                cond: r(10),
+                if_true: Pc::new(1),
+                if_false: Pc::new(2),
+            },
+        },
+        BasicBlock8 {
+            id: Pc::new(1),
+            insts: vec![
+                Inst8::with_dst(r(20), Inst8Kind::Add(r(11), r(12))),
+                Inst8::no_dst(Inst8Kind::Putchar(r(20))),
+            ],
+            terminator: Terminator8::Goto(Pc::new(2)),
+        },
+        BasicBlock8 {
+            id: Pc::new(2),
+            insts: vec![],
+            terminator: Terminator8::Exit { val: None },
+        },
+    ]);
+
+    // Arm has 2 insts (Add + Putchar), not a single Putchar — must not fold.
+    assert!(!predicate_branch_putchar(&mut prog));
+}
+
+#[test]
+fn opt8_unroll_printf_loop_rewrites_canonical_self_loop() {
+    // Build the canonical print_str body:
+    //   putchar v
+    //   c = load.mem [0+P]
+    //   v = copy c
+    //   4x add32.bN(P, +1)
+    //   4x copy P.bN = add_dst
+    //   cond = ne c 0
+    //   branch cond -> self / exit
+    let p = Word::new(r(8), r(9), r(10), r(11));
+    let p_addr = Addr::new(r(8), r(9));
+    let v = r(16);
+    let c = r(20);
+    let a0 = r(30);
+    let a1 = r(31);
+    let a2 = r(32);
+    let a3 = r(33);
+    let cond = r(40);
+
+    let one = Word::from_u32_imm(1);
+
+    let mut prog = mk_prog(vec![
+        BasicBlock8 {
+            id: Pc::new(0),
+            insts: vec![
+                Inst8::no_dst(Inst8Kind::Putchar(v)),
+                Inst8::with_dst(
+                    c,
+                    Inst8Kind::LoadMem {
+                        base: 0,
+                        addr: p_addr,
+                        lane: 0,
+                    },
+                ),
+                Inst8::with_dst(v, Inst8Kind::Copy(c)),
+                Inst8::with_dst(
+                    a0,
+                    Inst8Kind::Add32Byte {
+                        lhs: p,
+                        rhs: one,
+                        lane: 0,
+                    },
+                ),
+                Inst8::with_dst(
+                    a1,
+                    Inst8Kind::Add32Byte {
+                        lhs: p,
+                        rhs: one,
+                        lane: 1,
+                    },
+                ),
+                Inst8::with_dst(
+                    a2,
+                    Inst8Kind::Add32Byte {
+                        lhs: p,
+                        rhs: one,
+                        lane: 2,
+                    },
+                ),
+                Inst8::with_dst(
+                    a3,
+                    Inst8Kind::Add32Byte {
+                        lhs: p,
+                        rhs: one,
+                        lane: 3,
+                    },
+                ),
+                Inst8::with_dst(p.b0, Inst8Kind::Copy(a0)),
+                Inst8::with_dst(p.b1, Inst8Kind::Copy(a1)),
+                Inst8::with_dst(p.b2, Inst8Kind::Copy(a2)),
+                Inst8::with_dst(p.b3, Inst8Kind::Copy(a3)),
+                Inst8::with_dst(cond, Inst8Kind::Ne(c, Val8::imm(0))),
+            ],
+            terminator: Terminator8::Branch {
+                cond,
+                if_true: Pc::new(0),
+                if_false: Pc::new(1),
+            },
+        },
+        BasicBlock8 {
+            id: Pc::new(1),
+            insts: vec![],
+            terminator: Terminator8::Exit { val: None },
+        },
+    ]);
+
+    assert!(super::unroll_printf_loop(&mut prog));
+
+    let body = &prog.func_blocks[0][0].insts;
+    let putchar_count = body
+        .iter()
+        .filter(|i| matches!(i.kind, Inst8Kind::Putchar(_)))
+        .count();
+    let putchar_if_count = body
+        .iter()
+        .filter(|i| matches!(i.kind, Inst8Kind::PutcharIf { .. }))
+        .count();
+    let load_count = body
+        .iter()
+        .filter(|i| matches!(i.kind, Inst8Kind::LoadMem { .. }))
+        .count();
+    assert_eq!(putchar_count, 1, "exactly 1 unconditional putchar");
+    assert_eq!(putchar_if_count, 3, "3 conditional putchars");
+    assert_eq!(load_count, 4, "4 loads (one per byte of the 4-byte window)");
+
+    // Counter increment changed from +1 to +4.
+    let add4_count = body
+        .iter()
+        .filter(|i| {
+            matches!(
+                i.kind,
+                Inst8Kind::Add32Byte { rhs, .. } if rhs == Word::from_u32_imm(4)
+            )
+        })
+        .count();
+    assert_eq!(add4_count, 4, "counter increments by 4");
+}
+
+#[test]
+fn opt8_unroll_printf_loop_handles_direct_putchar_of_load_dst() {
+    // Pattern where putchar uses load_dst directly (no copy):
+    //   c = load.mem [0+P]
+    //   putchar c
+    //   4x add32.bN(P, +1)
+    //   4x copy P.bN = add_dst
+    //   cond = ne(add_dst0, 0) | ne(add_dst1, 0) | ...
+    //   branch cond -> self / exit
+    let p = Word::new(r(8), r(9), r(10), r(11));
+    let p_addr = Addr::new(r(8), r(9));
+    let c = r(20);
+    let a0 = r(30);
+    let a1 = r(31);
+    let a2 = r(32);
+    let a3 = r(33);
+    let cond = r(40);
+    let n0 = r(41);
+    let n1 = r(42);
+    let n2 = r(43);
+    let n3 = r(44);
+
+    let one = Word::from_u32_imm(1);
+
+    let mut prog = mk_prog(vec![
+        BasicBlock8 {
+            id: Pc::new(0),
+            insts: vec![
+                Inst8::with_dst(
+                    c,
+                    Inst8Kind::LoadMem {
+                        base: 0,
+                        addr: p_addr,
+                        lane: 0,
+                    },
+                ),
+                Inst8::no_dst(Inst8Kind::Putchar(c)),
+                Inst8::with_dst(
+                    a0,
+                    Inst8Kind::Add32Byte {
+                        lhs: p,
+                        rhs: one,
+                        lane: 0,
+                    },
+                ),
+                Inst8::with_dst(
+                    a1,
+                    Inst8Kind::Add32Byte {
+                        lhs: p,
+                        rhs: one,
+                        lane: 1,
+                    },
+                ),
+                Inst8::with_dst(
+                    a2,
+                    Inst8Kind::Add32Byte {
+                        lhs: p,
+                        rhs: one,
+                        lane: 2,
+                    },
+                ),
+                Inst8::with_dst(
+                    a3,
+                    Inst8Kind::Add32Byte {
+                        lhs: p,
+                        rhs: one,
+                        lane: 3,
+                    },
+                ),
+                Inst8::with_dst(p.b0, Inst8Kind::Copy(a0)),
+                Inst8::with_dst(p.b1, Inst8Kind::Copy(a1)),
+                Inst8::with_dst(p.b2, Inst8Kind::Copy(a2)),
+                Inst8::with_dst(p.b3, Inst8Kind::Copy(a3)),
+                Inst8::with_dst(n0, Inst8Kind::Ne(a0, Val8::imm(0))),
+                Inst8::with_dst(n1, Inst8Kind::Ne(a1, Val8::imm(0))),
+                Inst8::with_dst(n2, Inst8Kind::Ne(a2, Val8::imm(0))),
+                Inst8::with_dst(n3, Inst8Kind::Ne(a3, Val8::imm(0))),
+                Inst8::with_dst(
+                    cond,
+                    Inst8Kind::BoolOr(BoolNary8::from_vals(&[n0, n1, n2, n3]).unwrap()),
+                ),
+            ],
+            terminator: Terminator8::Branch {
+                cond,
+                if_true: Pc::new(0),
+                if_false: Pc::new(1),
+            },
+        },
+        BasicBlock8 {
+            id: Pc::new(1),
+            insts: vec![],
+            terminator: Terminator8::Exit { val: None },
+        },
+    ]);
+
+    assert!(super::unroll_printf_loop(&mut prog));
+
+    let body = &prog.func_blocks[0][0].insts;
+    let putchar_count = body
+        .iter()
+        .filter(|i| matches!(i.kind, Inst8Kind::Putchar(_)))
+        .count();
+    let putchar_if_count = body
+        .iter()
+        .filter(|i| matches!(i.kind, Inst8Kind::PutcharIf { .. }))
+        .count();
+    let load_count = body
+        .iter()
+        .filter(|i| matches!(i.kind, Inst8Kind::LoadMem { .. }))
+        .count();
+    assert_eq!(putchar_count, 1);
+    assert_eq!(putchar_if_count, 3);
+    assert_eq!(load_count, 4);
+}
+
+#[test]
+fn opt8_unroll_printf_loop_handles_addr_with_static_offset() {
+    // Pattern: addr = counter + static_offset, load from addr.
+    let counter = Word::new(r(12), r(13), r(14), r(15));
+    let offset = Word::new(Val8::imm(0x64), Val8::imm(0), Val8::imm(0), Val8::imm(0));
+    let addr_lo = r(80);
+    let addr_hi = r(81);
+    let c = r(84);
+    let a0 = r(91);
+    let a1 = r(92);
+    let a2 = r(93);
+    let a3 = r(94);
+    let n0 = r(99);
+    let n1 = r(100);
+    let n2 = r(101);
+    let n3 = r(102);
+    let cond = r(103);
+
+    let one = Word::from_u32_imm(1);
+
+    let mut prog = mk_prog(vec![
+        BasicBlock8 {
+            id: Pc::new(0),
+            insts: vec![
+                Inst8::with_dst(
+                    addr_lo,
+                    Inst8Kind::Add32Byte {
+                        lhs: counter,
+                        rhs: offset,
+                        lane: 0,
+                    },
+                ),
+                Inst8::with_dst(
+                    addr_hi,
+                    Inst8Kind::Add32Byte {
+                        lhs: counter,
+                        rhs: offset,
+                        lane: 1,
+                    },
+                ),
+                Inst8::with_dst(
+                    c,
+                    Inst8Kind::LoadMem {
+                        base: 0,
+                        addr: Addr::new(addr_lo, addr_hi),
+                        lane: 0,
+                    },
+                ),
+                Inst8::no_dst(Inst8Kind::Putchar(c)),
+                Inst8::with_dst(
+                    a0,
+                    Inst8Kind::Add32Byte {
+                        lhs: counter,
+                        rhs: one,
+                        lane: 0,
+                    },
+                ),
+                Inst8::with_dst(
+                    a1,
+                    Inst8Kind::Add32Byte {
+                        lhs: counter,
+                        rhs: one,
+                        lane: 1,
+                    },
+                ),
+                Inst8::with_dst(
+                    a2,
+                    Inst8Kind::Add32Byte {
+                        lhs: counter,
+                        rhs: one,
+                        lane: 2,
+                    },
+                ),
+                Inst8::with_dst(
+                    a3,
+                    Inst8Kind::Add32Byte {
+                        lhs: counter,
+                        rhs: one,
+                        lane: 3,
+                    },
+                ),
+                Inst8::with_dst(counter.b0, Inst8Kind::Copy(a0)),
+                Inst8::with_dst(counter.b1, Inst8Kind::Copy(a1)),
+                Inst8::with_dst(counter.b2, Inst8Kind::Copy(a2)),
+                Inst8::with_dst(counter.b3, Inst8Kind::Copy(a3)),
+                Inst8::with_dst(n0, Inst8Kind::Ne(a0, Val8::imm(0))),
+                Inst8::with_dst(n1, Inst8Kind::Ne(a1, Val8::imm(0))),
+                Inst8::with_dst(n2, Inst8Kind::Ne(a2, Val8::imm(0))),
+                Inst8::with_dst(n3, Inst8Kind::Ne(a3, Val8::imm(0))),
+                Inst8::with_dst(
+                    cond,
+                    Inst8Kind::BoolOr(BoolNary8::from_vals(&[n0, n1, n2, n3]).unwrap()),
+                ),
+            ],
+            terminator: Terminator8::Branch {
+                cond,
+                if_true: Pc::new(0),
+                if_false: Pc::new(1),
+            },
+        },
+        BasicBlock8 {
+            id: Pc::new(1),
+            insts: vec![],
+            terminator: Terminator8::Exit { val: None },
+        },
+    ]);
+
+    assert!(super::unroll_printf_loop(&mut prog));
+
+    let body = &prog.func_blocks[0][0].insts;
+    let load_count = body
+        .iter()
+        .filter(|i| matches!(i.kind, Inst8Kind::LoadMem { .. }))
+        .count();
+    let putchar_if_count = body
+        .iter()
+        .filter(|i| matches!(i.kind, Inst8Kind::PutcharIf { .. }))
+        .count();
+    assert_eq!(load_count, 4);
+    assert_eq!(putchar_if_count, 3);
+
+    // Loads should use base offsets 0, 1, 2, 3 with the same addr.
+    let load_bases: Vec<u16> = body
+        .iter()
+        .filter_map(|i| match i.kind {
+            Inst8Kind::LoadMem { base, .. } => Some(base),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(load_bases, vec![0, 1, 2, 3]);
 }
