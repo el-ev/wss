@@ -1418,31 +1418,21 @@ fn build_case_config(
     })
 }
 
+fn is_wat_source(artifacts: &CaseArtifacts) -> bool {
+    artifacts
+        .source_path
+        .extension()
+        .is_some_and(|ext| ext == "wat")
+}
+
 fn compile_case_to_wasm(
     test_case: &TestCase,
     artifacts: &CaseArtifacts,
     case_config: &CaseConfig,
     env_cfg: &EnvConfig,
 ) -> std::result::Result<(), RunError> {
-    let is_wat = artifacts
-        .source_path
-        .extension()
-        .is_some_and(|ext| ext == "wat");
-    if is_wat {
-        let args = vec![
-            "--enable-exceptions".to_string(),
-            path_arg_from_root(&artifacts.source_path, &env_cfg.root),
-            "-o".to_string(),
-            path_arg_from_root(&artifacts.wasm_path, &env_cfg.root),
-        ];
-        return run_checked(
-            "wat2wasm",
-            &args,
-            &env_cfg.root,
-            &format!("[{}] wat2wasm compile", test_case.id),
-            env_cfg.clang_timeout_ms,
-        )
-        .map(|_| ());
+    if is_wat_source(artifacts) {
+        return Ok(());
     }
     let args = build_clang_args(
         &artifacts.source_path,
@@ -1466,8 +1456,13 @@ fn transpile_case_to_html(
     case_config: &CaseConfig,
     env_cfg: &EnvConfig,
 ) -> std::result::Result<(), RunError> {
+    let input_path = if is_wat_source(artifacts) {
+        &artifacts.source_path
+    } else {
+        &artifacts.wasm_path
+    };
     let args = build_wss_args(
-        &artifacts.wasm_path,
+        input_path,
         &artifacts.html_path,
         case_config,
         &env_cfg.root,
@@ -2105,6 +2100,7 @@ mod tests {
             stack_slots: None,
             max_frames: None,
             virtual_time_budget_ms: None,
+            nondeterministic: false,
         }
     }
 

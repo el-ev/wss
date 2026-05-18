@@ -1974,3 +1974,306 @@ fn opt8_unroll_printf_loop_handles_addr_with_static_offset() {
         .collect();
     assert_eq!(load_bases, vec![0, 1, 2, 3]);
 }
+
+#[test]
+fn opt8_unroll_printf_loop_recognizes_putchar_if() {
+    let p = Word::new(r(8), r(9), r(10), r(11));
+    let p_addr = Addr::new(r(8), r(9));
+    let c = r(20);
+    let en = r(21);
+    let a0 = r(30);
+    let a1 = r(31);
+    let a2 = r(32);
+    let a3 = r(33);
+    let cond = r(40);
+    let n0 = r(41);
+    let n1 = r(42);
+    let n2 = r(43);
+    let n3 = r(44);
+
+    let one = Word::from_u32_imm(1);
+
+    let mut prog = mk_prog(vec![
+        BasicBlock8 {
+            id: Pc::new(0),
+            insts: vec![
+                Inst8::with_dst(
+                    c,
+                    Inst8Kind::LoadMem {
+                        base: 0,
+                        addr: p_addr,
+                        lane: 0,
+                    },
+                ),
+                Inst8::with_dst(en, Inst8Kind::Ne(r(50), Val8::imm(0))),
+                Inst8::no_dst(Inst8Kind::PutcharIf { val: c, enable: en }),
+                Inst8::with_dst(
+                    a0,
+                    Inst8Kind::Add32Byte {
+                        lhs: p,
+                        rhs: one,
+                        lane: 0,
+                    },
+                ),
+                Inst8::with_dst(
+                    a1,
+                    Inst8Kind::Add32Byte {
+                        lhs: p,
+                        rhs: one,
+                        lane: 1,
+                    },
+                ),
+                Inst8::with_dst(
+                    a2,
+                    Inst8Kind::Add32Byte {
+                        lhs: p,
+                        rhs: one,
+                        lane: 2,
+                    },
+                ),
+                Inst8::with_dst(
+                    a3,
+                    Inst8Kind::Add32Byte {
+                        lhs: p,
+                        rhs: one,
+                        lane: 3,
+                    },
+                ),
+                Inst8::with_dst(p.b0, Inst8Kind::Copy(a0)),
+                Inst8::with_dst(p.b1, Inst8Kind::Copy(a1)),
+                Inst8::with_dst(p.b2, Inst8Kind::Copy(a2)),
+                Inst8::with_dst(p.b3, Inst8Kind::Copy(a3)),
+                Inst8::with_dst(n0, Inst8Kind::Ne(a0, Val8::imm(0))),
+                Inst8::with_dst(n1, Inst8Kind::Ne(a1, Val8::imm(0))),
+                Inst8::with_dst(n2, Inst8Kind::Ne(a2, Val8::imm(0))),
+                Inst8::with_dst(n3, Inst8Kind::Ne(a3, Val8::imm(0))),
+                Inst8::with_dst(
+                    cond,
+                    Inst8Kind::BoolOr(BoolNary8::from_vals(&[n0, n1, n2, n3]).unwrap()),
+                ),
+            ],
+            terminator: Terminator8::Branch {
+                cond,
+                if_true: Pc::new(0),
+                if_false: Pc::new(1),
+            },
+        },
+        BasicBlock8 {
+            id: Pc::new(1),
+            insts: vec![],
+            terminator: Terminator8::Exit { val: None },
+        },
+    ]);
+
+    assert!(super::unroll_printf_loop(&mut prog));
+
+    let body = &prog.func_blocks[0][0].insts;
+    // No unconditional Putchar — all 4 should be PutcharIf.
+    let putchar_count = body
+        .iter()
+        .filter(|i| matches!(i.kind, Inst8Kind::Putchar(_)))
+        .count();
+    let putchar_if_count = body
+        .iter()
+        .filter(|i| matches!(i.kind, Inst8Kind::PutcharIf { .. }))
+        .count();
+    let load_count = body
+        .iter()
+        .filter(|i| matches!(i.kind, Inst8Kind::LoadMem { .. }))
+        .count();
+    assert_eq!(
+        putchar_count, 0,
+        "original PutcharIf should not become Putchar"
+    );
+    assert_eq!(putchar_if_count, 4, "1 original + 3 unrolled PutcharIfs");
+    assert_eq!(load_count, 4);
+
+    // First PutcharIf should use the original enable register.
+    let first_pif = body
+        .iter()
+        .find(|i| matches!(i.kind, Inst8Kind::PutcharIf { .. }))
+        .unwrap();
+    match first_pif.kind {
+        Inst8Kind::PutcharIf { enable, .. } => assert_eq!(enable, en),
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn opt8_unroll_printf_loop_bounded_multi_putchar() {
+    // Quine-like pattern: putchar_if(constant, eq(c, escape)) + putchar(c)
+    // with bounded loop condition (counter < end).
+    let counter = Word::new(r(8), r(9), r(10), r(11));
+    let _end_word = Word::new(r(12), r(13), r(14), r(15));
+    let c = r(20);
+    let esc_eq = r(21);
+    let esc_cond = r(22);
+    let eq_b1 = r(23);
+    let eq_b2 = r(24);
+    let eq_b3 = r(25);
+    let a0 = r(30);
+    let a1 = r(31);
+    let a2 = r(32);
+    let a3 = r(33);
+    let lt3 = r(40);
+    let eq3 = r(41);
+    let lt2 = r(42);
+    let eq2 = r(43);
+    let lt1 = r(44);
+    let eq1 = r(45);
+    let lt0 = r(46);
+    let t1 = r(47);
+    let t2 = r(48);
+    let t3 = r(49);
+    let t4 = r(50);
+    let cond = r(51);
+    let one = Word::from_u32_imm(1);
+
+    let mut prog = mk_prog(vec![
+        BasicBlock8 {
+            id: Pc::new(0),
+            insts: vec![
+                // Load byte
+                Inst8::with_dst(
+                    c,
+                    Inst8Kind::LoadMem {
+                        base: 0,
+                        addr: Addr::new(r(8), r(9)),
+                        lane: 0,
+                    },
+                ),
+                // Escape check: eq(c, escape_char) AND eq(b1,0) AND ...
+                Inst8::with_dst(esc_eq, Inst8Kind::Eq(c, r(16))),
+                Inst8::with_dst(eq_b1, Inst8Kind::Eq(r(17), Val8::imm(0))),
+                Inst8::with_dst(eq_b2, Inst8Kind::Eq(r(18), Val8::imm(0))),
+                Inst8::with_dst(eq_b3, Inst8Kind::Eq(r(19), Val8::imm(0))),
+                Inst8::with_dst(
+                    esc_cond,
+                    Inst8Kind::BoolAnd(
+                        BoolNary8::from_vals(&[esc_eq, eq_b1, eq_b2, eq_b3]).unwrap(),
+                    ),
+                ),
+                // putchar_if('\\', esc_cond)
+                Inst8::no_dst(Inst8Kind::PutcharIf {
+                    val: Val8::imm(0x5c),
+                    enable: esc_cond,
+                }),
+                // putchar(c)
+                Inst8::no_dst(Inst8Kind::Putchar(c)),
+                // counter += 1
+                Inst8::with_dst(
+                    a0,
+                    Inst8Kind::Add32Byte {
+                        lhs: counter,
+                        rhs: one,
+                        lane: 0,
+                    },
+                ),
+                Inst8::with_dst(
+                    a1,
+                    Inst8Kind::Add32Byte {
+                        lhs: counter,
+                        rhs: one,
+                        lane: 1,
+                    },
+                ),
+                Inst8::with_dst(
+                    a2,
+                    Inst8Kind::Add32Byte {
+                        lhs: counter,
+                        rhs: one,
+                        lane: 2,
+                    },
+                ),
+                Inst8::with_dst(
+                    a3,
+                    Inst8Kind::Add32Byte {
+                        lhs: counter,
+                        rhs: one,
+                        lane: 3,
+                    },
+                ),
+                Inst8::with_dst(counter.b0, Inst8Kind::Copy(a0)),
+                Inst8::with_dst(counter.b1, Inst8Kind::Copy(a1)),
+                Inst8::with_dst(counter.b2, Inst8Kind::Copy(a2)),
+                Inst8::with_dst(counter.b3, Inst8Kind::Copy(a3)),
+                // counter < end (multi-byte lt_u)
+                Inst8::with_dst(lt3, Inst8Kind::LtU(r(11), r(15))),
+                Inst8::with_dst(eq3, Inst8Kind::Eq(r(11), r(15))),
+                Inst8::with_dst(lt2, Inst8Kind::LtU(r(10), r(14))),
+                Inst8::with_dst(eq2, Inst8Kind::Eq(r(10), r(14))),
+                Inst8::with_dst(lt1, Inst8Kind::LtU(r(9), r(13))),
+                Inst8::with_dst(eq1, Inst8Kind::Eq(r(9), r(13))),
+                Inst8::with_dst(lt0, Inst8Kind::LtU(r(8), r(12))),
+                Inst8::with_dst(
+                    t1,
+                    Inst8Kind::BoolAnd(BoolNary8::from_vals(&[eq3, lt2]).unwrap()),
+                ),
+                Inst8::with_dst(
+                    t2,
+                    Inst8Kind::BoolAnd(BoolNary8::from_vals(&[eq3, eq2]).unwrap()),
+                ),
+                Inst8::with_dst(
+                    t3,
+                    Inst8Kind::BoolAnd(BoolNary8::from_vals(&[t2, lt1]).unwrap()),
+                ),
+                Inst8::with_dst(
+                    t4,
+                    Inst8Kind::BoolAnd(BoolNary8::from_vals(&[t2, eq1, lt0]).unwrap()),
+                ),
+                Inst8::with_dst(
+                    cond,
+                    Inst8Kind::BoolOr(BoolNary8::from_vals(&[lt3, t1, t3, t4]).unwrap()),
+                ),
+            ],
+            terminator: Terminator8::Branch {
+                cond,
+                if_true: Pc::new(0),
+                if_false: Pc::new(1),
+            },
+        },
+        BasicBlock8 {
+            id: Pc::new(1),
+            insts: vec![],
+            terminator: Terminator8::Exit { val: None },
+        },
+    ]);
+
+    assert!(super::unroll_printf_loop(&mut prog));
+
+    let body = &prog.func_blocks[0][0].insts;
+    let load_count = body
+        .iter()
+        .filter(|i| matches!(i.kind, Inst8Kind::LoadMem { .. }))
+        .count();
+    let putchar_count = body
+        .iter()
+        .filter(|i| matches!(i.kind, Inst8Kind::Putchar(_)))
+        .count();
+    let putchar_if_count = body
+        .iter()
+        .filter(|i| matches!(i.kind, Inst8Kind::PutcharIf { .. }))
+        .count();
+
+    assert_eq!(load_count, 4);
+    // Slot 0: putchar_if(constant, esc_cond) + putchar(c) = 1 putchar + 1 putchar_if
+    // Slots 1-3: putchar_if(constant, alive&esc) + putchar_if(c, alive) = 6 putchar_ifs
+    assert_eq!(putchar_count, 1);
+    assert_eq!(putchar_if_count, 7);
+
+    // Verify no Sub32Byte for null-term alive -- bounded uses Sub32Byte
+    let sub_count = body
+        .iter()
+        .filter(|i| matches!(i.kind, Inst8Kind::Sub32Byte { .. }))
+        .count();
+    assert!(sub_count >= 2, "bounded alive uses Sub32Byte for remaining");
+
+    // Verify the branch condition is the original (not combined with e4)
+    let Terminator8::Branch {
+        cond: final_cond, ..
+    } = prog.func_blocks[0][0].terminator
+    else {
+        panic!("expected branch");
+    };
+    assert_eq!(final_cond, cond, "bounded loop keeps original branch cond");
+}
