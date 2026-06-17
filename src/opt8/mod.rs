@@ -611,102 +611,19 @@ fn unroll_printf_loop(prog: &mut Ir8Program) -> bool {
                 count += 1;
             }
         }
-        let mut new_blocks: Vec<BasicBlock8> = Vec::new();
-        let mut next_pc = blocks.iter().map(|b| b.id.index() + 1).max().unwrap_or(0);
         for (idx, shape) in &pending {
             let base = next_vreg;
-            let drain_pc = if shape.put_before_load {
-                let pc = Pc::new(next_pc);
-                next_pc += 1;
-                Some(pc)
-            } else {
-                None
-            };
-            let (rewritten, rw) =
-                rewrite_print_loop(&blocks[*idx], shape, &mut next_vreg, drain_pc);
+            let rewritten = rewrite_print_loop(&blocks[*idx], shape, &mut next_vreg);
             if next_vreg != base {
                 blocks[*idx] = rewritten;
                 changed = true;
-                if shape.put_before_load {
-                    let drain_pc = drain_pc.unwrap();
-                    init_predecessors(blocks, &new_blocks, shape);
-                    new_blocks.push(make_drain_block(drain_pc, shape, &rw, &mut next_vreg));
-                }
             }
         }
-        blocks.extend(new_blocks);
     }
     if changed {
         prog.num_vregs = next_vreg;
     }
     changed
-}
-
-fn init_predecessors(blocks: &mut [BasicBlock8], extra: &[BasicBlock8], shape: &PrintLoopShape) {
-    let loop_pc = shape.self_pc;
-    let loop_bb = blocks
-        .iter()
-        .chain(extra.iter())
-        .find(|b| b.id == loop_pc)
-        .expect("loop block must exist");
-    let enable_regs: Vec<Val8> = loop_bb
-        .insts
-        .iter()
-        .filter_map(|inst| match inst.kind {
-            Inst8Kind::PutcharIf { enable, .. } => Some(enable),
-            _ => None,
-        })
-        .collect();
-    if enable_regs.is_empty() {
-        return;
-    }
-    let zero = Val8::imm(0);
-    for bb in blocks.iter_mut() {
-        if bb.id == loop_pc {
-            continue;
-        }
-        if !bb.terminator.successors().contains(&loop_pc) {
-            continue;
-        }
-        for &e in &enable_regs {
-            bb.insts.push(Inst8::with_dst(e, Inst8Kind::Copy(zero)));
-        }
-    }
-}
-
-fn make_drain_block(
-    drain_pc: Pc,
-    shape: &PrintLoopShape,
-    rw: &RewriteVregs,
-    next_vreg: &mut u16,
-) -> BasicBlock8 {
-    debug_assert!(shape.put_before_load);
-    let mk_and = |dst: Val8, vals: &[Val8]| {
-        Inst8::with_dst(dst, bool::make_bool_kind(bool::BoolOp::And, vals).unwrap())
-    };
-    let mut insts = Vec::new();
-    let alive = [rw.n1, rw.e2, rw.e3, rw.e4];
-    for (&base_alive, slot_vals) in alive.iter().zip(rw.slot_vals.iter()) {
-        for pe in &shape.putchar_entries {
-            let val = rename_val(pe.val, &slot_vals.rename);
-            let enable = match pe.enable {
-                Some(en) => {
-                    let renamed_en = rename_val(en, &slot_vals.rename);
-                    let g = Val8::reg(*next_vreg);
-                    *next_vreg += 1;
-                    insts.push(mk_and(g, &[base_alive, renamed_en]));
-                    g
-                }
-                None => base_alive,
-            };
-            insts.push(Inst8::no_dst(Inst8Kind::PutcharIf { val, enable }));
-        }
-    }
-    BasicBlock8 {
-        id: drain_pc,
-        insts,
-        terminator: Terminator8::Goto(shape.exit_pc),
-    }
 }
 
 struct PrintLoopShape {
@@ -723,6 +640,7 @@ struct PrintLoopShape {
     self_pc: Pc,
     exit_pc: Pc,
     branch_cond: Val8,
+    carried_update_idx: Option<usize>,
     put_before_load: bool,
     bound_end: Option<Word>,
 }
@@ -736,14 +654,6 @@ struct PutcharEntry {
 struct SlotVals {
     loaded: Val8,
     rename: HashMap<Val8, Val8>,
-}
-
-struct RewriteVregs {
-    n1: Val8,
-    e2: Val8,
-    e3: Val8,
-    e4: Val8,
-    slot_vals: [SlotVals; 4],
 }
 
 fn rename_val(v: Val8, rename: &HashMap<Val8, Val8>) -> Val8 {
@@ -957,6 +867,30 @@ fn analyze_print_loop(bb: &BasicBlock8) -> Option<PrintLoopShape> {
 
     let first_putchar_idx = putchar_entries.iter().map(|pe| pe.idx).min().unwrap();
 
+    let mut carried_update_idx = None;
+    if first_putchar_idx < load_idx {
+        if bound_end.is_some() || putchar_entries.len() != 1 || putchar_entries[0].enable.is_some()
+        {
+            return None;
+        }
+        let update_idx = bb.insts.iter().position(|inst| {
+            let Inst8Kind::Copy(src) = inst.kind else {
+                return false;
+            };
+            src == load_dst && inst.dst == Some(putchar_entries[0].val)
+        })?;
+        if update_idx <= load_idx || update_idx >= counter_inc_idxs[0] {
+            return None;
+        }
+        if !matches!(
+            bb.insts.iter().find(|inst| inst.dst == Some(cond)).map(|inst| inst.kind),
+            Some(Inst8Kind::Ne(v, Val8::Imm(0))) if v == load_dst
+        ) {
+            return None;
+        }
+        carried_update_idx = Some(update_idx);
+    }
+
     Some(PrintLoopShape {
         load_idx,
         load_base,
@@ -971,6 +905,7 @@ fn analyze_print_loop(bb: &BasicBlock8) -> Option<PrintLoopShape> {
         self_pc: if_true,
         exit_pc: if_false,
         branch_cond: cond,
+        carried_update_idx,
         put_before_load: first_putchar_idx < load_idx,
         bound_end,
     })
@@ -1049,8 +984,7 @@ fn rewrite_print_loop(
     bb: &BasicBlock8,
     shape: &PrintLoopShape,
     next_vreg: &mut u16,
-    drain_pc: Option<Pc>,
-) -> (BasicBlock8, RewriteVregs) {
+) -> BasicBlock8 {
     let mut alloc = || {
         let v = Val8::reg(*next_vreg);
         *next_vreg += 1;
@@ -1273,10 +1207,28 @@ fn rewrite_print_loop(
                     emit_alive_null_term(&mut new_insts, next_vreg);
                 }
             }
+            if shape.put_before_load {
+                for (val, enable) in [(shape.load_dst, n1), (c2, e2), (c3, e3)] {
+                    new_insts.push(Inst8::no_dst(Inst8Kind::PutcharIf { val, enable }));
+                }
+            }
+            continue;
+        }
+        if shape.put_before_load && shape.carried_update_idx == Some(idx) {
+            new_insts.push(Inst8::with_dst(
+                shape.putchar_entries[0].val,
+                Inst8Kind::Copy(c4),
+            ));
             continue;
         }
         if idx == shape.first_putchar_idx {
-            emit_putchar_group(&mut new_insts, next_vreg, &slot_dep_insts);
+            if shape.put_before_load {
+                new_insts.push(Inst8::no_dst(Inst8Kind::Putchar(
+                    shape.putchar_entries[0].val,
+                )));
+            } else {
+                emit_putchar_group(&mut new_insts, next_vreg, &slot_dep_insts);
+            }
             continue;
         }
         if special.contains(&idx) {
@@ -1309,34 +1261,21 @@ fn rewrite_print_loop(
         new_insts.push(mk_and(combined, &[shape.branch_cond, e4]));
     }
 
-    let exit_target = drain_pc.unwrap_or(shape.exit_pc);
-
-    let rw = RewriteVregs {
-        n1,
-        e2,
-        e3,
-        e4,
-        slot_vals,
-    };
-
     let branch_cond_final = if shape.bound_end.is_some() {
         shape.branch_cond
     } else {
         combined
     };
 
-    (
-        BasicBlock8 {
-            id: bb.id,
-            insts: new_insts,
-            terminator: Terminator8::Branch {
-                cond: branch_cond_final,
-                if_true: shape.self_pc,
-                if_false: exit_target,
-            },
+    BasicBlock8 {
+        id: bb.id,
+        insts: new_insts,
+        terminator: Terminator8::Branch {
+            cond: branch_cond_final,
+            if_true: shape.self_pc,
+            if_false: shape.exit_pc,
         },
-        rw,
-    )
+    }
 }
 
 fn coalesce_linear_blocks(prog: &mut Ir8Program) -> bool {

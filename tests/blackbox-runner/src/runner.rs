@@ -415,11 +415,7 @@ pub(crate) fn run() -> Result<i32> {
         println!("Retries per case: {}", cli.retries);
     }
     if cli.jobs > 1 && cases.len() > 1 {
-        println!(
-            "Parallel jobs: {} (compat flag case-node-heap-mb={})",
-            usize::min(cli.jobs, cases.len()),
-            cli.case_node_heap_mb
-        );
+        println!("Parallel jobs: {}", usize::min(cli.jobs, cases.len()));
     }
     if skipped_lengthy > 0 {
         println!(

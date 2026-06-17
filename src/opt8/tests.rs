@@ -1726,6 +1726,51 @@ fn opt8_unroll_printf_loop_rewrites_canonical_self_loop() {
         })
         .count();
     assert_eq!(add4_count, 4, "counter increments by 4");
+
+    let load_dsts: Vec<Val8> = body
+        .iter()
+        .filter_map(|i| match i.kind {
+            Inst8Kind::LoadMem { .. } => i.dst,
+            _ => None,
+        })
+        .collect();
+    assert_eq!(load_dsts.len(), 4);
+
+    let load_start = body
+        .iter()
+        .position(|i| matches!(i.kind, Inst8Kind::LoadMem { .. }))
+        .unwrap();
+    let putchar_vals: Vec<(usize, Val8)> = body
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, i)| match i.kind {
+            Inst8Kind::Putchar(v) => Some((idx, v)),
+            Inst8Kind::PutcharIf { val, .. } => Some((idx, val)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        putchar_vals.iter().map(|(_, val)| *val).collect::<Vec<_>>(),
+        vec![v, load_dsts[0], load_dsts[1], load_dsts[2]]
+    );
+    assert!(putchar_vals[0].0 < load_start);
+    assert!(putchar_vals[1..].iter().all(|(idx, _)| *idx > load_start));
+
+    let carried_copy = body
+        .iter()
+        .find(|i| i.dst == Some(v))
+        .expect("loop-carried print value should be updated");
+    assert!(matches!(carried_copy.kind, Inst8Kind::Copy(src) if src == load_dsts[3]));
+
+    let branch_cond = match prog.func_blocks[0][0].terminator {
+        Terminator8::Branch { cond, .. } => cond,
+        ref other => panic!("expected branch, got {other:?}"),
+    };
+    let branch_cond_def = body
+        .iter()
+        .find(|i| i.dst == Some(branch_cond))
+        .expect("branch condition should be defined in the loop");
+    assert!(matches!(branch_cond_def.kind, Inst8Kind::BoolAnd(_)));
 }
 
 #[test]

@@ -182,6 +182,33 @@
     }
   },
   {
+    "id": "rpg_quit",
+    "source": "examples/rpg.c",
+    "console_input": "q",
+    "memory_bytes": 2048,
+    "stack_slots": 128,
+    "virtual_time_budget_ms": 60000,
+    "tags": ["lengthy"],
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000000",
+      "rendered_includes": [
+        "Tiny Crown RPG",
+        "Type a letter, then Enter.",
+        "Win 2 fights, then beat the dragon.",
+        "HP 14/14  Gold 4  Pots 1",
+        "F fight",
+        "S shop",
+        "I inn 2",
+        "D dragon",
+        "Q quit",
+        "You leave.",
+        "Program exited with code",
+        "0x00000000"
+      ]
+    }
+  },
+  {
     "id": "getchar_echo_once",
     "source": "tests/cases/getchar_echo_once.c",
     "console_input": "Q",
