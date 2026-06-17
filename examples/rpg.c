@@ -9,6 +9,7 @@ static int sword = 0;
 static int wins = 0;
 static int won = 0;
 
+__attribute__((noinline))
 static void print_str(const char *s) {
   while (*s) {
     putchar(*s);
