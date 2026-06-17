@@ -539,7 +539,7 @@ impl<'a> Emitter<'a> {
                 };
             }
 
-            if self.uses_callstack && self.cs_trap {
+            if self.uses_callstack() && self.cs_trap {
                 Self::dedupe_bounds_checks(&mut trap_cs_parts);
                 let trap_cs = Self::clamp_sum_or_zero(&trap_cs_parts);
 
@@ -646,7 +646,7 @@ impl<'a> Emitter<'a> {
                 }
             }
 
-            if self.uses_callstack {
+            if self.uses_callstack() {
                 for s in 0..self.max_cs_store_slots {
                     if let Some(cs) = cs_stores.get(s) {
                         let _ = write!(csw_idx_arms[s], "style(--_1pc: {}): {}; ", pc, cs.idx);
@@ -664,7 +664,7 @@ impl<'a> Emitter<'a> {
                 }
             }
 
-            if self.uses_callstack
+            if self.uses_callstack()
                 && let Some(e) = cs_sp_expr
             {
                 let _ = write!(cs_sp_arms, "style(--_1pc: {}): {}; ", pc, e);
@@ -701,8 +701,8 @@ impl<'a> Emitter<'a> {
         if !r_shadow_line.is_empty() {
             let _ = writeln!(out, "{}", r_shadow_line);
         }
-        for g in 0..self.global_count {
-            let gv = self.global_init[g as usize];
+        for (g, &gv) in self.program.global_init.iter().enumerate() {
+            let g = g as u32;
             let mut g_shadow_line = String::new();
             for lane in 0..4u8 {
                 let init = (gv >> (u32::from(lane) * 8)) & 0xff;
@@ -717,8 +717,7 @@ impl<'a> Emitter<'a> {
             let _ = writeln!(out, "{}", g_shadow_line);
         }
         let mut mem_shadow_line = String::new();
-        for (i, name) in self.mem_names.iter().enumerate() {
-            let init = self.mem_init.get(i).copied().unwrap_or(0);
+        for (i, (name, &init)) in self.mem_names.iter().zip(&self.mem_init).enumerate() {
             let s = Self::shadow_name(2, name);
             let _ = write!(
                 mem_shadow_line,
@@ -750,7 +749,7 @@ impl<'a> Emitter<'a> {
                 let _ = writeln!(out, " --_1exc_tag_{}: var(--_2exc_tag_{}, 0);", lane, lane);
             }
         }
-        if self.uses_callstack {
+        if self.uses_callstack() {
             let _ = writeln!(out, " --_1cs_sp: var(--_2cs_sp, 0);");
             let mut cs_shadow_line = String::new();
             for (i, name) in self.cs_names.iter().enumerate() {
@@ -814,7 +813,7 @@ impl<'a> Emitter<'a> {
             }
         }
 
-        if self.uses_callstack {
+        if self.uses_callstack() {
             Self::emit_slot_with_cse(out, "csi", &csw_idx_arms, "0");
             for s in 0..self.max_cs_store_slots {
                 Self::emit_if_or_fallback(out, &format!("--csp{}", s), &csw_par_arms[s], "0");
@@ -840,7 +839,7 @@ impl<'a> Emitter<'a> {
         let pc_fallback = "--sel(--lt(var(--_1pc), 0), var(--_1pc), calc(var(--_1pc) + 1))";
         Self::emit_if_or_fallback(out, "--pc", &pc_arms, pc_fallback);
         Self::emit_if_or_fallback(out, "--wait_input", &wait_input_arms, "0");
-        if self.uses_callstack {
+        if self.uses_callstack() {
             Self::emit_if_or_fallback(out, "--cs_sp", &cs_sp_arms, "var(--_1cs_sp)");
         }
         if self.uses_exceptions {
@@ -872,13 +871,13 @@ impl<'a> Emitter<'a> {
             Self::emit_if_or_fallback(out, &format!("--r{}", r), arms, &fallback);
         }
 
-        for g in 0..self.global_count {
+        for g in 0..self.program.global_init.len() as u32 {
             let mut g_line = String::new();
             for lane in 0..4u8 {
-                let arms = g_arms.get(&(g, lane)).cloned().unwrap_or_default();
+                let arms = g_arms.get(&(g, lane)).map(String::as_str).unwrap_or("");
                 let global_lane = Self::global_lane_name(g, lane);
                 let fallback = format!("var({})", Self::staged_global_lane_name(1, g, lane));
-                g_line.push_str(&Self::if_or_fallback_decl(&global_lane, &arms, &fallback));
+                g_line.push_str(&Self::if_or_fallback_decl(&global_lane, arms, &fallback));
             }
             let _ = writeln!(out, "{}", g_line);
         }
@@ -907,7 +906,7 @@ impl<'a> Emitter<'a> {
             let _ = writeln!(out, "{}", mem_line);
         }
 
-        if self.uses_callstack {
+        if self.uses_callstack() {
             let mut cs_line = String::new();
             for (i, name) in self.cs_names.iter().enumerate() {
                 let prev = format!("var({})", Self::shadow_name(1, name));
@@ -1023,7 +1022,7 @@ impl<'a> Emitter<'a> {
             },
             Terminator8::Return { val } => {
                 let exit_code_expr = Self::emit_exit_value(reg_now, *val);
-                let fallback_pc_expr = if self.uses_callstack {
+                let fallback_pc_expr = if self.uses_callstack() {
                     // Return may be in a later packed cycle than CsLoadPc; in that case,
                     // re-read RA from the current call-stack top.
                     let idx = "var(--_1cs_sp)";

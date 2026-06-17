@@ -310,6 +310,7 @@ struct UsageScan {
     uses_eq: bool,
     uses_ne: bool,
     uses_ge: bool,
+    uses_bitcount: bool,
 }
 
 #[derive(Clone)]
@@ -384,10 +385,7 @@ struct Emitter<'a> {
     memory_end: u32,
     mem_names: Vec<String>,
     mem_init: Vec<u16>,
-    uses_callstack: bool,
     cs_names: Vec<String>,
-    global_count: u32,
-    global_init: Vec<u32>,
     uses_exceptions: bool,
     uses_exc_payload: bool,
     uses_bitcount: bool,
@@ -581,10 +579,6 @@ impl<'a> Emitter<'a> {
             Vec::new()
         };
 
-        let global_count = Self::scan_global_count(program).max(program.global_init.len() as u32);
-        let mut global_init = program.global_init.clone();
-        global_init.resize(global_count as usize, 0);
-
         let mut max_mem_store_slots = 0usize;
         let mut max_mem_read_slots = 0usize;
         let mut max_mem_addr_slots = 0usize;
@@ -642,13 +636,10 @@ impl<'a> Emitter<'a> {
             memory_end,
             mem_names,
             mem_init,
-            uses_callstack,
             cs_names,
-            global_count,
-            global_init,
             uses_exceptions,
             uses_exc_payload,
-            uses_bitcount: Self::scan_uses_bitcount(program),
+            uses_bitcount: usage.uses_bitcount,
             max_mem_store_slots,
             max_mem_read_slots,
             max_mem_addr_slots,
@@ -658,22 +649,8 @@ impl<'a> Emitter<'a> {
         })
     }
 
-    fn scan_global_count(program: &Ir8Program) -> u32 {
-        let mut max_idx = 0u32;
-        let mut seen = false;
-        for cycle in &program.cycles {
-            for op in &cycle.ops {
-                match op.kind {
-                    Inst8Kind::GlobalGetByte { global_idx, .. }
-                    | Inst8Kind::GlobalSetByte { global_idx, .. } => {
-                        seen = true;
-                        max_idx = max_idx.max(global_idx);
-                    }
-                    _ => {}
-                }
-            }
-        }
-        if seen { max_idx + 1 } else { 0 }
+    fn uses_callstack(&self) -> bool {
+        !self.cs_names.is_empty()
     }
 
     fn cell_offset_hex_width(cell_count: usize) -> usize {
@@ -706,18 +683,6 @@ impl<'a> Emitter<'a> {
 
     fn staged_global_lane_name(stage: u8, global_idx: u32, lane: u8) -> String {
         format!("--_{}{}_{}", stage, Self::global_name(global_idx), lane)
-    }
-
-    fn scan_uses_bitcount(program: &Ir8Program) -> bool {
-        program.cycles.iter().any(|cycle| {
-            matches!(
-                cycle.terminator,
-                Terminator8::CallSetup {
-                    callee_entry: CallTarget::Builtin(BuiltinId::Clz32 | BuiltinId::Ctz32),
-                    ..
-                }
-            )
-        })
     }
 
     fn scan_uses_callstack(program: &Ir8Program) -> bool {
@@ -789,6 +754,7 @@ impl<'a> Emitter<'a> {
             } = cycle.terminator
             {
                 usage.uses_ne = true;
+                usage.uses_bitcount = true;
             }
             if matches!(cycle.terminator, Terminator8::Switch { .. }) {
                 usage.uses_eq = true;

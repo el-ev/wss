@@ -56,28 +56,20 @@ impl<'a> Emitter<'a> {
             self.emit_byte_ctz_lookup(out);
         }
 
-        let mem_shadow = self
+        let mem_reads = self
             .mem_names
             .iter()
-            .map(|n| Self::shadow_name(0, n))
-            .collect::<Vec<_>>();
-        let mem_reads = mem_shadow
-            .iter()
             .enumerate()
-            .map(|(i, name)| (i, format!("var({})", name)))
+            .map(|(i, name)| (i, format!("var({})", Self::shadow_name(0, name))))
             .collect::<Vec<_>>();
         Self::emit_chunked_read_function(out, "--read_m16", &mem_reads);
 
-        if self.uses_callstack {
-            let cs_shadow = self
+        if self.uses_callstack() {
+            let cs_reads = self
                 .cs_names
                 .iter()
-                .map(|n| Self::shadow_name(1, n))
-                .collect::<Vec<_>>();
-            let cs_reads = cs_shadow
-                .iter()
                 .enumerate()
-                .map(|(i, name)| (i, format!("var({})", name)))
+                .map(|(i, name)| (i, format!("var({})", Self::shadow_name(1, name))))
                 .collect::<Vec<_>>();
             Self::emit_chunked_read_function(out, "--read_cs", &cs_reads);
         }
@@ -93,7 +85,7 @@ impl<'a> Emitter<'a> {
         }
 
         let codes: Vec<TrapCode> =
-            terminal_codes(self.uses_callstack, self.mem_trap, self.cs_trap).collect();
+            terminal_codes(self.uses_callstack(), self.mem_trap, self.cs_trap).collect();
         out.push_str(".screen::after { white-space: pre-wrap; word-break: break-all; ");
         out.push_str("content: if(");
         for code in &codes {
@@ -557,7 +549,7 @@ impl<'a> Emitter<'a> {
     }
 
     pub(super) fn emit_callstack_merge_function(&self, out: &mut String) {
-        if !self.uses_callstack || self.max_cs_store_slots == 0 {
+        if !self.uses_callstack() || self.max_cs_store_slots == 0 {
             return;
         }
         let body = self.merge_callstack_expr_for_index("var(--idx)", "var(--prev)");
@@ -1059,7 +1051,7 @@ impl<'a> Emitter<'a> {
             "   ",
             (0..self.program.num_vregs).map(|r| format!(" --_2r{}: var(--_0r{});", r, r)),
         );
-        for g in 0..self.global_count {
+        for g in 0..self.program.global_init.len() as u32 {
             // TODO(i64): staged global snapshots are currently fixed to 4 byte lanes.
             let store_g_line = (0..4u8)
                 .map(|lane| {
@@ -1084,7 +1076,7 @@ impl<'a> Emitter<'a> {
                 )
             }),
         );
-        if self.uses_callstack {
+        if self.uses_callstack() {
             let _ = writeln!(out, "    --_2cs_sp: var(--_0cs_sp);");
             Self::emit_chunked_prefixed(
                 out,
@@ -1128,7 +1120,7 @@ impl<'a> Emitter<'a> {
             "   ",
             (0..self.program.num_vregs).map(|r| format!(" --_0r{}: var(--r{});", r, r)),
         );
-        for g in 0..self.global_count {
+        for g in 0..self.program.global_init.len() as u32 {
             // TODO(i64): staged global snapshots are currently fixed to 4 byte lanes.
             let exec_g_line = (0..4u8)
                 .map(|lane| {
@@ -1149,7 +1141,7 @@ impl<'a> Emitter<'a> {
                 .iter()
                 .map(|name| format!(" {}: var({});", Self::shadow_name(0, name), name)),
         );
-        if self.uses_callstack {
+        if self.uses_callstack() {
             let _ = writeln!(out, "    --_0cs_sp: var(--cs_sp);");
             Self::emit_chunked_prefixed(
                 out,

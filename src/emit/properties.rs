@@ -31,8 +31,8 @@ impl<'a> Emitter<'a> {
             (0..self.program.num_vregs).map(|r| Self::prop(&format!("--r{}", r), 0)),
         );
 
-        for g in 0..self.global_count {
-            let gv = self.global_init[g as usize];
+        for (g, &gv) in self.program.global_init.iter().enumerate() {
+            let g = g as u32;
             for lane in 0..4u8 {
                 let init = (gv >> (u32::from(lane) * 8)) & 0xff;
                 let _ = write!(
@@ -50,8 +50,8 @@ impl<'a> Emitter<'a> {
             "",
             self.mem_names
                 .iter()
-                .enumerate()
-                .map(|(i, name)| Self::prop(name, self.mem_init.get(i).copied().unwrap_or(0))),
+                .zip(&self.mem_init)
+                .map(|(name, &init)| Self::prop(name, init)),
         );
         if self.max_mem_store_slots > 0 {
             Self::emit_chunked_prefixed(
@@ -62,7 +62,7 @@ impl<'a> Emitter<'a> {
             );
         }
 
-        if self.uses_callstack {
+        if self.uses_callstack() {
             let _ = writeln!(out, "{}", Self::prop("--cs_sp", 0));
             Self::emit_chunked_prefixed(
                 out,
