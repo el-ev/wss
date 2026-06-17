@@ -11,7 +11,7 @@ use crate::validate::validate;
 use crate::{lower::lower_module, parse::parse_module};
 use anyhow::{Context, Result};
 use clap::{ArgAction, Parser};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 mod ast;
 mod constants;
@@ -70,7 +70,7 @@ struct DumpConfig {
 #[command(name = "wss")]
 #[command(about = "Transpile WebAssembly into an HTML/CSS runtime")]
 struct Cli {
-    /// Input WebAssembly file (.wasm or .wat).
+    /// Input WebAssembly file.
     wasm_file: PathBuf,
     /// Output HTML path.
     #[arg(short, long, default_value = "a.html")]
@@ -277,7 +277,12 @@ fn main() -> Result<()> {
         !args.no_indicators,
     )?;
 
-    let wasm_bytes = read_wasm_bytes(&args.wasm_file)?;
+    let wasm_bytes = std::fs::read(&args.wasm_file).with_context(|| {
+        format!(
+            "failed to read WebAssembly file '{}'",
+            args.wasm_file.display()
+        )
+    })?;
 
     let module_info = decode_module_info(&wasm_bytes)?;
     validate(&module_info, &wasm_bytes)?;
@@ -388,16 +393,6 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn read_wasm_bytes(path: &Path) -> Result<Vec<u8>> {
-    if path.extension().is_some_and(|ext| ext == "wat") {
-        wat::parse_file(path)
-            .with_context(|| format!("failed to parse WAT file '{}'", path.display()))
-    } else {
-        std::fs::read(path)
-            .with_context(|| format!("failed to read WebAssembly file '{}'", path.display()))
-    }
-}
-
 fn shell_quote(arg: String) -> String {
     if !arg.is_empty()
         && arg.bytes().all(|b| {
@@ -505,69 +500,5 @@ mod tests {
         assert_eq!(args.randomize_pc.expect("set").0, Some(42));
         assert!(args.minify_vars.is_some());
         assert!(args.minify_vars.unwrap().0.is_none());
-    }
-
-    #[test]
-    fn read_wasm_bytes_parses_wat_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let wat_path = dir.path().join("test.wat");
-        std::fs::write(
-            &wat_path,
-            "(module (func (export \"_start\") (result i32) i32.const 0))",
-        )
-        .unwrap();
-
-        let bytes = read_wasm_bytes(&wat_path).unwrap();
-
-        assert_eq!(&bytes[..4], b"\0asm");
-    }
-
-    #[test]
-    fn read_wasm_bytes_reads_wasm_file_as_raw_bytes() {
-        let dir = tempfile::tempdir().unwrap();
-        let wasm_path = dir.path().join("test.wasm");
-        let raw = b"\0asm\x01\x00\x00\x00";
-        std::fs::write(&wasm_path, raw).unwrap();
-
-        let bytes = read_wasm_bytes(&wasm_path).unwrap();
-
-        assert_eq!(bytes, raw);
-    }
-
-    #[test]
-    fn read_wasm_bytes_rejects_invalid_wat() {
-        let dir = tempfile::tempdir().unwrap();
-        let wat_path = dir.path().join("bad.wat");
-        std::fs::write(&wat_path, "(module (invalid-syntax").unwrap();
-
-        let err = read_wasm_bytes(&wat_path).unwrap_err();
-
-        assert!(
-            format!("{:#}", err).contains("failed to parse WAT"),
-            "unexpected error: {:#}",
-            err
-        );
-    }
-
-    #[test]
-    fn read_wasm_bytes_returns_error_for_missing_file() {
-        let err = read_wasm_bytes(Path::new("nonexistent.wat")).unwrap_err();
-
-        assert!(
-            format!("{:#}", err).contains("failed to parse WAT"),
-            "unexpected error: {:#}",
-            err
-        );
-    }
-
-    #[test]
-    fn read_wasm_bytes_returns_error_for_missing_wasm_file() {
-        let err = read_wasm_bytes(Path::new("nonexistent.wasm")).unwrap_err();
-
-        assert!(
-            format!("{:#}", err).contains("failed to read WebAssembly"),
-            "unexpected error: {:#}",
-            err
-        );
     }
 }
