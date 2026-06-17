@@ -2,8 +2,9 @@
 #![no_main]
 #[panic_handler]
 fn panic(_:&core::panic::PanicInfo)->!{loop{}}
-const D:&[u8]=b"#![no_std]\n#![no_main]\n#[panic_handler]\nfn panic(_:&core::panic::PanicInfo)->!{loop{}}\nconst D:&[u8]=b\"~\";\nextern \"C\"{fn putchar(_:i32)->i32;}\nfn put(b:u8){unsafe{putchar(b as i32);}}\n#[no_mangle]\npub extern \"C\" fn _start()->i32{for&b in D{if b==126{for&c in D{match c{10=>{put(92);put(110)}34=>{put(92);put(34)}92=>{put(92);put(92)}_=>put(c)}}}else{put(b)}}0}\n";
+const D:&[u8]=b"#![no_std]\n#![no_main]\n#[panic_handler]\nfn panic(_:&core::panic::PanicInfo)->!{loop{}}\nconst D:&[u8]=b\"~\";\nextern \"C\"{fn putchar(_:i32)->i32;}\n#[inline(always)]\nfn put(b:u8){unsafe{putchar(b as i32);}}\n#[no_mangle]\npub extern \"C\" fn _start()->i32{for&b in D{if b==126{for&c in D{match c{10=>{put(92);put(110)}34=>{put(92);put(34)}92=>{put(92);put(92)}_=>put(c)}}}else{put(b)}}0}\n";
 extern "C"{fn putchar(_:i32)->i32;}
+#[inline(always)]
 fn put(b:u8){unsafe{putchar(b as i32);}}
 #[no_mangle]
 pub extern "C" fn _start()->i32{for&b in D{if b==126{for&c in D{match c{10=>{put(92);put(110)}34=>{put(92);put(34)}92=>{put(92);put(92)}_=>put(c)}}}else{put(b)}}0}
