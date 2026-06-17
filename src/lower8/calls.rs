@@ -70,7 +70,7 @@ pub(super) fn flatten_local_prefix(
     );
 }
 
-fn flatten_arg_values(b: &FuncBuilder, args: &[IrNode]) -> Vec<Word> {
+pub(super) fn flatten_arg_values(b: &FuncBuilder, args: &[IrNode]) -> Vec<Word> {
     let mut out = Vec::new();
     for arg in args {
         let value = b.get_value(*arg);
@@ -82,7 +82,7 @@ fn flatten_arg_values(b: &FuncBuilder, args: &[IrNode]) -> Vec<Word> {
     out
 }
 
-fn build_callee_setup(
+pub(super) fn build_callee_setup(
     allocs: &[FuncAlloc],
     callee_id: u32,
     arg_count: usize,

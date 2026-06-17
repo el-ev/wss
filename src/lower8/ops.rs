@@ -651,21 +651,10 @@ fn lower_call_io_inst(
             func: callee_id,
             args,
         } => {
-            let mut arg_words = Vec::new();
-            for r in args {
-                let value = b.get_value(*r);
-                arg_words.push(value.lo);
-                if let Some(hi) = value.hi {
-                    arg_words.push(hi);
-                }
-            }
-
-            let callee_alloc = &ctx.allocs[*callee_id as usize];
+            let arg_words = calls::flatten_arg_values(b, args);
             let n_params = arg_words.len();
-            let callee_arg_vregs =
-                calls::flatten_local_prefix(&callee_alloc.local_vregs, n_params)?;
-
-            let callee_entry = Pc::new(*callee_id as u16 * PC_STRIDE);
+            let (callee_entry, callee_arg_vregs) =
+                calls::build_callee_setup(ctx.allocs, *callee_id, n_params, "Call")?;
             let cont = b.alloc_block();
             let spill_words =
                 analysis::collect_spill_words(live_after, &b.inst_map, &b.local_vregs);

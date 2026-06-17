@@ -263,7 +263,6 @@ impl Cli {
 fn main() -> Result<()> {
     let args = Cli::parse();
     let js_clock = args.js_clock_enabled();
-    let output_file = args.output.clone();
     let dump = args.dump_config();
     let emit_config = EmitConfig::new(
         args.memory_bytes,
@@ -387,8 +386,8 @@ fn main() -> Result<()> {
         };
         result = format!("<!-- compile command: {cmd} -->{seeds_line}\n{result}");
     }
-    std::fs::write(&output_file, result)
-        .with_context(|| format!("failed to write output HTML '{}'", output_file.display()))?;
+    std::fs::write(&args.output, result)
+        .with_context(|| format!("failed to write output HTML '{}'", args.output.display()))?;
 
     Ok(())
 }

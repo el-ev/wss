@@ -996,7 +996,8 @@ fn parse_function(
             Operator::Else => {
                 let mut if_frame = block_stack.pop().context("Else without matching If")?;
 
-                for temp_index in if_frame.temp_locals.clone().into_iter().rev() {
+                for i in (0..if_frame.temp_locals.len()).rev() {
+                    let temp_index = if_frame.temp_locals[i];
                     let ty = local_type(&locals, temp_index, "if temp local")?;
                     let last_ref = if_frame
                         .pop_ref(&mut ref_stack, ty)
@@ -1022,7 +1023,8 @@ fn parse_function(
             }
             Operator::End => {
                 let mut frame = block_stack.pop().context("unexpected End")?;
-                for temp_local in frame.temp_locals.clone().into_iter().rev() {
+                for i in (0..frame.temp_locals.len()).rev() {
+                    let temp_local = frame.temp_locals[i];
                     let ty = local_type(&locals, temp_local, "block temp local")?;
                     let last_ref = frame
                         .pop_ref(&mut ref_stack, ty)
@@ -1048,7 +1050,7 @@ fn parse_function(
                         return Ok(AstFuncBody::new(locals, frame.insts));
                     }
                     _ => {
-                        let temp_locals = frame.temp_locals.clone();
+                        let temp_locals = frame.temp_locals;
                         let result_inst = match frame.kind {
                             BlockKind::Function => {
                                 bail!("ice: unexpected nested function frame")
@@ -1347,7 +1349,8 @@ fn parse_function(
             }
             Operator::Catch { tag_index } => {
                 let mut frame = block_stack.pop().context("Catch without matching Try")?;
-                for temp_index in frame.temp_locals.clone().into_iter().rev() {
+                for i in (0..frame.temp_locals.len()).rev() {
+                    let temp_index = frame.temp_locals[i];
                     let ty = local_type(&locals, temp_index, "Catch temp local")?;
                     let last_ref = frame
                         .pop_ref(&mut ref_stack, ty)
@@ -1400,7 +1403,8 @@ fn parse_function(
             }
             Operator::CatchAll => {
                 let mut frame = block_stack.pop().context("CatchAll without matching Try")?;
-                for temp_index in frame.temp_locals.clone().into_iter().rev() {
+                for i in (0..frame.temp_locals.len()).rev() {
+                    let temp_index = frame.temp_locals[i];
                     let ty = local_type(&locals, temp_index, "CatchAll temp local")?;
                     let last_ref = frame
                         .pop_ref(&mut ref_stack, ty)
@@ -1448,7 +1452,8 @@ fn parse_function(
             }
             Operator::Delegate { relative_depth } => {
                 let mut frame = block_stack.pop().context("Delegate without matching Try")?;
-                for temp_index in frame.temp_locals.clone().into_iter().rev() {
+                for i in (0..frame.temp_locals.len()).rev() {
+                    let temp_index = frame.temp_locals[i];
                     let ty = local_type(&locals, temp_index, "Delegate temp local")?;
                     let last_ref = frame
                         .pop_ref(&mut ref_stack, ty)
@@ -1457,7 +1462,7 @@ fn parse_function(
                 }
                 match frame.kind {
                     BlockKind::Try => {
-                        let temp_locals = frame.temp_locals.clone();
+                        let temp_locals = frame.temp_locals;
                         let result_inst = Node::Try {
                             body: frame.insts,
                             catches: Vec::new(),
