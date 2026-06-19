@@ -621,21 +621,20 @@ impl<'a> Emitter<'a> {
                     let _ = write!(
                         ms_cell_arms[s],
                         "style(--_1pc: {}): {}; ",
-                        pc, &ms.first.cell
+                        pc, ms.first.cell
                     );
                     let _ = write!(
                         ms_par_arms[s],
                         "style(--_1pc: {}): {}; ",
-                        pc, &ms.first.parity
+                        pc, ms.first.parity
                     );
-                    let _ = write!(ms_val_arms[s], "style(--_1pc: {}): {}; ", pc, &ms.first.val);
-                    let _ = write!(ms_ok_arms[s], "style(--_1pc: {}): {}; ", pc, &ms.first.ok);
+                    let _ = write!(ms_val_arms[s], "style(--_1pc: {}): {}; ", pc, ms.first.val);
+                    let _ = write!(ms_ok_arms[s], "style(--_1pc: {}): {}; ", pc, ms.first.ok);
                     if let Some(msb) = &ms.second {
-                        let _ = write!(ms_cell_arms_b[s], "style(--_1pc: {}): {}; ", pc, &msb.cell);
-                        let _ =
-                            write!(ms_par_arms_b[s], "style(--_1pc: {}): {}; ", pc, &msb.parity);
-                        let _ = write!(ms_val_arms_b[s], "style(--_1pc: {}): {}; ", pc, &msb.val);
-                        let _ = write!(ms_ok_arms_b[s], "style(--_1pc: {}): {}; ", pc, &msb.ok);
+                        let _ = write!(ms_cell_arms_b[s], "style(--_1pc: {}): {}; ", pc, msb.cell);
+                        let _ = write!(ms_par_arms_b[s], "style(--_1pc: {}): {}; ", pc, msb.parity);
+                        let _ = write!(ms_val_arms_b[s], "style(--_1pc: {}): {}; ", pc, msb.val);
+                        let _ = write!(ms_ok_arms_b[s], "style(--_1pc: {}): {}; ", pc, msb.ok);
                     }
                 }
             }
@@ -2435,9 +2434,9 @@ impl<'a> Emitter<'a> {
                     if !arm.is_empty() {
                         saw_arm = true;
                         let value_start = arm.rfind("): ").map(|idx| idx + 3);
-                        let val = match value_start {
-                            Some(p) => arm[p..].trim(),
-                            None => return None,
+                        let val = {
+                            let p = value_start?;
+                            arm[p..].trim()
                         };
                         if val.parse::<i64>().is_err() {
                             return None;

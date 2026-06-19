@@ -374,7 +374,7 @@ fn emit_html_chunks_large_generated_css_sections() {
 
 #[test]
 fn emit_rejects_missing_template_placeholder() {
-    let err = super::replace_placeholder_once("no placeholder here", super::PROPS_PLACEHOLDER, "x")
+    let err = super::render("no placeholder here", super::PROPS_PLACEHOLDER, "x")
         .expect_err("missing placeholder should fail");
     assert!(format!("{err:#}").contains("must appear exactly once"));
 }

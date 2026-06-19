@@ -417,21 +417,21 @@ pub fn emit_program(program: &Ir8Program, config: EmitConfig) -> anyhow::Result<
     inline::fold_value_expressions(&mut logic_css, &mut support_css);
     inline::eliminate_dead_decls(&mut logic_css, &mut support_css, BASE_HTML);
 
-    let html = replace_placeholder_once(BASE_HTML, PROPS_PLACEHOLDER, &props_css)?;
-    let html = replace_placeholder_once(&html, LOGIC_PLACEHOLDER, &logic_css)?;
-    let html = replace_placeholder_once(&html, SUPPORT_PLACEHOLDER, &support_css)?;
+    let html = render(BASE_HTML, PROPS_PLACEHOLDER, &props_css)?;
+    let html = render(&html, LOGIC_PLACEHOLDER, &logic_css)?;
+    let html = render(&html, SUPPORT_PLACEHOLDER, &support_css)?;
     let terminal_pcs = TrapCode::TERMINAL
         .iter()
         .map(|code| code.pc().to_string())
         .collect::<Vec<_>>()
         .join(", ");
-    let html = replace_placeholder_once(&html, TERMINAL_PCS_PLACEHOLDER, &terminal_pcs)?;
+    let html = render(&html, TERMINAL_PCS_PLACEHOLDER, &terminal_pcs)?;
     let debugger_cycles = if emitter.js_clock_debugger {
         emitter.build_debugger_cycles_json()
     } else {
         String::from("{}")
     };
-    let html = replace_placeholder_once(&html, DEBUGGER_CYCLES_PLACEHOLDER, &debugger_cycles)?;
+    let html = render(&html, DEBUGGER_CYCLES_PLACEHOLDER, &debugger_cycles)?;
     let html = emitter.apply_template_features(html)?;
     Ok(compact_style_whitespace(&html))
 }
@@ -516,7 +516,7 @@ fn json_string(s: &str) -> String {
     out
 }
 
-fn replace_placeholder_once(
+fn render(
     template: &str,
     placeholder: &str,
     replacement: &str,

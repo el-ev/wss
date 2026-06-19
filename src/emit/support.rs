@@ -610,10 +610,9 @@ impl<'a> Emitter<'a> {
         let parse = |s: &str| -> Option<(&'static str, String, String, i64)> {
             let (cmp, rest) = if let Some(r) = s.strip_prefix("--ge(") {
                 ("ge", r)
-            } else if let Some(r) = s.strip_prefix("--lt(") {
-                ("lt", r)
             } else {
-                return None;
+                let r = s.strip_prefix("--lt(")?;
+                ("lt", r)
             };
             let close = rest.rfind(", ")?;
             let inner = &rest[..close];
@@ -621,21 +620,19 @@ impl<'a> Emitter<'a> {
             let (base, imm) = if let Some(t) = inner.strip_prefix("var(") {
                 let name = t.strip_suffix(')')?;
                 (name.to_string(), 0i64)
-            } else if let Some(t) = inner.strip_prefix("calc(var(") {
+            } else {
+                let t = inner.strip_prefix("calc(var(")?;
                 let close_paren = t.find(')')?;
                 let name = &t[..close_paren];
                 let after = &t[close_paren + 1..];
                 let body = after.strip_suffix(')')?;
                 let imm = if let Some(p) = body.strip_prefix(" + ") {
                     p.parse::<i64>().ok()?
-                } else if let Some(p) = body.strip_prefix(" - ") {
-                    -p.parse::<i64>().ok()?
                 } else {
-                    return None;
+                    let p = body.strip_prefix(" - ")?;
+                    -p.parse::<i64>().ok()?
                 };
                 (name.to_string(), imm)
-            } else {
-                return None;
             };
             Some((cmp, base, limit, imm))
         };
