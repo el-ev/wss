@@ -516,11 +516,7 @@ fn json_string(s: &str) -> String {
     out
 }
 
-fn render(
-    template: &str,
-    placeholder: &str,
-    replacement: &str,
-) -> anyhow::Result<String> {
+fn render(template: &str, placeholder: &str, replacement: &str) -> anyhow::Result<String> {
     let idx = template.find(placeholder).with_context(|| {
         format!(
             "template placeholder {} must appear exactly once (found 0)",
