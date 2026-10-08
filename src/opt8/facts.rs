@@ -41,8 +41,8 @@ pub(super) fn build_reg_facts(blocks: &[BasicBlock8]) -> HashMap<Val8, RegFact> 
                         copy_edges.push((dst, src));
                     }
                 }
-                Inst8Kind::Carry(_, _)
-                | Inst8Kind::Sub32Borrow { .. }
+                Inst8Kind::Sub32Borrow { .. }
+                | Inst8Kind::Cmp32 { .. }
                 | Inst8Kind::Eq(_, _)
                 | Inst8Kind::Ne(_, _)
                 | Inst8Kind::LtU(_, _)

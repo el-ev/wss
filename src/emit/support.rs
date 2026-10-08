@@ -63,6 +63,18 @@ impl<'a> Emitter<'a> {
             .map(|(i, name)| (i, format!("var({})", Self::shadow_name(0, name))))
             .collect::<Vec<_>>();
         Self::emit_chunked_read_function(out, "--read_m16", &mem_reads);
+        if self.uses_mem_inc {
+            // Increments merge in the cycle they execute, so they must read
+            // the same stage as the merge's `prev` (`--_1m*`): reading the
+            // execute snapshot (`--_0m*`) would form a dependency cycle.
+            let prev_reads = self
+                .mem_names
+                .iter()
+                .enumerate()
+                .map(|(i, name)| (i, format!("var({})", Self::shadow_name(1, name))))
+                .collect::<Vec<_>>();
+            Self::emit_chunked_read_function(out, "--read_m16p", &prev_reads);
+        }
 
         if self.uses_callstack() {
             let cs_reads = self
@@ -74,8 +86,12 @@ impl<'a> Emitter<'a> {
             Self::emit_chunked_read_function(out, "--read_cs", &cs_reads);
         }
 
-        self.emit_memory_merge_function(out);
-        self.emit_callstack_merge_function(out);
+        if let Some(merge_fn) = self.mem_merge_fn.get() {
+            out.push_str(merge_fn);
+        }
+        if self.uses_callstack() && self.max_cs_store_slots > 0 {
+            self.emit_cs_dispatch_merge_function(out);
+        }
         self.emit_keyframes(out);
         if self.features.contains(TemplateFeatures::MEM_VISUALIZER) {
             self.emit_memory_visualizer(out);
@@ -266,18 +282,21 @@ impl<'a> Emitter<'a> {
             Self::emit_grouped_style_arms(out, chunk_reads);
             out.push_str("else: 0); }\n");
         }
+        // Two-level lookup: pick the chunk from the index, then test only
+        // that chunk's arms (instead of every arm of every chunk).
+        let _ = writeln!(
+            out,
+            "@function {func}(--i <integer>) returns <integer> {{ result: {func}_d(round(down, var(--i) / {READ_LOOKUP_CHUNK}), var(--i)); }}"
+        );
         let _ = write!(
             out,
-            "@function {}(--i <integer>) returns <integer> {{ result: calc(",
+            "@function {}_d(--c <integer>, --i <integer>) returns <integer> {{ result: if(",
             func
         );
-        for (i, chunk) in live_idx.iter().enumerate() {
-            if i != 0 {
-                out.push_str(" + ");
-            }
-            let _ = write!(out, "{}_{}(var(--i))", func, chunk);
+        for chunk in &live_idx {
+            let _ = write!(out, "style(--c: {chunk}): {func}_{chunk}(var(--i)); ");
         }
-        out.push_str("); }\n");
+        out.push_str("else: 0); }\n");
     }
 
     pub(super) fn emit_chunked_shadow(
@@ -440,124 +459,164 @@ impl<'a> Emitter<'a> {
         out
     }
 
-    pub(super) fn merge_byte_expr_for_cell(
+    /// `idx` when `ok` holds, else `-1` (an index no cell ever has).
+    pub(super) fn gated_index_expr(ok: &str, idx: &str) -> String {
+        if ok.trim() == "1" {
+            return idx.to_string();
+        }
+        format!(
+            "calc({} * ({} + 1) - 1)",
+            Self::paren_if_needed(ok),
+            Self::calc_inner(idx)
+        )
+    }
+
+    /// Dirty-page flags for the dispatch merge: a page is dirty when some
+    /// slot's page index (`--{page_prefix}{j}`, -1 when idle) equals it. An
+    /// any-store gate makes the common no-store cycle one test per page.
+    pub(super) fn emit_dispatch_page_flags(
         &self,
-        cell_expr: &str,
-        par: usize,
-        prev: &str,
-    ) -> String {
-        let parity_fn = if par == 0 { "--eqz" } else { "--eq1" };
-        let consts = self.mem_slot_consts.get();
-        let mut expr = prev.to_string();
+        out: &mut String,
+        flag_prefix: &str,
+        page_prefix: &str,
+        slots: &[String],
+        pages: usize,
+    ) {
+        if slots.is_empty() {
+            for page in 0..pages {
+                let _ = writeln!(out, " --{}{}: 0;", flag_prefix, page);
+            }
+            return;
+        }
+        let gate = format!("--{}_any", flag_prefix);
+        let sum = slots
+            .iter()
+            .map(|j| format!("var(--{}{})", page_prefix, j))
+            .collect::<Vec<_>>()
+            .join(" + ");
+        let _ = writeln!(out, " {}: calc({} + {});", gate, sum, slots.len());
+        for page in 0..pages {
+            let conds = slots
+                .iter()
+                .map(|j| format!("style(--{}{}: {})", page_prefix, j, page))
+                .collect::<Vec<_>>()
+                .join(" or ");
+            // The gate's `0` arm equals the default, so the fold's
+            // drop-redundant-arms rule would delete it (same value, but it
+            // is a short-circuit): keep it by nesting the page tests.
+            let _ = writeln!(
+                out,
+                " --{}{}: if(style({}: 0): 0; else: if({}: 1; else: 0));",
+                flag_prefix, page, gate, conds
+            );
+        }
+    }
+
+    /// Byte-wise merge of a memory cell against the active store slots: each
+    /// byte is the value of the last slot targeting it, else unchanged. The
+    /// body lives in `--mmerge16` so the per-cell declarations stay short
+    /// (untaken `if()` text is still tokenized on every recalc).
+    pub(super) fn emit_mem_dispatch_merge_function(
+        &self,
+        out: &mut String,
+        consts: &MemSlotConsts,
+        addr_arms: &[String],
+        addr_arms_b: &[String],
+    ) {
+        let mut slots: Vec<(String, String)> = Vec::new();
         for s in 0..self.max_mem_store_slots {
-            for suffix in ["", "b"] {
-                // cond = is-this-slot-storing-this-byte. Routed through eq_expr
-                // so a constant `cell_expr` folds the --eq(msc, cell) check.
-                let cond = format!(
-                    "calc(var(--mso{}{}) * {} * {}(var(--msp{}{})))",
-                    s,
-                    suffix,
-                    Self::eq_expr(&format!("var(--msc{}{})", s, suffix), cell_expr),
-                    parity_fn,
-                    s,
-                    suffix
-                );
-                let val_const = consts.and_then(|c| {
-                    let row = if suffix == "b" {
-                        &c.ms_val_b
-                    } else {
-                        &c.ms_val
-                    };
-                    row.get(s).cloned().flatten()
-                });
-                // CSS @function bodies must avoid --sel calls — its container
-                // queries don't see the local --c binding when nested inside
-                // another @function. Stick to bare calc arithmetic here.
-                expr = match val_const.as_deref() {
-                    Some("0") => {
-                        format!("calc((1 - ({})) * ({}))", cond, expr)
-                    }
-                    Some(k) => {
-                        format!("calc(({}) * ({}) + (1 - ({})) * ({}))", cond, k, cond, expr)
-                    }
-                    None => format!(
-                        "calc(({}) * (var(--msv{}{})) + (1 - ({})) * ({}))",
-                        cond, s, suffix, cond, expr
-                    ),
-                };
+            for (suffix, arms, row) in [
+                ("", &addr_arms[s], &consts.ms_val),
+                ("b", &addr_arms_b[s], &consts.ms_val_b),
+            ] {
+                if arms.is_empty() {
+                    continue;
+                }
+                let val = row[s]
+                    .clone()
+                    .unwrap_or_else(|| format!("var(--msv{}{})", s, suffix));
+                slots.push((format!("{}{}", s, suffix), val));
             }
         }
-        expr
-    }
-
-    pub(super) fn merge_word_expr_for_cell(&self, cell_expr: &str, prev_word: &str) -> String {
-        let lo_prev = format!("--mlo({})", prev_word);
-        let hi_prev = format!("--mhi({})", prev_word);
-        let lo = self.merge_byte_expr_for_cell(cell_expr, 0, &lo_prev);
-        let hi = self.merge_byte_expr_for_cell(cell_expr, 1, &hi_prev);
-        format!("calc(({}) + 256 * ({}))", lo, hi)
-    }
-
-    pub(super) fn emit_memory_merge_function(&self, out: &mut String) {
-        if self.max_mem_store_slots == 0 {
-            return;
-        }
-        let body = self.merge_word_expr_for_cell("var(--cell)", "var(--prev)");
+        let inc = self.uses_mem_inc;
+        let byte = |addr: &str, high: bool, keep: &str| -> String {
+            let mut arms = String::new();
+            if inc {
+                // Cells rewritten by an increment (already merged values).
+                for j in 0..3 {
+                    let v = if high {
+                        format!("round(down, var(--miv{j}) / 256)")
+                    } else {
+                        format!("mod(var(--miv{j}), 256)")
+                    };
+                    let _ = write!(arms, "style(--mic{j}: var(--lo)): {v}; ");
+                }
+            }
+            for (j, val) in slots.iter().rev() {
+                let _ = write!(arms, "style(--mta{}: var({})): {}; ", j, addr, val);
+            }
+            format!("if({}else: {})", arms, keep)
+        };
+        let lo = byte("--lo", false, "--mlo(var(--prev))");
+        let hi = byte("--hi", true, "--mhi(var(--prev))");
         let _ = writeln!(
             out,
-            "@function --mmerge16(--cell <number>, --prev <number>) returns <integer> {{ result: {}; }}",
-            body
+            "@function --mmerge16(--lo <integer>, --hi <integer>, --prev <integer>) returns <integer> {{ result: calc({} + 256 * {}); }}",
+            lo, hi
         );
     }
 
-    pub(super) fn merge_callstack_expr_for_index(&self, idx_expr: &str, prev: &str) -> String {
-        let mut lo_expr = format!("--mlo({})", prev);
-        let mut hi_expr = format!("--mhi({})", prev);
-        for s in 0..self.max_cs_store_slots {
-            let csi = format!("var(--csi{})", s);
-            // CSS @function parameters do not flow into nested container
-            // queries (style(--c: 0) reads the rule's container, not the
-            // local --c binding), so calls to --sel inside this function
-            // body misbehave. Use bare calc arithmetic instead.
-            let same_slot = format!("calc(var(--cso{}) * {})", s, Self::eq_expr(&csi, idx_expr));
-            let is_word = format!("--eq(var(--csp{}), 2)", s);
-            let is_lo = format!("--eqz(var(--csp{}))", s);
-            let is_hi = format!("--eq1(var(--csp{}))", s);
-
-            let lo_cond = format!("calc(({}) * (({}) + ({})))", same_slot, is_lo, is_word);
-            let hi_cond = format!("calc(({}) * (({}) + ({})))", same_slot, is_hi, is_word);
-
-            let lo_val = format!(
-                "calc(({}) * --mlo(var(--csv{})) + (1 - ({})) * var(--csv{}))",
-                is_word, s, is_word, s
-            );
-            let hi_val = format!(
-                "calc(({}) * --mhi(var(--csv{})) + (1 - ({})) * var(--csv{}))",
-                is_word, s, is_word, s
-            );
-
-            lo_expr = format!(
-                "calc(({}) * ({}) + (1 - ({})) * ({}))",
-                lo_cond, lo_val, lo_cond, lo_expr
-            );
-            hi_expr = format!(
-                "calc(({}) * ({}) + (1 - ({})) * ({}))",
-                hi_cond, hi_val, hi_cond, hi_expr
-            );
-        }
-        format!("--m16({}, {})", lo_expr, hi_expr)
-    }
-
-    pub(super) fn emit_callstack_merge_function(&self, out: &mut String) {
-        if !self.uses_callstack() || self.max_cs_store_slots == 0 {
-            return;
-        }
-        let body = self.merge_callstack_expr_for_index("var(--idx)", "var(--prev)");
+    /// Callstack counterpart of [`emit_mem_dispatch_merge_function`].
+    pub(super) fn emit_cs_dispatch_merge_function(&self, out: &mut String) {
+        let byte = |target: &str, value: &str, keep: &str| -> String {
+            let mut arms = String::new();
+            for s in (0..self.max_cs_store_slots).rev() {
+                let _ = write!(
+                    arms,
+                    "style(--{}{}: var(--idx)): var(--{}{}); ",
+                    target, s, value, s
+                );
+            }
+            format!("if({}else: {})", arms, keep)
+        };
+        let lo = byte("ctl", "cvl", "--mlo(var(--prev))");
+        let hi = byte("cth", "cvh", "--mhi(var(--prev))");
         let _ = writeln!(
             out,
-            "@function --csmerge(--idx <number>, --prev <number>) returns <integer> {{ result: {}; }}",
-            body
+            "@function --csmerge(--idx <integer>, --prev <integer>) returns <integer> {{ result: calc({} + 256 * {}); }}",
+            lo, hi
         );
+    }
+
+    /// New values of the (up to) three cells an active `MemInc32` rewrites.
+    /// Cells are read once into `<integer>` properties; the 48-bit window
+    /// only ever lives inside one `calc()` (registered `<number>` values are
+    /// serialized with 6 significant digits when substituted).
+    pub(super) fn emit_mem_inc_values(&self, out: &mut String) {
+        for j in 0..3 {
+            let _ = writeln!(
+                out,
+                " --mic{j}: if(style(--mik: -1): -1; else: calc(2 * var(--mik) + {}));",
+                2 * j
+            );
+            let _ = writeln!(
+                out,
+                " --mir{j}: if(style(--mik: -1): 0; else: --read_m16p(calc(var(--mik) + {j})));"
+            );
+        }
+        let window = "(var(--mir0) + 65536 * var(--mir1) + 4294967296 * var(--mir2))";
+        let scale = "(1 + 255 * var(--mio))";
+        let old = format!("mod(round(down, {window} / {scale}), 4294967296)");
+        let new = format!("mod({old} + var(--mid), 4294967296)");
+        let merged = format!("({window} + ({new} - {old}) * {scale})");
+        let parts = [
+            format!("mod({merged}, 65536)"),
+            format!("mod(round(down, {merged} / 65536), 65536)"),
+            format!("round(down, {merged} / 4294967296)"),
+        ];
+        for (j, part) in parts.iter().enumerate() {
+            let _ = writeln!(out, " --miv{j}: if(style(--mik: -1): 0; else: {part});");
+        }
     }
 
     pub(super) fn page_count(&self) -> usize {
@@ -571,17 +630,6 @@ impl<'a> Emitter<'a> {
             0 => "0".to_string(),
             1 => parts[0].clone(),
             _ => format!("min(1, calc({}))", Self::join_peeled_terms(parts)),
-        }
-    }
-
-    /// Like [`clamp_sum_or_zero`] but without the `min(1, …)` clamp. Use this
-    /// when the consumer only distinguishes zero from non-zero (e.g.
-    /// `style(--p: 0)`), since the clamp is then pure dead weight.
-    pub(super) fn sum_or_zero(parts: &[String]) -> String {
-        match parts.len() {
-            0 => "0".to_string(),
-            1 => parts[0].clone(),
-            _ => format!("calc({})", Self::join_peeled_terms(parts)),
         }
     }
 
@@ -707,40 +755,8 @@ impl<'a> Emitter<'a> {
         });
     }
 
-    pub(super) fn dirty_page_expr(&self, page: usize) -> String {
-        if self.max_mem_store_slots == 0 {
-            return "0".to_string();
-        }
-        let terms = (0..self.max_mem_store_slots)
-            .flat_map(|s| {
-                ["", "b"].into_iter().map(move |suffix| {
-                    format!(
-                        "calc(var(--mso{}{}) * --eq(round(down, calc(var(--msc{}{}) / {})), {}))",
-                        s, suffix, s, suffix, MEM_DIRTY_PAGE_CELLS, page
-                    )
-                })
-            })
-            .collect::<Vec<_>>();
-        Self::sum_or_zero(&terms)
-    }
-
     pub(super) fn cs_page_count(&self) -> usize {
         self.cs_names.len().div_ceil(CALLSTACK_DIRTY_PAGE_CELLS)
-    }
-
-    pub(super) fn cs_dirty_page_expr(&self, page: usize) -> String {
-        if self.max_cs_store_slots == 0 {
-            return "0".to_string();
-        }
-        let terms = (0..self.max_cs_store_slots)
-            .map(|s| {
-                format!(
-                    "calc(var(--cso{}) * --eq(round(down, calc(var(--csi{}) / {})), {}))",
-                    s, s, CALLSTACK_DIRTY_PAGE_CELLS, page
-                )
-            })
-            .collect::<Vec<_>>();
-        Self::sum_or_zero(&terms)
     }
 
     /// Finds long `style(--_1pc: N) or style(--_1pc: M) or ...` chains that
@@ -816,7 +832,7 @@ impl<'a> Emitter<'a> {
         let mut groups: Vec<(String, String)> = Vec::new();
         let mut next_id = 0usize;
         let mut entries: Vec<(String, usize)> = counts.into_iter().collect();
-        entries.sort_by_key(|(chain, _)| std::cmp::Reverse(chain.len()));
+        entries.sort_by(|(a, _), (b, _)| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
         for (chain, count) in entries {
             let l = chain.len();
             let replacement_len = 16usize;

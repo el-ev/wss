@@ -32,12 +32,24 @@ impl<'a> Emitter<'a> {
         let mut ms_par_arms_b = vec![String::new(); self.max_mem_store_slots];
         let mut ms_val_arms_b = vec![String::new(); self.max_mem_store_slots];
         let mut ms_ok_arms_b = vec![String::new(); self.max_mem_store_slots];
+        // Per memory store slot, the written byte address (or -1).
+        let mut ms_addr_arms = vec![String::new(); self.max_mem_store_slots];
+        let mut ms_addr_arms_b = vec![String::new(); self.max_mem_store_slots];
+        // Per callstack store slot, the cell whose low / high
+        // byte it writes (or -1) and the byte values written there.
+        let mut csw_lo_arms = vec![String::new(); self.max_cs_store_slots];
+        let mut csw_hi_arms = vec![String::new(); self.max_cs_store_slots];
+        let mut csw_lov_arms = vec![String::new(); self.max_cs_store_slots];
+        let mut csw_hiv_arms = vec![String::new(); self.max_cs_store_slots];
+        // MemInc32: per-PC first cell (-1 when idle), byte offset in it, delta.
+        let mut mik_arms = String::new();
+        let mut mio_arms = String::new();
+        let mut mid_arms = String::new();
         let mut mr_idx_arms = vec![String::new(); self.max_mem_read_slots];
         let mut mr_ok_arms = vec![String::new(); self.max_mem_read_slots];
 
         let mut csw_idx_arms = vec![String::new(); self.max_cs_store_slots];
         let mut csw_par_arms = vec![String::new(); self.max_cs_store_slots];
-        let mut csw_val_arms = vec![String::new(); self.max_cs_store_slots];
         let mut csw_ok_arms = vec![String::new(); self.max_cs_store_slots];
         let mut csr_idx_arms = vec![String::new(); self.max_cs_read_slots];
         let mut csr_par_arms = vec![String::new(); self.max_cs_read_slots];
@@ -48,6 +60,9 @@ impl<'a> Emitter<'a> {
 
         for cycle in &self.program.cycles {
             let pc = cycle.pc.index();
+            if Some(pc) == self.skipped_entry {
+                continue;
+            }
             let mut reg_now = HashMap::new();
             let mut bool_regs: std::collections::HashSet<u16> = global_bool_regs.clone();
             let mut addr_counts: HashMap<crate::ir8::Addr, usize> = HashMap::new();
@@ -74,6 +89,7 @@ impl<'a> Emitter<'a> {
             let mut trap_mem_parts = Vec::new();
             let mut trap_cs_parts = Vec::new();
             let mut putchars = Vec::new();
+            let mut mem_inc: Option<(String, String, u32)> = None;
             let mut has_getchar = false;
             let mut getchar_ready = String::from("0");
 
@@ -85,6 +101,14 @@ impl<'a> Emitter<'a> {
                             if Self::val_is_bool(&bool_regs, *s) {
                                 bool_regs.insert(dst.expect_vreg());
                             }
+                        }
+                    }
+                    Inst8Kind::Mul32Byte { lhs, rhs, lane } => {
+                        if let Some(dst) = op.dst {
+                            reg_now.insert(
+                                dst.expect_vreg(),
+                                Self::mul32_byte_expr(&reg_now, *lhs, *rhs, *lane),
+                            );
                         }
                     }
                     Inst8Kind::Add32Byte { lhs, rhs, lane } => {
@@ -103,6 +127,20 @@ impl<'a> Emitter<'a> {
                             );
                         }
                     }
+                    Inst8Kind::Cmp32 {
+                        op: cmp,
+                        lhs,
+                        rhs,
+                        signed,
+                    } => {
+                        if let Some(dst) = op.dst {
+                            reg_now.insert(
+                                dst.expect_vreg(),
+                                Self::cmp32_expr(&reg_now, *cmp, *lhs, *rhs, *signed),
+                            );
+                            bool_regs.insert(dst.expect_vreg());
+                        }
+                    }
                     Inst8Kind::Sub32Borrow { lhs, rhs } => {
                         if let Some(dst) = op.dst {
                             reg_now.insert(
@@ -110,23 +148,6 @@ impl<'a> Emitter<'a> {
                                 Self::sub32_borrow_expr(&reg_now, *lhs, *rhs),
                             );
                             bool_regs.insert(dst.expect_vreg());
-                        }
-                    }
-                    Inst8Kind::Add(l, r) => {
-                        if let Some(dst) = op.dst {
-                            let lhs = Self::val_expr(&reg_now, *l);
-                            let rhs = Self::val_expr(&reg_now, *r);
-                            let total = Self::fold_add(vec![lhs, rhs]);
-                            let e = Self::fold_mod(&total, 256);
-                            reg_now.insert(dst.expect_vreg(), e);
-                        }
-                    }
-                    Inst8Kind::Carry(l, r) => {
-                        if let Some(dst) = op.dst {
-                            let lhs = Self::paren_if_needed(&Self::val_expr(&reg_now, *l));
-                            let rhs = Self::paren_if_needed(&Self::val_expr(&reg_now, *r));
-                            let e = format!("--lt(255, calc({lhs} + {rhs}))");
-                            reg_now.insert(dst.expect_vreg(), e);
                         }
                     }
                     Inst8Kind::Sub(l, r) => {
@@ -305,7 +326,20 @@ impl<'a> Emitter<'a> {
                         global_sets.insert((*global_idx, *lane), Self::val_expr(&reg_now, *val));
                     }
                     Inst8Kind::LoadMem { base, addr, lane } => {
-                        if let Some(dst) = op.dst {
+                        if let Some(dst) = op.dst
+                            && let Some(at) = addr
+                                .imm_value()
+                                .map(|a| a + u32::from(*base) + u32::from(*lane))
+                            && let Some(byte) = self.const_load_expr(at)
+                        {
+                            // Fixed address: read the cell directly, no
+                            // lookup and no bounds check.
+                            mem_reads.push(MemRead {
+                                byte: at.to_string(),
+                                ok: "1".to_string(),
+                            });
+                            reg_now.insert(dst.expect_vreg(), byte);
+                        } else if let Some(dst) = op.dst {
                             let slot = self.assign_addr_slot(
                                 addr,
                                 pc,
@@ -361,9 +395,39 @@ impl<'a> Emitter<'a> {
                         mem_stores_raw.push(MemStoreByte {
                             cell: format!("--mhalf({})", byte_addr),
                             parity: format!("--mpar({})", byte_addr),
+                            addr: byte_addr.clone(),
                             val: Self::fold_mod(&Self::val_expr(&reg_now, *val), 256),
                             ok: in_bounds,
                         });
+                    }
+                    Inst8Kind::MemInc32 { base, addr, delta } => {
+                        let slot = self.assign_addr_slot(
+                            addr,
+                            pc,
+                            &reg_now,
+                            &addr_counts,
+                            &mut addr_slot,
+                            &mut next_addr_slot,
+                            &mut mb_arms,
+                        );
+                        let (first, ok_first) = self.mem_addr_bounds(
+                            &reg_now,
+                            addr,
+                            *base,
+                            0,
+                            slot,
+                            &mut trap_mem_parts,
+                        );
+                        let (_, ok_last) = self.mem_addr_bounds(
+                            &reg_now,
+                            addr,
+                            *base + 2,
+                            1,
+                            slot,
+                            &mut trap_mem_parts,
+                        );
+                        let ok = format!("calc({} * {})", ok_first, ok_last);
+                        mem_inc = Some((first, ok, *delta));
                     }
                     Inst8Kind::Getchar => {
                         if let Some(dst) = op.dst {
@@ -603,14 +667,23 @@ impl<'a> Emitter<'a> {
                 let _ = write!(fb_arms, "style(--_1pc: {}): {}; ", pc, fb_expr);
             }
 
+            // A run-once entry executes when every register and global still
+            // holds its initial value, so writing that value again is a no-op.
+            let at_start = self.entry_runs_once && pc == self.entry_pc;
             for (r, expr) in reg_now {
                 let idx = r as usize;
+                if at_start && expr.trim() == "0" {
+                    continue;
+                }
                 if idx < r_arms.len() {
                     let _ = write!(r_arms[idx], "style(--_1pc: {}): {}; ", pc, expr);
                 }
             }
 
             for ((g, lane), expr) in global_sets {
+                if at_start && expr.trim() == self.program.global_init_byte(g, lane).to_string() {
+                    continue;
+                }
                 let arms = g_arms.entry((g, lane)).or_default();
                 let _ = write!(arms, "style(--_1pc: {}): {}; ", pc, expr);
             }
@@ -630,13 +703,41 @@ impl<'a> Emitter<'a> {
                     );
                     let _ = write!(ms_val_arms[s], "style(--_1pc: {}): {}; ", pc, ms.first.val);
                     let _ = write!(ms_ok_arms[s], "style(--_1pc: {}): {}; ", pc, ms.first.ok);
+                    let _ = write!(
+                        ms_addr_arms[s],
+                        "style(--_1pc: {}): {}; ",
+                        pc,
+                        Self::gated_index_expr(&ms.first.ok, &ms.first.addr)
+                    );
                     if let Some(msb) = &ms.second {
+                        let _ = write!(
+                            ms_addr_arms_b[s],
+                            "style(--_1pc: {}): {}; ",
+                            pc,
+                            Self::gated_index_expr(&msb.ok, &msb.addr)
+                        );
                         let _ = write!(ms_cell_arms_b[s], "style(--_1pc: {}): {}; ", pc, msb.cell);
                         let _ = write!(ms_par_arms_b[s], "style(--_1pc: {}): {}; ", pc, msb.parity);
                         let _ = write!(ms_val_arms_b[s], "style(--_1pc: {}): {}; ", pc, msb.val);
                         let _ = write!(ms_ok_arms_b[s], "style(--_1pc: {}): {}; ", pc, msb.ok);
                     }
                 }
+            }
+            if let Some((first, ok, delta)) = &mem_inc {
+                let cell = format!("round(down, {} / 2)", Self::paren_if_needed(first));
+                let _ = write!(
+                    mik_arms,
+                    "style(--_1pc: {}): {}; ",
+                    pc,
+                    Self::gated_index_expr(ok, &cell)
+                );
+                let _ = write!(
+                    mio_arms,
+                    "style(--_1pc: {}): mod({}, 2); ",
+                    pc,
+                    Self::calc_inner(first)
+                );
+                let _ = write!(mid_arms, "style(--_1pc: {}): {}; ", pc, *delta as i32);
             }
             for s in 0..self.max_mem_read_slots {
                 if let Some(mr) = mem_reads.get(s) {
@@ -650,8 +751,27 @@ impl<'a> Emitter<'a> {
                     if let Some(cs) = cs_stores.get(s) {
                         let _ = write!(csw_idx_arms[s], "style(--_1pc: {}): {}; ", pc, cs.idx);
                         let _ = write!(csw_par_arms[s], "style(--_1pc: {}): {}; ", pc, cs.parity);
-                        let _ = write!(csw_val_arms[s], "style(--_1pc: {}): {}; ", pc, cs.val);
                         let _ = write!(csw_ok_arms[s], "style(--_1pc: {}): {}; ", pc, cs.ok);
+                        let target = Self::gated_index_expr(&cs.ok, &cs.idx);
+                        let (lo_val, hi_val) = match cs.parity.as_str() {
+                            "0" => (Some(cs.val.clone()), None),
+                            "1" => (None, Some(cs.val.clone())),
+                            _ => (
+                                Some(Self::fold_mod(&cs.val, 256)),
+                                Some(match cs.val.parse::<i64>() {
+                                    Ok(v) => (v.div_euclid(256)).rem_euclid(256).to_string(),
+                                    Err(_) => format!("--mhi({})", cs.val),
+                                }),
+                            ),
+                        };
+                        if let Some(v) = lo_val {
+                            let _ = write!(csw_lo_arms[s], "style(--_1pc: {}): {}; ", pc, target);
+                            let _ = write!(csw_lov_arms[s], "style(--_1pc: {}): {}; ", pc, v);
+                        }
+                        if let Some(v) = hi_val {
+                            let _ = write!(csw_hi_arms[s], "style(--_1pc: {}): {}; ", pc, target);
+                            let _ = write!(csw_hiv_arms[s], "style(--_1pc: {}): {}; ", pc, v);
+                        }
                     }
                 }
                 for s in 0..self.max_cs_read_slots {
@@ -700,11 +820,10 @@ impl<'a> Emitter<'a> {
         if !r_shadow_line.is_empty() {
             let _ = writeln!(out, "{}", r_shadow_line);
         }
-        for (g, &gv) in self.program.global_init.iter().enumerate() {
-            let g = g as u32;
+        for g in 0..self.program.global_init.len() as u32 {
             let mut g_shadow_line = String::new();
             for lane in 0..4u8 {
-                let init = (gv >> (u32::from(lane) * 8)) & 0xff;
+                let init = self.program.global_init_byte(g, lane);
                 let _ = write!(
                     g_shadow_line,
                     " {}: var({}, {});",
@@ -788,13 +907,49 @@ impl<'a> Emitter<'a> {
             slot_consts.ms_val[s] = Self::arms_active_constant(&ms_val_arms[s], "0");
             slot_consts.ms_val_b[s] = Self::arms_active_constant(&ms_val_arms_b[s], "0");
         }
-        let _ = self.mem_slot_consts.set(slot_consts);
-
         if self.max_mem_store_slots > 0 {
-            for page in 0..self.page_count() {
-                let expr = self.dirty_page_expr(page);
-                let _ = writeln!(out, " --mwdp{}: {};", page, expr);
+            let mut merge_fn = String::new();
+            self.emit_mem_dispatch_merge_function(
+                &mut merge_fn,
+                &slot_consts,
+                &ms_addr_arms,
+                &ms_addr_arms_b,
+            );
+            let _ = self.mem_merge_fn.set(merge_fn);
+
+            let page_bytes = 2 * MEM_DIRTY_PAGE_CELLS;
+            let mut any = Vec::new();
+            for s in 0..self.max_mem_store_slots {
+                for (suffix, arms) in [("", &ms_addr_arms[s]), ("b", &ms_addr_arms_b[s])] {
+                    if arms.is_empty() {
+                        continue;
+                    }
+                    let j = format!("{}{}", s, suffix);
+                    Self::emit_if_or_fallback(out, &format!("--mta{}", j), arms, "-1");
+                    let _ = writeln!(
+                        out,
+                        " --mtp{}: round(down, var(--mta{}) / {});",
+                        j, j, page_bytes
+                    );
+                    any.push(j);
+                }
             }
+            if self.uses_mem_inc {
+                Self::emit_if_or_fallback(out, "--mik", &mik_arms, "-1");
+                Self::emit_if_or_fallback(out, "--mio", &mio_arms, "0");
+                Self::emit_if_or_fallback(out, "--mid", &mid_arms, "0");
+                self.emit_mem_inc_values(out);
+                // The (up to) three cells span at most two pages.
+                for j in [0, 2] {
+                    let _ = writeln!(
+                        out,
+                        " --mtpi{}: round(down, var(--mic{}) / {});",
+                        j, j, page_bytes
+                    );
+                    any.push(format!("i{}", j));
+                }
+            }
+            self.emit_dispatch_page_flags(out, "mwdp", "mtp", &any, self.page_count());
         }
 
         Self::emit_slot_with_cse(out, "mri", &mr_idx_arms, "0");
@@ -814,19 +969,26 @@ impl<'a> Emitter<'a> {
 
         if self.uses_callstack() {
             Self::emit_slot_with_cse(out, "csi", &csw_idx_arms, "0");
-            for s in 0..self.max_cs_store_slots {
-                Self::emit_if_or_fallback(out, &format!("--csp{}", s), &csw_par_arms[s], "0");
-                Self::emit_if_or_fallback(out, &format!("--csv{}", s), &csw_val_arms[s], "0");
+            for (s, arms) in csw_par_arms.iter().enumerate() {
+                Self::emit_if_or_fallback(out, &format!("--csp{}", s), arms, "0");
             }
             Self::emit_slot_with_cse(out, "cso", &csw_ok_arms, "0");
             if self.max_cs_store_slots > 0 {
-                for page in 0..self.cs_page_count() {
-                    // cs_dirty_page_expr evaluates to 0 whenever no csoN is set,
-                    // so the explicit `if(csw_active: 1: ...; else: 0)` guard
-                    // is redundant.
-                    let expr = self.cs_dirty_page_expr(page);
-                    let _ = writeln!(out, " --cswdp{}: {};", page, expr);
+                let mut any = Vec::new();
+                for s in 0..self.max_cs_store_slots {
+                    let j = s.to_string();
+                    Self::emit_if_or_fallback(out, &format!("--ctl{}", j), &csw_lo_arms[s], "-1");
+                    Self::emit_if_or_fallback(out, &format!("--cth{}", j), &csw_hi_arms[s], "-1");
+                    Self::emit_if_or_fallback(out, &format!("--cvl{}", j), &csw_lov_arms[s], "0");
+                    Self::emit_if_or_fallback(out, &format!("--cvh{}", j), &csw_hiv_arms[s], "0");
+                    let _ = writeln!(
+                        out,
+                        " --ctp{}: round(down, max(var(--ctl{}), var(--cth{})) / {});",
+                        j, j, j, CALLSTACK_DIRTY_PAGE_CELLS
+                    );
+                    any.push(j);
                 }
+                self.emit_dispatch_page_flags(out, "cswdp", "ctp", &any, self.cs_page_count());
             }
             Self::emit_slot_with_cse(out, "cri", &csr_idx_arms, "0");
             for (s, arms) in csr_par_arms.iter().enumerate().take(self.max_cs_read_slots) {
@@ -887,7 +1049,7 @@ impl<'a> Emitter<'a> {
             let merged = if self.max_mem_store_slots == 0 {
                 prev.clone()
             } else {
-                format!("--mmerge16({}, {})", i, prev)
+                format!("--mmerge16({}, {}, {})", 2 * i, 2 * i + 1, prev)
             };
             let page = i / MEM_DIRTY_PAGE_CELLS;
             let expr = if self.max_mem_store_slots == 0 {
@@ -1182,7 +1344,7 @@ impl<'a> Emitter<'a> {
                         | Inst8Kind::BoolOr(_)
                         | Inst8Kind::BoolNot(_)
                         | Inst8Kind::Sub32Borrow { .. }
-                        | Inst8Kind::Carry(_, _) => true,
+                        | Inst8Kind::Cmp32 { .. } => true,
                         Inst8Kind::Copy(s) => imm_bool(s, &bool_regs),
                         Inst8Kind::And8(a, b) => imm_bool(a, &bool_regs) || imm_bool(b, &bool_regs),
                         Inst8Kind::Or8(a, b) | Inst8Kind::Xor8(a, b) => {
@@ -1265,7 +1427,14 @@ impl<'a> Emitter<'a> {
         let lhs = inner[..pos].trim();
         let rhs = inner[pos + 3..].trim();
         let n: i64 = rhs.parse().ok()?;
-        Some((lhs.to_string(), if is_neg { -n } else { n }))
+        // `calc(a + b + n)` leaves `a + b`: still a sum, so keep it wrapped
+        // (a bare sum is not a valid function argument).
+        let lhs = if Self::is_atomic_css_value(lhs) {
+            lhs.to_string()
+        } else {
+            format!("calc({})", lhs)
+        };
+        Some((lhs, if is_neg { -n } else { n }))
     }
 
     /// Emit `--lt(l, r)` with constant-offset folding.
@@ -1503,19 +1672,29 @@ impl<'a> Emitter<'a> {
         trap_parts: &mut Vec<String>,
     ) -> (String, String) {
         let imm = (base as u32) + (lane as u32);
+        let lo = Self::val_expr(reg_now, addr.lo);
+        let hi = Self::val_expr(reg_now, addr.hi);
         let byte_addr = match slot {
-            Some(s) if imm == 0 => format!("var(--mb{})", s),
-            Some(s) => format!("calc(var(--mb{}) + {})", s, imm),
-            None => format!(
-                "--addr16({}, {}, {})",
-                Self::val_expr(reg_now, addr.lo),
-                Self::val_expr(reg_now, addr.hi),
-                imm
-            ),
+            Some(s) => Self::fold_add(vec![format!("var(--mb{})", s), imm.to_string()]),
+            None => Self::byte_pair_expr(&lo, &hi, imm),
         };
-        let mem_end = self.memory_end.to_string();
-        let in_bounds = Self::lt_expr(&byte_addr, &mem_end);
-        trap_parts.push(Self::ge_expr(&byte_addr, &mem_end));
+        // `lo` is a byte, so `lo + 256 * hi + imm < end` reduces to a test on
+        // `hi` alone whenever `end - imm` is a multiple of 256.
+        let end = self.memory_end;
+        let (in_bounds, trap) = match end.checked_sub(imm) {
+            Some(k) if k % 256 == 0 => {
+                let m = (k / 256).to_string();
+                (Self::lt_expr(&hi, &m), Self::ge_expr(&hi, &m))
+            }
+            _ => {
+                let end = end.to_string();
+                (
+                    Self::lt_expr(&byte_addr, &end),
+                    Self::ge_expr(&byte_addr, &end),
+                )
+            }
+        };
+        trap_parts.push(trap);
         (byte_addr, in_bounds)
     }
 
@@ -1541,7 +1720,12 @@ impl<'a> Emitter<'a> {
         addr_slot.insert(*addr, s);
         let lo = Self::val_expr(reg_now, addr.lo);
         let hi = Self::val_expr(reg_now, addr.hi);
-        let _ = write!(mb_arms[s], "style(--_1pc: {}): --m16({}, {}); ", pc, lo, hi);
+        let _ = write!(
+            mb_arms[s],
+            "style(--_1pc: {}): {}; ",
+            pc,
+            Self::byte_pair_expr(&lo, &hi, 0)
+        );
         Some(s)
     }
 
@@ -1726,22 +1910,70 @@ impl<'a> Emitter<'a> {
         out
     }
 
-    fn add32_carry_in_expr(now: &HashMap<u16, String>, lhs: Word, rhs: Word, lane: u8) -> String {
-        let mut carry = "0".to_string();
-        for idx in 0..lane {
-            let lhs_byte = Self::val_expr(now, lhs.byte(idx));
-            let rhs_byte = Self::val_expr(now, rhs.byte(idx));
-            let total = Self::byte_add_total_expr(&lhs_byte, &rhs_byte, &carry);
-            carry = if let Ok(n) = total.parse::<i64>() {
-                (n.div_euclid(256)).to_string()
-            } else if Self::is_byte_valued_var(&total) {
-                // A bare byte var is in 0..=255, so floor(_ / 256) is always 0.
-                "0".to_string()
-            } else {
-                format!("round(down, calc({} / 256))", Self::calc_inner(&total))
-            };
+    /// `sum(sign * byte * 256^i)` over the low `lane` bytes of the given words:
+    /// literal bytes fold into one constant, variable bytes stay as terms.
+    fn weighted_prefix(
+        now: &HashMap<u16, String>,
+        words: &[(Word, i64)],
+        lane: u8,
+    ) -> (i64, Vec<(i64, String)>) {
+        let mut constant = 0i64;
+        let mut terms = Vec::new();
+        for &(w, sign) in words {
+            for idx in 0..lane {
+                let weight = sign << (8 * u32::from(idx));
+                let byte = Self::val_expr(now, w.byte(idx));
+                match byte.trim().parse::<i64>() {
+                    Ok(v) => constant += v * weight,
+                    Err(_) => terms.push((weight, byte)),
+                }
+            }
         }
-        carry
+        (constant, terms)
+    }
+
+    /// `floor((constant + sum(weight * term)) / scale)` with literal folding.
+    fn floor_div_expr(constant: i64, terms: &[(i64, String)], scale: i64) -> String {
+        if terms.is_empty() {
+            return constant.div_euclid(scale).to_string();
+        }
+        let mut out = String::new();
+        for (k, (w, t)) in terms.iter().enumerate() {
+            let t = Self::paren_if_needed(t);
+            let mag = w.unsigned_abs();
+            let factor = if mag == 1 {
+                t
+            } else {
+                format!("{} * {}", t, mag)
+            };
+            match (k, *w < 0) {
+                (0, false) => out.push_str(&factor),
+                (0, true) => out.push_str(&format!("0 - {}", factor)),
+                (_, false) => out.push_str(&format!(" + {}", factor)),
+                (_, true) => out.push_str(&format!(" - {}", factor)),
+            }
+        }
+        match constant.cmp(&0) {
+            std::cmp::Ordering::Greater => out.push_str(&format!(" + {}", constant)),
+            std::cmp::Ordering::Less => out.push_str(&format!(" - {}", -constant)),
+            std::cmp::Ordering::Equal => {}
+        }
+        format!("round(down, calc(({}) / {}))", out, scale)
+    }
+
+    /// Carry into byte `lane` of `lhs + rhs`: `floor((L + R) / 256^lane)` with
+    /// `L`, `R` the low `lane` bytes as words, in one flat expression (exact,
+    /// below 2^33) instead of a nested per-byte carry chain.
+    fn add32_carry_in_expr(now: &HashMap<u16, String>, lhs: Word, rhs: Word, lane: u8) -> String {
+        if lane == 0 {
+            return "0".to_string();
+        }
+        let (constant, terms) = Self::weighted_prefix(now, &[(lhs, 1), (rhs, 1)], lane);
+        // A lone byte (no constant) can never reach `256^lane`.
+        if constant == 0 && terms.len() == 1 && Self::is_byte_valued_var(&terms[0].1) {
+            return "0".to_string();
+        }
+        Self::floor_div_expr(constant, &terms, 1i64 << (8 * u32::from(lane)))
     }
 
     /// Byte-level borrow-out for one subtraction step, folding literals.
@@ -1779,14 +2011,99 @@ impl<'a> Emitter<'a> {
         format!("round(down, calc(({}) / 256))", numerator)
     }
 
+    /// Borrow into byte `lane` of `lhs - rhs`: `L < R` on the low `lane`
+    /// bytes, as `floor((256^lane - 1 - L + R) / 256^lane)` in one expression.
     fn sub32_borrow_in_expr(now: &HashMap<u16, String>, lhs: Word, rhs: Word, lane: u8) -> String {
-        let mut borrow = "0".to_string();
-        for idx in 0..lane {
-            let lhs_byte = Self::val_expr(now, lhs.byte(idx));
-            let rhs_byte = Self::val_expr(now, rhs.byte(idx));
-            borrow = Self::byte_borrow_step(&lhs_byte, &rhs_byte, &borrow);
+        if lane == 0 {
+            return "0".to_string();
         }
-        borrow
+        let scale = 1i64 << (8 * u32::from(lane));
+        let (constant, terms) = Self::weighted_prefix(now, &[(rhs, 1), (lhs, -1)], lane);
+        Self::floor_div_expr(constant + scale - 1, &terms, scale)
+    }
+
+    /// Exact value of a word (`< 2^32`, or `[-2^31, 2^31)` when `signed`) as one
+    /// sum over its bytes.
+    fn word_value_expr(now: &HashMap<u16, String>, w: Word, signed: bool) -> String {
+        let mut b = Self::word_bytes_expr(now, w);
+        if signed {
+            // Two's complement: the top byte reads as `b3 - 256` when its
+            // sign bit is set (the bit then weighs -2^31 instead of 2^31).
+            b[3] = format!(
+                "calc({} - 256 * {})",
+                Self::paren_if_needed(&b[3]),
+                Self::byte_bit_expr(&b[3], 7)
+            );
+        }
+        Self::le_bytes_expr(&b)
+    }
+
+    /// `sum(bytes[i] * 256^i)`: the little-endian value of byte expressions.
+    fn le_bytes_expr(bytes: &[String]) -> String {
+        Self::fold_add(
+            bytes
+                .iter()
+                .enumerate()
+                .map(|(i, b)| Self::fold_mul_by_int(b, 1u32 << (8 * i)))
+                .collect(),
+        )
+    }
+
+    /// Word comparison as one expression (see [`Inst8Kind::Cmp32`]).
+    pub(super) fn cmp32_expr(
+        now: &HashMap<u16, String>,
+        op: crate::ir8::Cmp32Op,
+        lhs: Word,
+        rhs: Word,
+        signed: bool,
+    ) -> String {
+        use crate::ir8::Cmp32Op;
+        let a = Self::paren_if_needed(&Self::word_value_expr(now, lhs, signed));
+        let b = Self::paren_if_needed(&Self::word_value_expr(now, rhs, signed));
+        match op {
+            Cmp32Op::Eq => format!("calc(1 - abs(sign(calc({a} - {b}))))"),
+            Cmp32Op::Ne => format!("abs(sign(calc({a} - {b})))"),
+            Cmp32Op::Lt => format!("max(0, sign(calc({b} - {a})))"),
+            Cmp32Op::Ge => format!("min(1, sign(calc({a} - {b})) + 1)"),
+        }
+    }
+
+    /// Byte `lane` of the low 32 bits of `lhs * rhs` as one expression. With
+    /// `X01 = x0 + 256 x1` and so on, every intermediate stays below 2^49,
+    /// exact in the `double` math of a single `calc()`; the value is reduced
+    /// to a byte before it reaches a register (registered properties keep
+    /// only 6 significant digits).
+    pub(super) fn mul32_byte_expr(
+        now: &HashMap<u16, String>,
+        lhs: Word,
+        rhs: Word,
+        lane: u8,
+    ) -> String {
+        let a = Self::word_bytes_expr(now, lhs);
+        let b = Self::word_bytes_expr(now, rhs);
+        let limbs = Self::le_bytes_expr;
+        let p = |x: &str| Self::paren_if_needed(x);
+        let product = |x: &str, y: &str| Self::fold_mul(x, y);
+        match lane {
+            0 => Self::fold_mod(&product(&a[0], &b[0]), 256),
+            1 | 2 => {
+                let n = usize::from(lane) + 1;
+                let m = 1u64 << (8 * n);
+                let low = Self::fold_mod(&product(&limbs(&a[..n]), &limbs(&b[..n])), m as i64);
+                format!("round(down, calc({} / {}))", p(&low), 1u64 << (8 * (n - 1)))
+            }
+            _ => {
+                let b01 = limbs(&b[..2]);
+                let b23 = limbs(&b[2..]);
+                let cross = Self::fold_mod(&product(&limbs(&a[..2]), &b23), 65536);
+                let total = Self::fold_add(vec![
+                    product(&limbs(&a), &b01),
+                    Self::fold_mul_by_int(&cross, 65536),
+                ]);
+                let low = Self::fold_mod(&total, 4_294_967_296);
+                format!("round(down, calc({} / 16777216))", p(&low))
+            }
+        }
     }
 
     pub(super) fn add32_byte_expr(
@@ -2323,6 +2640,59 @@ impl<'a> Emitter<'a> {
     }
 
     pub(super) fn bitwise_expr(op: BitwiseOp, l: &str, r: &str) -> String {
+        let (lt, rt) = (l.trim(), r.trim());
+        let konst = |s: &str| s.parse::<u8>().ok();
+        if let (Some(a), Some(b)) = (konst(lt), konst(rt)) {
+            return match op {
+                BitwiseOp::And => a & b,
+                BitwiseOp::Or => a | b,
+                BitwiseOp::Xor => a ^ b,
+            }
+            .to_string();
+        }
+        // With one constant operand, OR and XOR reduce to AND with a mask:
+        //   x | c = (x & !c) + c,   x ^ c = x + c - 2 (x & c)
+        // and AND with a mask takes one term per run of set bits.
+        if let Some((x, c)) = match (konst(lt), konst(rt)) {
+            (Some(c), None) => Some((r, c)),
+            (None, Some(c)) => Some((l, c)),
+            _ => None,
+        } {
+            return match op {
+                BitwiseOp::And => Self::and_mask_expr(x, c),
+                BitwiseOp::Or => Self::fold_add(vec![Self::and_mask_expr(x, !c), c.to_string()]),
+                BitwiseOp::Xor => {
+                    let masked = Self::and_mask_expr(x, c);
+                    if masked == "0" {
+                        x.to_string()
+                    } else {
+                        format!(
+                            "calc({} + {} - 2 * {})",
+                            Self::paren_if_needed(x),
+                            c,
+                            Self::paren_if_needed(&masked)
+                        )
+                    }
+                }
+            };
+        }
+        // Two variables: only AND needs per-bit work.
+        //   a | b = a + b - (a & b),   a ^ b = a + b - 2 (a & b)
+        if !matches!(op, BitwiseOp::And) && !Self::is_bool_expr(lt) && !Self::is_bool_expr(rt) {
+            let and = Self::bitwise_expr(BitwiseOp::And, l, r);
+            let k = if matches!(op, BitwiseOp::Or) {
+                ""
+            } else {
+                "2 * "
+            };
+            return format!(
+                "calc({} + {} - {}{})",
+                Self::paren_if_needed(l),
+                Self::paren_if_needed(r),
+                k,
+                Self::paren_if_needed(&and)
+            );
+        }
         let mut terms = Vec::with_capacity(8);
         for k in 0..8u32 {
             let p2 = 1u32 << k;
@@ -2334,6 +2704,40 @@ impl<'a> Emitter<'a> {
                 BitwiseOp::Xor => Self::fold_xor_bit(&lb, &rb),
             };
             terms.push(Self::fold_mul_by_int(&bit, p2));
+        }
+        Self::fold_add(terms)
+    }
+
+    /// `x & c` for a byte `x`: one term per run of set bits of `c`.
+    fn and_mask_expr(x: &str, c: u8) -> String {
+        let xp = Self::paren_if_needed(x);
+        let mut terms = Vec::new();
+        let mut k = 0u32;
+        while k < 8 {
+            if c & (1 << k) == 0 {
+                k += 1;
+                continue;
+            }
+            let start = k;
+            while k < 8 && c & (1 << k) != 0 {
+                k += 1;
+            }
+            // Bits start..k of x, kept in place.
+            let term = match (start, k) {
+                (0, 8) => x.to_string(),
+                (0, end) => format!("mod({}, {})", xp, 1u32 << end),
+                (start, 8) => format!("calc({} - mod({}, {}))", xp, xp, 1u32 << start),
+                (start, end) => Self::fold_mul_by_int(
+                    &format!(
+                        "mod(round(down, calc({} / {})), {})",
+                        xp,
+                        1u32 << start,
+                        1u32 << (end - start)
+                    ),
+                    1u32 << start,
+                ),
+            };
+            terms.push(term);
         }
         Self::fold_add(terms)
     }
@@ -2399,6 +2803,29 @@ impl<'a> Emitter<'a> {
             return c.to_string();
         }
         format!("calc({} * {c})", Self::paren_if_needed(expr))
+    }
+
+    /// The loaded byte for an in-bounds load of fixed byte address `at`: a
+    /// direct read of the cell (the same `--_0m*` stage `--read_m16` reads).
+    fn const_load_expr(&self, at: u32) -> Option<String> {
+        if at >= self.memory_end {
+            return None;
+        }
+        let cell = Self::shadow_name(0, self.mem_names.get(at as usize / 2)?);
+        Some(if at.is_multiple_of(2) {
+            format!("mod(var({}), 256)", cell)
+        } else {
+            format!("round(down, var({}) / 256)", cell)
+        })
+    }
+
+    /// `lo + 256 * hi + imm` for byte operands, with zero terms dropped.
+    pub(super) fn byte_pair_expr(lo: &str, hi: &str, imm: u32) -> String {
+        Self::fold_add(vec![
+            lo.to_string(),
+            Self::fold_mul_by_int(hi, 256),
+            imm.to_string(),
+        ])
     }
 
     /// Sums a list of expressions, dropping zero terms. If every term is

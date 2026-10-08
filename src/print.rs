@@ -703,15 +703,34 @@ fn print_inst8(out: &mut String, inst: &crate::ir8::Inst8) {
         Inst8Kind::Add32Byte { lhs, rhs, lane } => {
             write!(out, "add32.b{} {} {}", lane, fmt_word(*lhs), fmt_word(*rhs)).unwrap()
         }
+        Inst8Kind::Mul32Byte { lhs, rhs, lane } => {
+            write!(out, "mul32.b{} {} {}", lane, fmt_word(*lhs), fmt_word(*rhs)).unwrap()
+        }
         Inst8Kind::Sub32Byte { lhs, rhs, lane } => {
             write!(out, "sub32.b{} {} {}", lane, fmt_word(*lhs), fmt_word(*rhs)).unwrap()
         }
+        Inst8Kind::Cmp32 {
+            op,
+            lhs,
+            rhs,
+            signed,
+        } => write!(
+            out,
+            "cmp32.{}{} {} {}",
+            match op {
+                crate::ir8::Cmp32Op::Eq => "eq",
+                crate::ir8::Cmp32Op::Ne => "ne",
+                crate::ir8::Cmp32Op::Lt => "lt",
+                crate::ir8::Cmp32Op::Ge => "ge",
+            },
+            if *signed { "_s" } else { "_u" },
+            fmt_word(*lhs),
+            fmt_word(*rhs)
+        )
+        .unwrap(),
         Inst8Kind::Sub32Borrow { lhs, rhs } => {
             write!(out, "sub32.borrow {} {}", fmt_word(*lhs), fmt_word(*rhs)).unwrap()
         }
-
-        Inst8Kind::Add(l, r) => write!(out, "add {} {}", fmt_val8(*l), fmt_val8(*r)).unwrap(),
-        Inst8Kind::Carry(l, r) => write!(out, "carry {} {}", fmt_val8(*l), fmt_val8(*r)).unwrap(),
         Inst8Kind::Sub(l, r) => write!(out, "sub {} {}", fmt_val8(*l), fmt_val8(*r)).unwrap(),
         Inst8Kind::MulLo(l, r) => write!(out, "mul.lo {} {}", fmt_val8(*l), fmt_val8(*r)).unwrap(),
         Inst8Kind::MulHi(l, r) => write!(out, "mul.hi {} {}", fmt_val8(*l), fmt_val8(*r)).unwrap(),
@@ -759,6 +778,15 @@ fn print_inst8(out: &mut String, inst: &crate::ir8::Inst8) {
             fmt_val8(addr.lo),
             fmt_val8(addr.hi),
             lane
+        )
+        .unwrap(),
+        Inst8Kind::MemInc32 { base, addr, delta } => write!(
+            out,
+            "inc.mem32 [{:#x}+{}:{}] {:#x}",
+            base,
+            fmt_val8(addr.lo),
+            fmt_val8(addr.hi),
+            delta
         )
         .unwrap(),
         Inst8Kind::StoreMem {

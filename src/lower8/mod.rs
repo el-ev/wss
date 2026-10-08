@@ -6,8 +6,8 @@ use crate::ast::{BinOp, RelOp, UnOp};
 use crate::constants::MAX_ADDRESSABLE_MEMORY_BYTES;
 use crate::ir::{BasicBlock, BlockId, Inst, IrNode, Terminator};
 use crate::ir8::{
-    BasicBlock8, BoolNary8, BuiltinId, CallTarget, Inst8, Inst8Kind, Ir8Program, PC_STRIDE, Pc,
-    Terminator8, TrapCode, VREG_START, Val8, ValueWords, Word,
+    BasicBlock8, BoolNary8, BuiltinId, CallTarget, Cmp32Op, Inst8, Inst8Kind, Ir8Program,
+    PC_STRIDE, Pc, Terminator8, TrapCode, VREG_START, Val8, ValueWords, Word,
 };
 use crate::module::{ConstInit, IrFuncBody, IrModule};
 
@@ -233,53 +233,27 @@ fn emit_bool_chain(
     dst
 }
 
-fn compare_word_lanes(
-    b: &mut FuncBuilder,
-    lhs: Word,
-    rhs: Word,
-    op: fn(Val8, Val8) -> Inst8Kind,
-) -> [Val8; 4] {
-    let mut out = [Val8::imm(0); 4];
-    for (i, (&l, &r)) in lhs.bytes().iter().zip(rhs.bytes().iter()).enumerate() {
-        let dst = b.alloc_reg();
-        b.emit(Inst8::with_dst(dst, op(l, r)));
-        out[i] = dst;
-    }
-    out
+/// Byte-sized operands are narrowed to a byte compare by instsimplify.
+fn cmp32_bit(b: &mut FuncBuilder, op: Cmp32Op, lhs: Word, rhs: Word, signed: bool) -> Val8 {
+    let dst = b.alloc_reg();
+    b.emit(Inst8::with_dst(
+        dst,
+        Inst8Kind::Cmp32 {
+            op,
+            lhs,
+            rhs,
+            signed,
+        },
+    ));
+    dst
 }
 
 fn lower_eq32_bit(b: &mut FuncBuilder, lhs: Word, rhs: Word) -> Val8 {
-    let eqs = compare_word_lanes(b, lhs, rhs, Inst8Kind::Eq);
-    emit_bool_chain(b, &eqs, Inst8Kind::BoolAnd)
+    cmp32_bit(b, Cmp32Op::Eq, lhs, rhs, false)
 }
 
 fn lower_ltu32_bit(b: &mut FuncBuilder, lhs: Word, rhs: Word) -> Val8 {
-    let lt3 = b.alloc_reg();
-    b.emit(Inst8::with_dst(lt3, Inst8Kind::LtU(lhs.b3, rhs.b3)));
-    let eq3 = b.alloc_reg();
-    b.emit(Inst8::with_dst(eq3, Inst8Kind::Eq(lhs.b3, rhs.b3)));
-    let lt2 = b.alloc_reg();
-    b.emit(Inst8::with_dst(lt2, Inst8Kind::LtU(lhs.b2, rhs.b2)));
-    let eq2 = b.alloc_reg();
-    b.emit(Inst8::with_dst(eq2, Inst8Kind::Eq(lhs.b2, rhs.b2)));
-    let lt1 = b.alloc_reg();
-    b.emit(Inst8::with_dst(lt1, Inst8Kind::LtU(lhs.b1, rhs.b1)));
-    let eq1 = b.alloc_reg();
-    b.emit(Inst8::with_dst(eq1, Inst8Kind::Eq(lhs.b1, rhs.b1)));
-    let lt0 = b.alloc_reg();
-    b.emit(Inst8::with_dst(lt0, Inst8Kind::LtU(lhs.b0, rhs.b0)));
-
-    // lt3 || (eq3 && lt2) || (eq3 && eq2 && lt1) || (eq3 && eq2 && eq1 && lt0)
-    let eq3_and_lt2 = emit_bool_chain(b, &[eq3, lt2], Inst8Kind::BoolAnd);
-    let eq3_and_eq2 = emit_bool_chain(b, &[eq3, eq2], Inst8Kind::BoolAnd);
-    let eq3_eq2_and_lt1 = emit_bool_chain(b, &[eq3_and_eq2, lt1], Inst8Kind::BoolAnd);
-    let eq3_eq2_and_eq1 = emit_bool_chain(b, &[eq3_and_eq2, eq1], Inst8Kind::BoolAnd);
-    let eq3_eq2_eq1_and_lt0 = emit_bool_chain(b, &[eq3_eq2_and_eq1, lt0], Inst8Kind::BoolAnd);
-    emit_bool_chain(
-        b,
-        &[lt3, eq3_and_lt2, eq3_eq2_and_lt1, eq3_eq2_eq1_and_lt0],
-        Inst8Kind::BoolOr,
-    )
+    cmp32_bit(b, Cmp32Op::Lt, lhs, rhs, false)
 }
 
 fn shl1_word(b: &mut FuncBuilder, w: Word) -> Word {
@@ -548,14 +522,6 @@ fn lower_divrem_s32(b: &mut FuncBuilder, numer: Word, denom: Word, want_rem: boo
         q = select_word(b, sign, q_neg, q);
         q
     }
-}
-
-fn word_const_u32(w: Word) -> Option<u32> {
-    let b0 = w.b0.imm_value()? as u32;
-    let b1 = w.b1.imm_value()? as u32;
-    let b2 = w.b2.imm_value()? as u32;
-    let b3 = w.b3.imm_value()? as u32;
-    Some(b0 | (b1 << 8) | (b2 << 16) | (b3 << 24))
 }
 
 fn shift_left_byte_const(b: &mut FuncBuilder, src: Val8, shift: u8) -> Val8 {
@@ -873,7 +839,7 @@ fn lower_binary(b: &mut FuncBuilder, op: BinOp, lhs: Word, rhs: Word) -> anyhow:
         BinOp::DivS => lower_divrem_s32(b, lhs, rhs, false),
         BinOp::RemS => lower_divrem_s32(b, lhs, rhs, true),
         BinOp::Shl | BinOp::ShrU | BinOp::ShrS | BinOp::Rotl | BinOp::Rotr => {
-            if let Some(rhs_const) = word_const_u32(rhs) {
+            if let Some(rhs_const) = rhs.imm_prefix(3) {
                 lower_const_shift_or_rotate(b, op, lhs, rhs_const)
             } else {
                 let builtin = match op {
@@ -890,77 +856,16 @@ fn lower_binary(b: &mut FuncBuilder, op: BinOp, lhs: Word, rhs: Word) -> anyhow:
     })
 }
 
-fn add_bytes(b: &mut FuncBuilder, terms: &[Val8]) -> (Val8, Val8) {
-    debug_assert!(!terms.is_empty());
-    if terms.len() == 1 {
-        return (terms[0], Val8::imm(0));
-    }
-    let mut acc = terms[0];
-    let mut carry = Val8::imm(0);
-    for &t in &terms[1..] {
-        let new_acc = b.alloc_reg();
-        b.emit(Inst8::with_dst(new_acc, Inst8Kind::Add(acc, t)));
-        let this_carry = b.alloc_reg();
-        b.emit(Inst8::with_dst(this_carry, Inst8Kind::Carry(acc, t)));
-        let new_carry = b.alloc_reg();
-        b.emit(Inst8::with_dst(
-            new_carry,
-            Inst8Kind::Add(carry, this_carry),
-        ));
-        acc = new_acc;
-        carry = new_carry;
-    }
-    (acc, carry)
-}
-
 fn lower_mul32(b: &mut FuncBuilder, lhs: Word, rhs: Word) -> Word {
-    macro_rules! mul_lo {
-        ($x:expr, $y:expr) => {{
-            let v = b.alloc_reg();
-            b.emit(Inst8::with_dst(v, Inst8Kind::MulLo($x, $y)));
-            v
-        }};
-    }
-    macro_rules! mul_hi {
-        ($x:expr, $y:expr) => {{
-            let v = b.alloc_reg();
-            b.emit(Inst8::with_dst(v, Inst8Kind::MulHi($x, $y)));
-            v
-        }};
-    }
-
-    let p00_lo = mul_lo!(lhs.b0, rhs.b0);
-    let p00_hi = mul_hi!(lhs.b0, rhs.b0);
-    let p01_lo = mul_lo!(lhs.b0, rhs.b1);
-    let p01_hi = mul_hi!(lhs.b0, rhs.b1);
-    let p10_lo = mul_lo!(lhs.b1, rhs.b0);
-    let p10_hi = mul_hi!(lhs.b1, rhs.b0);
-    let p02_lo = mul_lo!(lhs.b0, rhs.b2);
-    let p02_hi = mul_hi!(lhs.b0, rhs.b2);
-    let p11_lo = mul_lo!(lhs.b1, rhs.b1);
-    let p11_hi = mul_hi!(lhs.b1, rhs.b1);
-    let p20_lo = mul_lo!(lhs.b2, rhs.b0);
-    let p20_hi = mul_hi!(lhs.b2, rhs.b0);
-    let p03_lo = mul_lo!(lhs.b0, rhs.b3);
-    let p12_lo = mul_lo!(lhs.b1, rhs.b2);
-    let p21_lo = mul_lo!(lhs.b2, rhs.b1);
-    let p30_lo = mul_lo!(lhs.b3, rhs.b0);
-
-    let b0 = p00_lo;
-    let (b1, c1) = add_bytes(b, &[p00_hi, p01_lo, p10_lo]);
-    let (b2, c2) = add_bytes(b, &[p01_hi, p10_hi, p02_lo, p11_lo, p20_lo, c1]);
-    let (b3, _) = add_bytes(
-        b,
-        &[p02_hi, p11_hi, p20_hi, p03_lo, p12_lo, p21_lo, p30_lo, c2],
-    );
-
-    Word::new(b0, b1, b2, b3)
+    lower_word_lane32_op(b, lhs, rhs, |lhs, rhs, lane| Inst8Kind::Mul32Byte {
+        lhs,
+        rhs,
+        lane,
+    })
 }
 
 fn bool32(b: &mut FuncBuilder, val: Word) -> Val8 {
-    let zero = Word::from_u32_imm(0);
-    let nes = compare_word_lanes(b, val, zero, Inst8Kind::Ne);
-    emit_bool_chain(b, &nes, Inst8Kind::BoolOr)
+    cmp32_bit(b, Cmp32Op::Ne, val, Word::from_u32_imm(0), false)
 }
 
 fn bool_not(b: &mut FuncBuilder, bit: Val8) -> Val8 {
@@ -973,77 +878,30 @@ fn bool_to_word(_b: &mut FuncBuilder, bit: Val8) -> Word {
     Word::narrow(bit)
 }
 
-fn lower_eq32(b: &mut FuncBuilder, lhs: Word, rhs: Word) -> Word {
-    let bit = lower_eq32_bit(b, lhs, rhs);
-    bool_to_word(b, bit)
-}
-
-fn lower_ne32(b: &mut FuncBuilder, lhs: Word, rhs: Word) -> Word {
-    let nes = compare_word_lanes(b, lhs, rhs, Inst8Kind::Ne);
-    let bit = emit_bool_chain(b, &nes, Inst8Kind::BoolOr);
-    bool_to_word(b, bit)
-}
-
-fn lower_ltu32(b: &mut FuncBuilder, lhs: Word, rhs: Word) -> Word {
-    let bit = lower_ltu32_bit(b, lhs, rhs);
-    bool_to_word(b, bit)
-}
-
-fn lower_gtu32(b: &mut FuncBuilder, lhs: Word, rhs: Word) -> Word {
-    lower_ltu32(b, rhs, lhs)
-}
-
-fn negate_cmp(b: &mut FuncBuilder, result: Word) -> Word {
-    let bit = b.alloc_reg();
-    b.emit(Inst8::with_dst(bit, Inst8Kind::BoolNot(result.b0)));
-    bool_to_word(b, bit)
-}
-
-fn lower_leu32(b: &mut FuncBuilder, lhs: Word, rhs: Word) -> Word {
-    let gt = lower_gtu32(b, lhs, rhs);
-    negate_cmp(b, gt)
-}
-
-fn lower_geu32(b: &mut FuncBuilder, lhs: Word, rhs: Word) -> Word {
-    let lt = lower_ltu32(b, lhs, rhs);
-    negate_cmp(b, lt)
-}
-
-fn flip_sign(b: &mut FuncBuilder, value: Word) -> Word {
-    let mask = Val8::imm(0x80);
-    let flipped = b.alloc_reg();
-    b.emit(Inst8::with_dst(flipped, Inst8Kind::Xor8(value.b3, mask)));
-    Word::new(value.b0, value.b1, value.b2, flipped)
-}
-
 fn lower_compare(b: &mut FuncBuilder, op: RelOp, lhs: Word, rhs: Word) -> anyhow::Result<Word> {
-    Ok(match op {
-        RelOp::Eq => lower_eq32(b, lhs, rhs),
-        RelOp::Ne => lower_ne32(b, lhs, rhs),
-        RelOp::LtU => lower_ltu32(b, lhs, rhs),
-        RelOp::GtU => lower_gtu32(b, lhs, rhs),
-        RelOp::LeU => lower_leu32(b, lhs, rhs),
-        RelOp::GeU => lower_geu32(b, lhs, rhs),
-        // XOR sign bits to convert signed comparison to unsigned order.
-        RelOp::LtS | RelOp::GtS | RelOp::LeS | RelOp::GeS => {
-            let (lhs2, rhs2) = (flip_sign(b, lhs), flip_sign(b, rhs));
-            match op {
-                RelOp::LtS => lower_ltu32(b, lhs2, rhs2),
-                RelOp::GtS => lower_gtu32(b, lhs2, rhs2),
-                RelOp::LeS => lower_leu32(b, lhs2, rhs2),
-                RelOp::GeS => lower_geu32(b, lhs2, rhs2),
-                _ => unreachable!(),
-            }
-        }
-    })
+    // Every relation is one word comparison: `>` / `<=` swap the operands.
+    let (cmp, l, r, signed) = match op {
+        RelOp::Eq => (Cmp32Op::Eq, lhs, rhs, false),
+        RelOp::Ne => (Cmp32Op::Ne, lhs, rhs, false),
+        RelOp::LtU => (Cmp32Op::Lt, lhs, rhs, false),
+        RelOp::GtU => (Cmp32Op::Lt, rhs, lhs, false),
+        RelOp::LeU => (Cmp32Op::Ge, rhs, lhs, false),
+        RelOp::GeU => (Cmp32Op::Ge, lhs, rhs, false),
+        RelOp::LtS => (Cmp32Op::Lt, lhs, rhs, true),
+        RelOp::GtS => (Cmp32Op::Lt, rhs, lhs, true),
+        RelOp::LeS => (Cmp32Op::Ge, rhs, lhs, true),
+        RelOp::GeS => (Cmp32Op::Ge, lhs, rhs, true),
+    };
+    let bit = cmp32_bit(b, cmp, l, r, signed);
+    Ok(bool_to_word(b, bit))
 }
 
 fn lower_unary(b: &mut FuncBuilder, op: UnOp, operand: Word) -> anyhow::Result<Word> {
     Ok(match op {
         UnOp::Eqz => {
             // eqz(a) = (a == 0)
-            let zero_const = Word::from_u32_imm(0);
-            lower_eq32(b, operand, zero_const)
+            let bit = lower_eq32_bit(b, operand, Word::from_u32_imm(0));
+            bool_to_word(b, bit)
         }
         UnOp::Extend8S => lower_sign_extend(b, operand, 0),
         UnOp::Extend16S => lower_sign_extend(b, operand, 1),

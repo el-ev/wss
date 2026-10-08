@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use crate::css::Doc;
+
 const SLOT_PREFIXES: &[&str] = &["cri", "crp", "csi", "csp", "mri", "msc", "msp"];
 
 pub(super) fn inline_slot_indicators(logic: &mut String, support: &mut String) {
@@ -32,6 +34,27 @@ pub(super) fn fold_value_expressions(logic: &mut String, support: &mut String) {
     *logic = fold_buffer(logic);
 }
 
+/// Replace reads of provably constant properties and fold provably equal
+/// properties onto one representative (see `css::propagate_state_facts`).
+/// `extra_external` names must stay observable (read from JS).
+pub(super) fn propagate_facts(
+    logic: &mut Doc,
+    support: &mut Doc,
+    props: &str,
+    external: &HashMap<String, usize>,
+    extra_external: &[String],
+) {
+    let regs = crate::css::parse_registrations(props);
+    // Anything the template mentions may be written outside the analyzed
+    // rules (static CSS or the JS runtime): treat it as unknown.
+    let external: std::collections::HashSet<String> = external
+        .keys()
+        .map(|k| format!("--{}", k))
+        .chain(extra_external.iter().cloned())
+        .collect();
+    crate::css::propagate_state_facts(&mut [logic, support], &regs, &external);
+}
+
 fn fold_buffer(s: &str) -> String {
     let mut doc = crate::css::parse_doc(s);
     crate::css::fold_doc(&mut doc);
@@ -40,38 +63,34 @@ fn fold_buffer(s: &str) -> String {
 
 /// Remove `--name: <value>;` declarations that have no reader anywhere
 /// in the cascaded output, and inline single-use decls. Iterates to
-/// fixpoint because each pass can expose work for the other.
-pub(super) fn eliminate_dead_decls(logic: &mut String, support: &mut String, base_html: &str) {
-    let mut logic_doc = crate::css::parse_doc(logic);
-    let mut support_doc = crate::css::parse_doc(support);
-
-    // Seed with refs from base.html (not parsed into the AST) and the
-    // JS-read property denylist so DCE never drops their backing decls.
-    let external = build_external_refs(base_html);
-
+/// fixpoint because each pass can expose work for the other. `external`
+/// refs (see [`build_external_refs`]) keep their backing decls alive.
+pub(super) fn eliminate_dead_decls(
+    logic_doc: &mut Doc,
+    support_doc: &mut Doc,
+    external: &HashMap<String, usize>,
+) {
     loop {
-        let dce_seed = build_dce_seed(&logic_doc, &support_doc, &external);
-        let dropped_a = crate::css::dce(&mut logic_doc, &dce_seed);
-        let dropped_b = crate::css::dce(&mut support_doc, &dce_seed);
+        let dce_seed = build_dce_seed(logic_doc, support_doc, external);
+        let dropped_a = crate::css::dce(logic_doc, &dce_seed);
+        let dropped_b = crate::css::dce(support_doc, &dce_seed);
         // For inlining, the seed must include refs from the OTHER doc
         // plus externals — `inline_single_use` adds the current doc's
         // refs internally.
-        let logic_external = merge_refs(&external, &crate::css::count_refs(&support_doc));
-        let support_external = merge_refs(&external, &crate::css::count_refs(&logic_doc));
-        let inlined_a = crate::css::inline_single_use(&mut logic_doc, &logic_external);
-        let inlined_b = crate::css::inline_single_use(&mut support_doc, &support_external);
+        let logic_external = merge_refs(external, &crate::css::count_refs(support_doc));
+        let support_external = merge_refs(external, &crate::css::count_refs(logic_doc));
+        let inlined_a = crate::css::inline_single_use(logic_doc, &logic_external);
+        let inlined_b = crate::css::inline_single_use(support_doc, &support_external);
         if dropped_a == 0 && dropped_b == 0 && inlined_a == 0 && inlined_b == 0 {
             break;
         }
     }
-
-    *logic = crate::css::print_doc(&logic_doc);
-    *support = crate::css::print_doc(&support_doc);
 }
 
 /// References that live outside the parsed buffers — base.html's
-/// static rules and the JS coprocessor / debugger runtime.
-fn build_external_refs(base_html: &str) -> HashMap<String, usize> {
+/// static rules (not parsed into the AST) and the JS coprocessor /
+/// debugger runtime.
+pub(super) fn build_external_refs(base_html: &str) -> HashMap<String, usize> {
     let mut refs = HashMap::new();
     crate::css::count_refs_in_text(base_html, &mut refs);
     for name in JS_READ_PROPERTIES {

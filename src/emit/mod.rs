@@ -32,7 +32,7 @@ const LOGIC_PLACEHOLDER: &str = "/*__WSS_LOGIC__*/";
 const SUPPORT_PLACEHOLDER: &str = "/*__WSS_SUPPORT__*/";
 const TERMINAL_PCS_PLACEHOLDER: &str = "/*__WSS_TERMINAL_PCS__*/";
 const DEBUGGER_CYCLES_PLACEHOLDER: &str = "/*__WSS_DEBUGGER_CYCLES__*/";
-const READ_LOOKUP_CHUNK: usize = 128;
+const READ_LOOKUP_CHUNK: usize = 32;
 const VIS_SHADOW_CHUNK: usize = 8;
 const VIS_COLS: usize = 128;
 const MEM_DIRTY_PAGE_CELLS: usize = 16;
@@ -243,12 +243,10 @@ keep_pairs! {
         (FN_LT, "FN_LT"),
         (FN_GE, "FN_GE"),
         (FN_INRANGE, "FN_INRANGE"),
-        (FN_ADDR16, "FN_ADDR16"),
         (FN_MHALF, "FN_MHALF"),
         (FN_MPAR, "FN_MPAR"),
         (FN_MLO, "FN_MLO"),
         (FN_MHI, "FN_MHI"),
-        (FN_M16, "FN_M16"),
         (FN_MLOAD, "FN_MLOAD"),
         (INDS_CSS, "INDS_CSS"),
         (SP_IND_CSS, "SP_INDICATOR_CSS"),
@@ -286,12 +284,10 @@ bitflags! {
         const FN_EQ = 1 << 6;
         const FN_NE = 1 << 7;
         const FN_LT = 1 << 8;
-        const FN_ADDR16 = 1 << 9;
         const FN_MHALF = 1 << 10;
         const FN_MPAR = 1 << 11;
         const FN_MLO = 1 << 12;
         const FN_MHI = 1 << 13;
-        const FN_M16 = 1 << 14;
         const FN_MLOAD = 1 << 15;
         const SP_INDICATOR = 1 << 16;
         const MEM_VISUALIZER = 1 << 17;
@@ -311,12 +307,15 @@ struct UsageScan {
     uses_ne: bool,
     uses_ge: bool,
     uses_bitcount: bool,
+    uses_mem_inc: bool,
 }
 
 #[derive(Clone)]
 struct MemStoreByte {
     cell: String,
     parity: String,
+    /// Linear byte address (only meaningful when `ok`).
+    addr: String,
     val: String,
     ok: String,
 }
@@ -375,6 +374,11 @@ pub(super) struct MemSlotConsts {
 struct Emitter<'a> {
     program: &'a Ir8Program,
     entry_pc: u16,
+    /// The original entry cycle when it was skipped as a no-op: nothing can
+    /// reach it, so it is not emitted.
+    skipped_entry: Option<u16>,
+    /// Nothing can jump back to the entry cycle: it runs once, at start.
+    entry_runs_once: bool,
     js_clock: bool,
     js_coprocessor: bool,
     js_clock_debugger: bool,
@@ -389,12 +393,15 @@ struct Emitter<'a> {
     uses_exceptions: bool,
     uses_exc_payload: bool,
     uses_bitcount: bool,
+    uses_mem_inc: bool,
     max_mem_store_slots: usize,
     max_mem_read_slots: usize,
     max_mem_addr_slots: usize,
     max_cs_store_slots: usize,
     max_cs_read_slots: usize,
-    mem_slot_consts: std::cell::OnceCell<MemSlotConsts>,
+    /// The memory dispatch merge `@function`: built from per-cycle store
+    /// arms while emitting logic, printed with the support rules.
+    mem_merge_fn: std::cell::OnceCell<String>,
 }
 
 pub fn emit_program(program: &Ir8Program, config: EmitConfig) -> anyhow::Result<String> {
@@ -415,7 +422,25 @@ pub fn emit_program(program: &Ir8Program, config: EmitConfig) -> anyhow::Result<
     Emitter::collapse_slot_aliases(&mut logic_css, &mut support_css, &mut props_css);
     inline::inline_slot_indicators(&mut logic_css, &mut support_css);
     inline::fold_value_expressions(&mut logic_css, &mut support_css);
-    inline::eliminate_dead_decls(&mut logic_css, &mut support_css, BASE_HTML);
+    let mut logic_doc = crate::css::parse_doc(&logic_css);
+    let mut support_doc = crate::css::parse_doc(&support_css);
+    let external = inline::build_external_refs(BASE_HTML);
+    // The debugger reads every `--r{n}` from JS: keep them all observable.
+    let debugger_regs: Vec<String> = if emitter.js_clock_debugger {
+        (0..program.num_vregs).map(|r| format!("--r{r}")).collect()
+    } else {
+        Vec::new()
+    };
+    inline::propagate_facts(
+        &mut logic_doc,
+        &mut support_doc,
+        &props_css,
+        &external,
+        &debugger_regs,
+    );
+    inline::eliminate_dead_decls(&mut logic_doc, &mut support_doc, &external);
+    let logic_css = crate::css::print_doc(&logic_doc);
+    let support_css = crate::css::print_doc(&support_doc);
 
     let html = render(BASE_HTML, PROPS_PLACEHOLDER, &props_css)?;
     let html = render(&html, LOGIC_PLACEHOLDER, &logic_css)?;
@@ -433,28 +458,71 @@ pub fn emit_program(program: &Ir8Program, config: EmitConfig) -> anyhow::Result<
     };
     let html = render(&html, DEBUGGER_CYCLES_PLACEHOLDER, &debugger_cycles)?;
     let html = emitter.apply_template_features(html)?;
-    Ok(compact_style_whitespace(&html))
+    Ok(map_style_bodies(&html, compact_css_run))
 }
 
-fn compact_style_whitespace(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
+/// Drop optional whitespace inside every `<style>` block: after `:`, `;` and
+/// `,`, and around `*` / `/` inside parentheses (math). Blink re-tokenizes
+/// custom property values on every style recalc (untaken `if()` arms
+/// included), so whitespace tokens are a measurable per-frame cost.
+pub fn compact_css_tokens(html: &str) -> String {
+    map_style_bodies(html, compact_css_tokens_run)
+}
+
+/// Copies `html`, passing the body of every `<style>` block through `run`.
+fn map_style_bodies(html: &str, run: fn(&str, &mut String)) -> String {
+    let mut out = String::with_capacity(html.len());
     let mut search_from = 0;
-    while let Some(rel) = s[search_from..].find("<style") {
+    while let Some(rel) = html[search_from..].find("<style") {
         let open_tag = search_from + rel;
-        let Some(gt_rel) = s[open_tag..].find('>') else {
+        let Some(gt_rel) = html[open_tag..].find('>') else {
             break;
         };
         let body_start = open_tag + gt_rel + 1;
-        let Some(close_rel) = s[body_start..].find("</style>") else {
+        let Some(close_rel) = html[body_start..].find("</style>") else {
             break;
         };
         let body_end = body_start + close_rel;
-        out.push_str(&s[search_from..body_start]);
-        compact_css_run(&s[body_start..body_end], &mut out);
+        out.push_str(&html[search_from..body_start]);
+        run(&html[body_start..body_end], &mut out);
         search_from = body_end;
     }
-    out.push_str(&s[search_from..]);
+    out.push_str(&html[search_from..]);
     out
+}
+
+fn compact_css_tokens_run(s: &str, out: &mut String) {
+    let bytes = s.as_bytes();
+    let mut depth = 0i32;
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == b'"' || b == b'\'' {
+            let end = skip_css_string(bytes, i);
+            out.push_str(&s[i..end]);
+            i = end;
+            continue;
+        }
+        match b {
+            b'(' => depth += 1,
+            b')' => depth -= 1,
+            b' ' => {
+                let prev = out.as_bytes().last().copied();
+                let next = bytes.get(i + 1).copied();
+                let after_sep = matches!(prev, Some(b':' | b';' | b','));
+                let math_op = depth > 0
+                    && (matches!(prev, Some(b'*' | b'/')) || matches!(next, Some(b'*' | b'/')));
+                if after_sep || math_op {
+                    i += 1;
+                    continue;
+                }
+            }
+            _ => {}
+        }
+        let ch = s[i..].chars().next().expect("index is on a char boundary");
+        out.push(ch);
+        i += ch.len_utf8();
+    }
 }
 
 fn compact_css_run(s: &str, out: &mut String) {
@@ -543,6 +611,15 @@ impl<'a> Emitter<'a> {
             .get(program.entry_func as usize)
             .map(|p| p.index())
             .unwrap_or((program.entry_func as u16) * crate::ir8::PC_STRIDE);
+        let runs_once = Self::entry_runs_once(program, entry_pc);
+        let skip_to = runs_once
+            .then(|| Self::trivial_entry_target(program, entry_pc))
+            .flatten();
+        let skipped_entry = skip_to.map(|_| entry_pc);
+        let entry_pc = skip_to.unwrap_or(entry_pc);
+        // A skipped entry still jumps to the new one, so the new entry is
+        // not known to run only once.
+        let entry_runs_once = runs_once && skipped_entry.is_none();
 
         let memory_end = if config.memory_bytes_cap() == 0 {
             program.memory_end
@@ -566,7 +643,12 @@ impl<'a> Emitter<'a> {
         let uses_callstack = Self::scan_uses_callstack(program);
         let (uses_exceptions, uses_exc_payload) = Self::scan_exception_usage(program);
         let cs_names = if uses_callstack {
-            let cs_slots = config.callstack_slots_cap();
+            // Without recursion the call stack depth is bounded statically;
+            // cells beyond it can never be touched, so don't emit them.
+            let cs_slots = match Self::static_callstack_depth(program) {
+                Some(depth) => config.callstack_slots_cap().min(depth.max(1)),
+                None => config.callstack_slots_cap(),
+            };
             let cs_hex_width = Self::cell_offset_hex_width(cs_slots);
             (0..cs_slots)
                 .map(|i| Self::cell_name("cs", i, cs_hex_width))
@@ -575,7 +657,9 @@ impl<'a> Emitter<'a> {
             Vec::new()
         };
 
-        let mut max_mem_store_slots = 0usize;
+        let usage = Self::scan_usage(program);
+        // Increments use the store merge machinery: they need a store slot.
+        let mut max_mem_store_slots = usize::from(usage.uses_mem_inc);
         let mut max_mem_read_slots = 0usize;
         let mut max_mem_addr_slots = 0usize;
         let mut max_cs_store_slots = 0usize;
@@ -596,6 +680,10 @@ impl<'a> Emitter<'a> {
                         mem_reads += 1;
                         *addr_counts.entry(addr).or_insert(0) += 1;
                     }
+                    Inst8Kind::MemInc32 { addr, .. } => {
+                        // Computes two bounds addresses.
+                        *addr_counts.entry(addr).or_insert(0) += 2;
+                    }
                     Inst8Kind::CsStore { .. } | Inst8Kind::CsStorePc { .. } => cs_stores += 1,
                     Inst8Kind::CsLoad { .. } | Inst8Kind::CsLoadPc { .. } => cs_reads += 1,
                     _ => {}
@@ -608,7 +696,6 @@ impl<'a> Emitter<'a> {
             max_cs_store_slots = max_cs_store_slots.max(cs_stores);
             max_cs_read_slots = max_cs_read_slots.max(cs_reads);
         }
-        let usage = Self::scan_usage(program);
         let features = Self::compute_template_features(
             &usage,
             uses_callstack,
@@ -622,6 +709,8 @@ impl<'a> Emitter<'a> {
         Ok(Self {
             program,
             entry_pc,
+            skipped_entry,
+            entry_runs_once,
             js_clock: config.js_clock(),
             js_coprocessor: config.js_coprocessor(),
             js_clock_debugger: config.js_clock_debugger(),
@@ -636,13 +725,144 @@ impl<'a> Emitter<'a> {
             uses_exceptions,
             uses_exc_payload,
             uses_bitcount: usage.uses_bitcount,
+            uses_mem_inc: usage.uses_mem_inc,
             max_mem_store_slots,
             max_mem_read_slots,
             max_mem_addr_slots,
             max_cs_store_slots,
             max_cs_read_slots,
-            mem_slot_consts: std::cell::OnceCell::new(),
+            mem_merge_fn: std::cell::OnceCell::new(),
         })
+    }
+
+    /// Upper bound on the call stack cells any execution touches, or `None`
+    /// when it cannot be bounded (recursion, or a loop that keeps growing the
+    /// stack). Within each function `cs_sp` is tracked relative to its entry
+    /// along every path; a function needs `max(sp + offset + 1)` over its
+    /// stack accesses and `sp + depth(callee)` over its calls.
+    fn static_callstack_depth(program: &Ir8Program) -> Option<usize> {
+        use crate::ir8::Pc;
+        let by_pc: HashMap<Pc, &crate::ir8::Cycle> =
+            program.cycles.iter().map(|c| (c.pc, c)).collect();
+        let entry = *program.func_entries.get(program.entry_func as usize)?;
+        let limit = program.cycles.len() as i64 * 64 + 1024;
+
+        fn depth(
+            f: Pc,
+            by_pc: &HashMap<Pc, &crate::ir8::Cycle>,
+            limit: i64,
+            memo: &mut HashMap<Pc, (i64, i64)>,
+            active: &mut std::collections::HashSet<Pc>,
+        ) -> Option<(i64, i64)> {
+            if let Some(&d) = memo.get(&f) {
+                return Some(d);
+            }
+            if !active.insert(f) {
+                return None; // recursion
+            }
+            // Highest `cs_sp` (relative to entry) on entry to each cycle.
+            let mut sp_at: HashMap<Pc, i64> = HashMap::new();
+            let mut work = vec![(f, 0i64)];
+            let mut need = 0i64;
+            // Highest `cs_sp` change seen at a return (the callee pops the
+            // RA its caller pushed, so this is usually negative).
+            let mut ret_delta: Option<i64> = None;
+            while let Some((pc, sp_in)) = work.pop() {
+                match sp_at.get(&pc) {
+                    Some(&seen) if seen >= sp_in => continue,
+                    Some(_) if sp_in > limit => return None, // unbounded growth
+                    _ => {}
+                }
+                sp_at.insert(pc, sp_in);
+                let cycle = by_pc.get(&pc)?;
+                let mut sp = sp_in;
+                for op in &cycle.ops {
+                    match op.kind {
+                        Inst8Kind::CsAlloc(n) => sp += i64::from(n),
+                        Inst8Kind::CsFree(n) => sp -= i64::from(n),
+                        Inst8Kind::CsStore { offset, .. } | Inst8Kind::CsLoad { offset } => {
+                            need = need.max(sp + i64::from(offset / 2) + 1);
+                        }
+                        Inst8Kind::CsStorePc { offset, .. } | Inst8Kind::CsLoadPc { offset } => {
+                            need = need.max(sp + i64::from(offset) + 1);
+                        }
+                        _ => {}
+                    }
+                }
+                need = need.max(sp);
+                match &cycle.terminator {
+                    Terminator8::CallSetup {
+                        callee_entry, cont, ..
+                    } => {
+                        let mut after = sp;
+                        if let CallTarget::Pc(callee) = callee_entry {
+                            let (callee_need, callee_ret) =
+                                depth(*callee, by_pc, limit, memo, active)?;
+                            need = need.max(sp + callee_need);
+                            after = sp + callee_ret;
+                        }
+                        work.push((*cont, after));
+                    }
+                    Terminator8::Return { .. } => {
+                        ret_delta = Some(ret_delta.map_or(sp, |d| d.max(sp)));
+                    }
+                    t => work.extend(t.successors().into_iter().map(|s| (s, sp))),
+                }
+            }
+            active.remove(&f);
+            let out = (need, ret_delta.unwrap_or(0));
+            memo.insert(f, out);
+            Some(out)
+        }
+        let (d, _) = depth(
+            entry,
+            &by_pc,
+            limit,
+            &mut HashMap::new(),
+            &mut std::collections::HashSet::new(),
+        )?;
+        usize::try_from(d).ok()
+    }
+
+    /// True when no terminator, call, or saved return address can transfer
+    /// control to `entry_pc`, i.e. it executes exactly once, at start.
+    fn entry_runs_once(program: &Ir8Program, entry_pc: u16) -> bool {
+        program.cycles.iter().all(|cycle| {
+            let stored = cycle.ops.iter().any(
+                |op| matches!(op.kind, Inst8Kind::CsStorePc { val, .. } if val.index() == entry_pc),
+            );
+            let callee = match cycle.terminator {
+                Terminator8::CallSetup {
+                    callee_entry: CallTarget::Pc(c),
+                    ..
+                } => Some(c),
+                _ => None,
+            };
+            !stored
+                && (cycle.terminator.successors().into_iter())
+                    .chain(callee)
+                    .all(|t| t.index() != entry_pc)
+        })
+    }
+
+    /// A run-once entry cycle that only rewrites initial values (registers
+    /// start at 0, globals at their init) and then jumps on does nothing:
+    /// returns its target, to start there instead and save a frame.
+    fn trivial_entry_target(program: &Ir8Program, entry_pc: u16) -> Option<u16> {
+        let cycle = program.cycles.iter().find(|c| c.pc.index() == entry_pc)?;
+        let Terminator8::Goto(next) = cycle.terminator else {
+            return None;
+        };
+        let noop = cycle.ops.iter().all(|op| match op.kind {
+            Inst8Kind::Copy(v) => op.dst.is_some() && v.imm_value() == Some(0),
+            Inst8Kind::GlobalSetByte {
+                global_idx,
+                lane,
+                val,
+            } => val.imm_value().map(u32::from) == Some(program.global_init_byte(global_idx, lane)),
+            _ => false,
+        });
+        noop.then_some(next.index())
     }
 
     fn uses_callstack(&self) -> bool {
@@ -738,6 +958,7 @@ impl<'a> Emitter<'a> {
                         usage.uses_memory_load = true;
                     }
                     Inst8Kind::StoreMem { .. } => usage.uses_memory_addr = true,
+                    Inst8Kind::MemInc32 { .. } => usage.uses_mem_inc = true,
                     Inst8Kind::Eq(_, _) => usage.uses_eq = true,
                     Inst8Kind::Ne(_, _) => usage.uses_ne = true,
                     Inst8Kind::GeU(_, _) => usage.uses_ge = true,
@@ -773,8 +994,7 @@ impl<'a> Emitter<'a> {
             | TemplateFeatures::FN_SEL
             | TemplateFeatures::FN_LT
             | TemplateFeatures::FN_MLO
-            | TemplateFeatures::FN_MHI
-            | TemplateFeatures::FN_M16;
+            | TemplateFeatures::FN_MHI;
 
         if visualizers {
             features |= TemplateFeatures::MEM_VISUALIZER;
@@ -787,10 +1007,8 @@ impl<'a> Emitter<'a> {
             features |= TemplateFeatures::PROP_RNG;
         }
         if usage.uses_memory_addr {
-            features |= TemplateFeatures::FN_ADDR16
-                | TemplateFeatures::FN_MHALF
-                | TemplateFeatures::FN_MPAR
-                | TemplateFeatures::FN_GE;
+            features |=
+                TemplateFeatures::FN_MHALF | TemplateFeatures::FN_MPAR | TemplateFeatures::FN_GE;
         }
         if usage.uses_memory_load {
             features |= TemplateFeatures::FN_MLOAD
@@ -915,12 +1133,10 @@ impl<'a> Emitter<'a> {
         section!(f.contains(TemplateFeatures::FN_LT), FN_LT);
         section!(f.contains(TemplateFeatures::FN_GE), FN_GE);
         section!(f.contains(TemplateFeatures::FN_INRANGE), FN_INRANGE);
-        section!(f.contains(TemplateFeatures::FN_ADDR16), FN_ADDR16);
         section!(f.contains(TemplateFeatures::FN_MHALF), FN_MHALF);
         section!(f.contains(TemplateFeatures::FN_MPAR), FN_MPAR);
         section!(f.contains(TemplateFeatures::FN_MLO), FN_MLO);
         section!(f.contains(TemplateFeatures::FN_MHI), FN_MHI);
-        section!(f.contains(TemplateFeatures::FN_M16), FN_M16);
         section!(f.contains(TemplateFeatures::FN_MLOAD), FN_MLOAD);
         section!(self.indicators, INDS_CSS);
         section!(self.indicators, INDS_HTML);

@@ -2,6 +2,7 @@ use super::bool::{BoolOp, make_bool_kind};
 use super::facts::{RegFact, build_reg_facts, const_fact, imm_kind, is_bool_fact};
 use super::*;
 use crate::ir8::BoolNary8;
+use crate::ir8::Cmp32Op;
 
 #[derive(Default)]
 pub(super) struct InstSimplify {
@@ -116,6 +117,18 @@ fn simplify_kind(kind: Inst8Kind, facts: &HashMap<Val8, RegFact>) -> Inst8Kind {
     match kind {
         Inst8Kind::Getchar | Inst8Kind::RandomByte { .. } | Inst8Kind::GlobalGetByte { .. } => kind,
         Inst8Kind::Copy(_) => kind,
+        Inst8Kind::Mul32Byte { lhs, rhs, lane } => {
+            // The low `lane + 1` bytes of a product only depend on the low
+            // `lane + 1` bytes of each operand.
+            match (
+                const_word_prefix(lhs, lane, facts),
+                const_word_prefix(rhs, lane, facts),
+            ) {
+                (Some(a), Some(b)) => imm_kind((a.wrapping_mul(b) >> (lane * 8)) as u8),
+                (Some(0), _) | (_, Some(0)) => imm_kind(0),
+                _ => kind,
+            }
+        }
         Inst8Kind::Add32Byte { lhs, rhs, lane } => {
             match (
                 const_word_prefix(lhs, lane, facts),
@@ -141,6 +154,46 @@ fn simplify_kind(kind: Inst8Kind, facts: &HashMap<Val8, RegFact>) -> Inst8Kind {
                 _ => kind,
             }
         }
+        Inst8Kind::Cmp32 {
+            op,
+            lhs,
+            rhs,
+            signed,
+        } => {
+            let narrow = |w: Word| {
+                [w.b1, w.b2, w.b3]
+                    .iter()
+                    .all(|v| const_fact(facts, *v) == Some(0))
+            };
+            if narrow(lhs) && narrow(rhs) {
+                // Both operands are single bytes (sign bit clear, so signed
+                // and unsigned agree): a byte compare, which opt8's loop and
+                // putchar patterns understand.
+                match op {
+                    Cmp32Op::Eq => Inst8Kind::Eq(lhs.b0, rhs.b0),
+                    Cmp32Op::Ne => Inst8Kind::Ne(lhs.b0, rhs.b0),
+                    Cmp32Op::Lt => Inst8Kind::LtU(lhs.b0, rhs.b0),
+                    Cmp32Op::Ge => Inst8Kind::GeU(lhs.b0, rhs.b0),
+                }
+            } else if let (Some(a), Some(b)) = (
+                const_word_prefix(lhs, 3, facts),
+                const_word_prefix(rhs, 3, facts),
+            ) {
+                let (a, b) = if signed {
+                    ((a as i32) as i64, (b as i32) as i64)
+                } else {
+                    (a as i64, b as i64)
+                };
+                imm_kind(u8::from(match op {
+                    Cmp32Op::Eq => a == b,
+                    Cmp32Op::Ne => a != b,
+                    Cmp32Op::Lt => a < b,
+                    Cmp32Op::Ge => a >= b,
+                }))
+            } else {
+                kind
+            }
+        }
         Inst8Kind::Sub32Borrow { lhs, rhs } => match (
             const_word_prefix(lhs, 3, facts),
             const_word_prefix(rhs, 3, facts),
@@ -148,20 +201,6 @@ fn simplify_kind(kind: Inst8Kind, facts: &HashMap<Val8, RegFact>) -> Inst8Kind {
             (Some(a), Some(b)) => imm_kind((a < b) as u8),
             _ => kind,
         },
-        Inst8Kind::Add(l, r) => {
-            let (l, r) = canon_comm(l, r);
-            match (const_of(l), const_of(r)) {
-                (Some(a), Some(b)) => imm_kind(a.wrapping_add(b)),
-                _ => Inst8Kind::Add(l, r),
-            }
-        }
-        Inst8Kind::Carry(l, r) => {
-            let (l, r) = canon_comm(l, r);
-            match (const_of(l), const_of(r)) {
-                (Some(a), Some(b)) => imm_kind((((a as u16) + (b as u16)) >> 8) as u8),
-                _ => Inst8Kind::Carry(l, r),
-            }
-        }
         Inst8Kind::Sub(l, r) => match (const_of(l), const_of(r)) {
             (Some(a), Some(b)) => imm_kind(a.wrapping_sub(b)),
             _ => kind,
@@ -272,6 +311,7 @@ fn simplify_kind(kind: Inst8Kind, facts: &HashMap<Val8, RegFact>) -> Inst8Kind {
             val,
         },
         Inst8Kind::LoadMem { base, addr, lane } => Inst8Kind::LoadMem { base, addr, lane },
+        Inst8Kind::MemInc32 { .. } => kind,
         Inst8Kind::StoreMem {
             base,
             addr,

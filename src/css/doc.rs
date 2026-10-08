@@ -440,7 +440,7 @@ fn visit_value(node: &Node, visit: &mut impl FnMut(&Node)) {
     }
 }
 
-fn visit_value_mut(node: &mut Node, visit: &mut impl FnMut(&mut Node)) {
+pub(super) fn visit_value_mut(node: &mut Node, visit: &mut impl FnMut(&mut Node)) {
     visit(node);
     match node {
         Node::Int(_) | Node::Raw(_) | Node::Style { .. } => {}

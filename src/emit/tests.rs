@@ -97,22 +97,25 @@ fn expr_sub32_byte_reads_only_required_prefix_bytes() {
     assert!(!expr.contains("var(--_1r3)"));
     assert!(!expr.contains("var(--_1r7)"));
     assert!(!expr.contains("--lt("));
-    assert!(expr.contains("/ 256"));
+    // The borrow into lane 2 is one flat expression over the low 16 bits.
+    assert!(expr.contains("/ 65536"));
     assert!(!expr.contains("16777216"));
 }
 
 #[test]
-fn expr_add32_byte_avoids_wide_constants_for_small_immediate() {
+fn expr_add32_byte_folds_literal_carry_terms() {
     let lhs = Word::new(Val8::reg(0), Val8::reg(1), Val8::reg(2), Val8::reg(3));
     let rhs = Word::from_u32_imm(1);
     let now = HashMap::new();
 
     let expr = Emitter::add32_byte_expr(&now, lhs, rhs, 3);
 
-    assert!(!expr.contains("16777216"));
-    assert!(!expr.contains("65536"));
+    // One flat carry over the low 24 bits; the immediate's bytes fold into a
+    // single constant instead of per-byte terms.
+    assert!(expr.contains("/ 16777216"));
+    assert!(expr.contains("+ 1)"));
     assert!(!expr.contains("--lt("));
-    assert!(expr.contains("/ 256"));
+    assert_eq!(expr.matches("round(down").count(), 1);
 }
 
 #[test]
@@ -418,6 +421,10 @@ fn emit_html_memory_visualizer_tracks_read_and_write_slots() {
         cycles: vec![crate::ir8::Cycle {
             pc: crate::ir8::Pc::new(0),
             ops: vec![
+                // Unknown address and value, so the cell is really written.
+                crate::ir8::Inst8::with_dst(Val8::reg(0), Inst8Kind::RandomByte { lane: 0 }),
+                crate::ir8::Inst8::with_dst(Val8::reg(1), Inst8Kind::RandomByte { lane: 0 }),
+                crate::ir8::Inst8::with_dst(Val8::reg(2), Inst8Kind::RandomByte { lane: 0 }),
                 crate::ir8::Inst8::with_dst(
                     Val8::reg(2),
                     Inst8Kind::LoadMem {
@@ -485,15 +492,13 @@ fn emit_html_callstack_visualizer_tracks_read_and_write_slots() {
     assert!(html.contains("#ind-sp::before"));
     assert!(html.contains("id=\"ind-sp\""));
     assert!(
-        html.contains("@function --csmerge(--idx <number>, --prev <number>) returns <integer>")
+        html.contains("@function --csmerge(--idx <integer>, --prev <integer>) returns <integer>")
     );
+    assert!(html.contains("style(--ctl0: var(--idx))"));
+    assert!(html.contains("--cswdp0: if(style(--cswdp_any: 0): 0; else: if("));
     assert!(!html.contains("--csmerge_slot("));
     assert!(!html.contains("--csw_active:"));
-    assert!(html.contains("--cswdp0:"));
     assert!(html.contains("@property --cswdp0 { syntax: \"<integer>\";"));
-    // logic.rs flips the condition to `--cswdp0: 0` (no-store
-    // cycle) so the dirty-page sum can be emitted without a
-    // `min(1, …)` clamp.
     assert!(html.contains(&format!(
         "{}: if(style(--cswdp0: 0): var({}); else: --csmerge(0, var({})));",
         cs0_name, cs0_shadow, cs0_shadow
@@ -746,10 +751,13 @@ fn emit_html_untouched_registers_use_direct_fallback_without_empty_if() {
         global_init: Vec::new(),
     };
     let html = emit_program(&program).expect("emit should succeed");
-    // `--_1r7` (= `var(--_2r7, 0)`) is single-use, so it gets inlined
-    // into `--r7`, leaving `--r7: var(--_2r7, 0);`.
-    assert!(html.contains("--r7: var(--_2r7, 0);"));
-    assert!(!html.contains("--r7: if(else: var(--_2r7, 0));"));
+    // A register nothing writes is provably always 0: its reads fold to the
+    // constant and the whole chain (declaration, shadows, keyframe
+    // entries) is dropped.
+    assert!(!html.contains("--r7:"));
+    assert!(!html.contains("--_0r7:"));
+    assert!(!html.contains("--_2r7:"));
+    assert!(!html.contains("--r7: if(else:"));
 }
 
 #[test]
@@ -792,12 +800,17 @@ fn emit_html_pc_keeps_explicit_arm_when_cycle_has_trap_guard() {
         cycles: vec![
             crate::ir8::Cycle {
                 pc: crate::ir8::Pc::new(0),
-                ops: vec![crate::ir8::Inst8::no_dst(Inst8Kind::StoreMem {
-                    base: 0,
-                    addr,
-                    lane: 0,
-                    val: Val8::reg(0),
-                })],
+                ops: vec![
+                    // Unknown address, so the bounds trap cannot fold away.
+                    crate::ir8::Inst8::with_dst(Val8::reg(0), Inst8Kind::RandomByte { lane: 0 }),
+                    crate::ir8::Inst8::with_dst(Val8::reg(1), Inst8Kind::RandomByte { lane: 1 }),
+                    crate::ir8::Inst8::no_dst(Inst8Kind::StoreMem {
+                        base: 0,
+                        addr,
+                        lane: 0,
+                        val: Val8::reg(0),
+                    }),
+                ],
                 terminator: Terminator8::Goto(crate::ir8::Pc::new(1)),
             },
             crate::ir8::Cycle {
@@ -921,6 +934,13 @@ fn emit_html_memory_store_merge_expr_stays_compact() {
         cycles: vec![crate::ir8::Cycle {
             pc: crate::ir8::Pc::new(0),
             ops: vec![
+                // Unknown address and values, so the cell is really written.
+                crate::ir8::Inst8::with_dst(Val8::reg(10), Inst8Kind::RandomByte { lane: 0 }),
+                crate::ir8::Inst8::with_dst(Val8::reg(11), Inst8Kind::RandomByte { lane: 0 }),
+                crate::ir8::Inst8::with_dst(Val8::reg(12), Inst8Kind::RandomByte { lane: 0 }),
+                crate::ir8::Inst8::with_dst(Val8::reg(13), Inst8Kind::RandomByte { lane: 0 }),
+                crate::ir8::Inst8::with_dst(Val8::reg(14), Inst8Kind::RandomByte { lane: 0 }),
+                crate::ir8::Inst8::with_dst(Val8::reg(15), Inst8Kind::RandomByte { lane: 0 }),
                 crate::ir8::Inst8::no_dst(Inst8Kind::StoreMem {
                     base: 0,
                     addr,
@@ -1024,28 +1044,24 @@ fn emit_html_memory_store_merge_expr_flattens_slot_conditions() {
     );
     let m0_shadow = Emitter::shadow_name(1, &m0_name);
     assert!(!html.contains("@function --mmerge_byte("));
-    assert!(
-        html.contains("@function --mmerge16(--cell <number>, --prev <number>) returns <integer>")
-    );
-    assert!(html.contains("--eq1(var(--msp0))"));
-    // Dirty-page indicator is emitted as a raw sum (no `min(1, …)` clamp);
-    // the consumer below tests `--mwdp0: 0` and swaps branches, so any
-    // non-zero sum routes through the merge expression.
-    assert!(html.contains("--mwdp0: calc("));
-    assert!(!html.contains("--mwdp0: min(1,"));
+    // The merge dispatches on each slot's written byte address instead of
+    // multiplying out per-slot equality tests.
+    assert!(html.contains(
+        "@function --mmerge16(--lo <integer>, --hi <integer>, --prev <integer>) returns <integer>"
+    ));
+    assert!(html.contains("style(--mta0: var(--lo))"));
+    assert!(html.contains("style(--mta0b: var(--hi))"));
+    assert!(!html.contains("--eq1(var(--msp0))"));
+    assert!(html.contains("--mta0: if("));
+    assert!(html.contains("--mta0b: if("));
+    // Page flags: one test per page when no store is active.
+    assert!(html.contains("--mwdp0: if(style(--mwdp_any: 0): 0; else: if("));
     assert!(html.contains("@property --mwdp0 { syntax: \"<integer>\";"));
     assert!(!html.contains("--mw_active:"));
     assert!(html.contains(&format!(
-        "{}: if(style(--mwdp0: 0): var({}); else: --mmerge16(0, var({})));",
+        "{}: if(style(--mwdp0: 0): var({}); else: --mmerge16(0, 1, var({})));",
         m0_name, m0_shadow, m0_shadow
     )));
-    assert!(
-        !html.contains("calc((calc(var(--mso0) * --eq(var(--msc0), 0))) * --eqz(var(--msp0)))")
-    );
-    assert!(
-        html.contains("--msc0b: if("),
-        "paired slot secondary fields should be emitted"
-    );
 }
 
 #[test]
@@ -1057,18 +1073,12 @@ fn emit_html_memory_store_merge_expr_uses_byte_helpers_when_no_writes() {
         0,
         Emitter::cell_offset_hex_width((MEMORY_BYTES_CAP as usize).div_ceil(2)),
     );
-    let m0_shadow = Emitter::shadow_name(1, &m0_name);
     assert!(html.contains("@function --mlo(--w <number>) returns <integer>"));
     assert!(html.contains("@function --mhi(--w <number>) returns <integer>"));
-    assert!(html.contains("@function --m16(--lo <number>, --hi <number>) returns <integer>"));
-    // The `--_1m000` shadow is single-use, so it gets inlined into
-    // `--m000`, which now carries the `var(--_2m000, 0)` chain directly.
-    let _ = m0_shadow;
-    assert!(html.contains(&format!(
-        "{}: var(--_2{}, 0);",
-        m0_name,
-        m0_name.trim_start_matches("--")
-    )));
+    // Nothing stores to memory, so every cell keeps its initial value: reads
+    // fold to that constant and the cell's whole chain is dead.
+    assert!(!html.contains(&format!("{}:", m0_name)));
+    assert!(!html.contains(&format!("--_2{}:", m0_name.trim_start_matches("--"))));
     assert!(!html.contains("@function --mmerge16("));
     assert!(!html.contains("@function --mmerge_byte("));
     assert!(!html.contains("--mw_active: if("));

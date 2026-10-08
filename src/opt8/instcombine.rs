@@ -144,16 +144,6 @@ fn combine_kind(
                 kind
             }
         }
-        Inst8Kind::Add(lhs, rhs) => match (const_of(lhs), const_of(rhs)) {
-            (Some(0), _) => Inst8Kind::Copy(rhs),
-            (_, Some(0)) => Inst8Kind::Copy(lhs),
-            _ => kind,
-        },
-        Inst8Kind::Carry(lhs, rhs) => match (const_of(lhs), const_of(rhs)) {
-            (Some(0), _) | (_, Some(0)) => imm_kind(0),
-            _ if lhs == rhs && matches!(const_of(lhs), Some(v) if v < 128) => imm_kind(0),
-            _ => kind,
-        },
         Inst8Kind::Sub(lhs, rhs) => match (const_of(lhs), const_of(rhs)) {
             (_, Some(0)) => Inst8Kind::Copy(lhs),
             _ if lhs == rhs => imm_kind(0),

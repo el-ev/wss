@@ -686,18 +686,18 @@ fn map_inst_kind_vals(
             *val = f(*val)?;
             *enable = f(*enable)?;
         }
-        Inst8Kind::Add32Byte { lhs, rhs, lane } | Inst8Kind::Sub32Byte { lhs, rhs, lane } => {
+        Inst8Kind::Add32Byte { lhs, rhs, lane }
+        | Inst8Kind::Sub32Byte { lhs, rhs, lane }
+        | Inst8Kind::Mul32Byte { lhs, rhs, lane } => {
             map_word_vals_through_lane(lhs, *lane, f)?;
             map_word_vals_through_lane(rhs, *lane, f)?;
         }
-        Inst8Kind::Sub32Borrow { lhs, rhs } => {
+        Inst8Kind::Sub32Borrow { lhs, rhs } | Inst8Kind::Cmp32 { lhs, rhs, .. } => {
             map_word_vals(lhs, f)?;
             map_word_vals(rhs, f)?;
         }
 
-        Inst8Kind::Add(l, r)
-        | Inst8Kind::Carry(l, r)
-        | Inst8Kind::Sub(l, r)
+        Inst8Kind::Sub(l, r)
         | Inst8Kind::MulLo(l, r)
         | Inst8Kind::MulHi(l, r)
         | Inst8Kind::And8(l, r)
@@ -721,7 +721,7 @@ fn map_inst_kind_vals(
         Inst8Kind::GlobalSetByte { val, .. } => {
             *val = f(*val)?;
         }
-        Inst8Kind::LoadMem { addr, .. } => {
+        Inst8Kind::LoadMem { addr, .. } | Inst8Kind::MemInc32 { addr, .. } => {
             addr.lo = f(addr.lo)?;
             addr.hi = f(addr.hi)?;
         }
@@ -1005,7 +1005,7 @@ mod tests {
                     insts: vec![
                         Inst8::with_dst(r_a, Inst8Kind::Copy(Val8::imm(1))),
                         Inst8::with_dst(r_b, Inst8Kind::Copy(Val8::imm(2))),
-                        Inst8::with_dst(r_c, Inst8Kind::Add(r_a, r_b)),
+                        Inst8::with_dst(r_c, Inst8Kind::Sub(r_a, r_b)),
                     ],
                     terminator: Terminator8::Goto(Pc::new(1)),
                 },

@@ -221,8 +221,10 @@ fn schedule_block_ops(insts: &[Inst8]) -> Vec<Vec<Inst8>> {
 
 fn inst_complexity(kind: &Inst8Kind) -> usize {
     match kind {
-        Inst8Kind::MulLo(_, _) | Inst8Kind::MulHi(_, _) => 3,
+        Inst8Kind::MulLo(_, _) | Inst8Kind::MulHi(_, _) | Inst8Kind::Mul32Byte { .. } => 3,
+        Inst8Kind::Cmp32 { .. } => 2,
         Inst8Kind::LoadMem { .. } | Inst8Kind::StoreMem { .. } => 3,
+        Inst8Kind::MemInc32 { .. } => 6,
         Inst8Kind::GlobalGetByte { .. } | Inst8Kind::GlobalSetByte { .. } => 2,
         Inst8Kind::CsStore { .. }
         | Inst8Kind::CsLoad { .. }
@@ -362,6 +364,15 @@ fn effect_conflict(a: &Inst8Kind, b: &Inst8Kind, reads_need_order: bool) -> bool
         if !reads_need_order && a_is_put && b_is_put {
             return false;
         }
+        return true;
+    }
+
+    // An increment reads and writes four bytes: order it against every
+    // other memory access (and keep it alone among them in its cycle).
+    let is_inc = |k: &Inst8Kind| matches!(k, Inst8Kind::MemInc32 { .. });
+    if (is_inc(a) && (is_inc(b) || mem_access(b).is_some()))
+        || (is_inc(b) && mem_access(a).is_some())
+    {
         return true;
     }
 
@@ -754,7 +765,7 @@ mod tests {
     #[test]
     fn schedule_packs_read_before_register_clobber() {
         let insts = vec![
-            Inst8::with_dst(r(20), Inst8Kind::Add(r(10), r(11))),
+            Inst8::with_dst(r(20), Inst8Kind::Sub(r(10), r(11))),
             Inst8::with_dst(r(10), Inst8Kind::Copy(r(12))),
         ];
 
@@ -767,7 +778,7 @@ mod tests {
     fn schedule_splits_write_before_register_read() {
         let insts = vec![
             Inst8::with_dst(r(10), Inst8Kind::Copy(r(12))),
-            Inst8::with_dst(r(20), Inst8Kind::Add(r(10), r(11))),
+            Inst8::with_dst(r(20), Inst8Kind::Sub(r(10), r(11))),
         ];
 
         let cycles = schedule_block_ops(&insts);
@@ -805,7 +816,7 @@ mod tests {
     fn schedule_packs_independent_compute_with_mem_stores() {
         let addr = Addr::new(r(10), r(11));
         let insts = vec![
-            Inst8::with_dst(r(20), Inst8Kind::Add(r(1), r(2))),
+            Inst8::with_dst(r(20), Inst8Kind::Sub(r(1), r(2))),
             Inst8::no_dst(Inst8Kind::StoreMem {
                 base: 0,
                 addr,
@@ -848,7 +859,7 @@ mod tests {
     fn schedule_splits_compute_from_mem_store_cycle() {
         let addr = Addr::new(r(10), r(11));
         let insts = vec![
-            Inst8::with_dst(r(20), Inst8Kind::Add(r(1), r(2))),
+            Inst8::with_dst(r(20), Inst8Kind::Sub(r(1), r(2))),
             Inst8::with_dst(
                 r(21),
                 Inst8Kind::Add32Byte {
@@ -1070,7 +1081,7 @@ mod tests {
                             offset: 0,
                             val: Pc::new(1),
                         }),
-                        Inst8::with_dst(r(8), Inst8Kind::Add(r(0), r(1))),
+                        Inst8::with_dst(r(8), Inst8Kind::Sub(r(0), r(1))),
                         Inst8::no_dst(Inst8Kind::Putchar(r(8))),
                     ],
                     terminator: Terminator8::Goto(Pc::new(1)),
@@ -1126,7 +1137,7 @@ mod tests {
     fn schedule_splits_add_from_dependent_store() {
         let addr = Addr::new(r(10), r(11));
         let insts = vec![
-            Inst8::with_dst(r(20), Inst8Kind::Add(r(1), r(2))),
+            Inst8::with_dst(r(20), Inst8Kind::Sub(r(1), r(2))),
             Inst8::no_dst(Inst8Kind::StoreMem {
                 base: 0,
                 addr,

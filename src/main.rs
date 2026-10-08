@@ -372,6 +372,7 @@ fn main() -> Result<()> {
         dirty::minify::minify_embedded_js(&mut page);
     }
     let mut result = page.print();
+    result = emit::compact_css_tokens(&result);
     if !args.no_embed_compile_command {
         let cmd = std::env::args()
             .map(shell_quote)

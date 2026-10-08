@@ -833,6 +833,19 @@
     }
   },
   {
+    "id": "initial_store_after_call",
+    "source": "tests/cases/initial_store_after_call.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x0000002a",
+      "rendered_includes": [
+        "555",
+        "Program exited with code",
+        "0x0000002a"
+      ]
+    }
+  },
+  {
     "id": "division_remainder",
     "source": "tests/cases/division_remainder.c",
     "expect": {

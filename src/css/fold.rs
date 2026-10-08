@@ -119,6 +119,15 @@ fn fold_math_fn(name: String, args: Vec<Node>) -> Node {
                 args: vec![inner_num.clone(), Node::Int(m)],
             };
         }
+        // `mod(round(down, mod(X, A) / B), M)` where B * M divides A →
+        // `mod(round(down, X / B), M)`: removing a multiple of A from X
+        // shifts X / B by a multiple of A / B, which M divides.
+        if let Some(inner) = strip_round_down_mod_div(num, m) {
+            return Node::MathFn {
+                name: "mod".to_string(),
+                args: vec![inner, Node::Int(m)],
+            };
+        }
         // `mod(X * K, M)` where K divides M → `mod(X, M/K) * K`.
         if let Some((other_factor, k)) = product_with_int_factor(num)
             && k > 0
@@ -136,6 +145,52 @@ fn fold_math_fn(name: String, args: Vec<Node>) -> Node {
         }
     }
     Node::MathFn { name, args }
+}
+
+/// Matches `round(down, mod(X, A) / B)` with `B * m` dividing `A` and
+/// returns `round(down, X / B)`.
+fn strip_round_down_mod_div(node: &Node, m: i64) -> Option<Node> {
+    let Node::MathFn { name, args } = node else {
+        return None;
+    };
+    let [Node::Raw(strategy), arg] = args.as_slice() else {
+        return None;
+    };
+    if name != "round" || strategy != "down" {
+        return None;
+    }
+    let Node::Div(num, den) = peel(arg) else {
+        return None;
+    };
+    let b = as_int(den)?;
+    let Node::MathFn {
+        name: inner_name,
+        args: inner_args,
+    } = peel(num)
+    else {
+        return None;
+    };
+    let [x, a] = inner_args.as_slice() else {
+        return None;
+    };
+    let a = as_int(a)?;
+    if inner_name != "mod" || b <= 0 || a <= 0 || a % (b * m) != 0 {
+        return None;
+    }
+    Some(Node::MathFn {
+        name: "round".to_string(),
+        args: vec![
+            Node::Raw("down".to_string()),
+            Node::Div(Box::new(x.clone()), Box::new(Node::Int(b))),
+        ],
+    })
+}
+
+fn peel(node: &Node) -> &Node {
+    match node {
+        Node::Calc(inner) | Node::Paren(inner) => peel(inner),
+        other => other,
+    }
 }
 
 /// If `node` is `Product([..., Int(k), ...])` or `Paren`/`Calc` over
@@ -431,14 +486,22 @@ fn peel_one_minus_bool(node: &Node) -> Option<Node> {
 /// A node is statically known to evaluate to 0 or 1. The boolean
 /// recognizer used by [`fold_sel`] and friends to enable the
 /// bool-vs-literal shortcuts.
+/// Base-template comparison helpers: they always return 0 or 1.
+pub(super) const BOOL_HELPERS: &[&str] = &[
+    "--eq",
+    "--ne",
+    "--eq1",
+    "--eqz",
+    "--nez",
+    "--lt",
+    "--ge",
+    "--inrange",
+];
+
 fn is_bool_node(node: &Node) -> bool {
     match node {
         Node::Int(0) | Node::Int(1) => true,
-        // The comparison helpers always return 0 or 1.
-        Node::Fn { name, .. } => matches!(
-            name.as_str(),
-            "--eq" | "--ne" | "--eq1" | "--eqz" | "--nez" | "--lt" | "--ge" | "--inrange"
-        ),
+        Node::Fn { name, .. } => BOOL_HELPERS.contains(&name.as_str()),
         Node::If { arms, default } => is_bool_if(&Node::If {
             arms: arms.clone(),
             default: default.clone(),

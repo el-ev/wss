@@ -110,6 +110,19 @@ impl Word {
             .filter(|r| !r.is_imm())
             .collect()
     }
+    /// Value of bytes `0..=lane` when they are all immediates.
+    pub fn imm_prefix(self, lane: u8) -> Option<u32> {
+        let mut out = 0u32;
+        for (idx, byte) in self
+            .bytes()
+            .into_iter()
+            .enumerate()
+            .take(usize::from(lane) + 1)
+        {
+            out |= u32::from(byte.imm_value()?) << (8 * idx);
+        }
+        Some(out)
+    }
     pub fn lo16(self) -> Addr {
         Addr {
             lo: self.b0,
@@ -173,6 +186,11 @@ impl Addr {
             out.push(self.hi);
         }
         out
+    }
+
+    /// The address when both bytes are immediates.
+    pub fn imm_value(self) -> Option<u32> {
+        Some(u32::from(self.lo.imm_value()?) + 256 * u32::from(self.hi.imm_value()?))
     }
 }
 
@@ -239,6 +257,16 @@ impl BuiltinId {
     pub const fn coprocessor_opcode(self) -> u8 {
         self as u8
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Cmp32Op {
+    Eq,
+    Ne,
+    /// `lhs < rhs`
+    Lt,
+    /// `lhs >= rhs`
+    Ge,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -337,9 +365,16 @@ impl Inst8 {
                 push_vreg(&mut out, *enable);
                 out
             }
-            Inst8Kind::Add32Byte { lhs, rhs, lane } | Inst8Kind::Sub32Byte { lhs, rhs, lane } => {
+            Inst8Kind::Add32Byte { lhs, rhs, lane }
+            | Inst8Kind::Sub32Byte { lhs, rhs, lane }
+            | Inst8Kind::Mul32Byte { lhs, rhs, lane } => {
                 let mut out = lhs.uses_through_lane(*lane);
                 out.extend(rhs.uses_through_lane(*lane));
+                out
+            }
+            Inst8Kind::Cmp32 { lhs, rhs, .. } => {
+                let mut out = lhs.uses_through_lane(3);
+                out.extend(rhs.uses_through_lane(3));
                 out
             }
             Inst8Kind::Sub32Borrow { lhs, rhs } => {
@@ -347,9 +382,7 @@ impl Inst8 {
                 out.extend(rhs.uses_through_lane(3));
                 out
             }
-            Inst8Kind::Add(l, r)
-            | Inst8Kind::Carry(l, r)
-            | Inst8Kind::Sub(l, r)
+            Inst8Kind::Sub(l, r)
             | Inst8Kind::MulLo(l, r)
             | Inst8Kind::MulHi(l, r)
             | Inst8Kind::And8(l, r)
@@ -377,7 +410,7 @@ impl Inst8 {
                 push_vreg(&mut out, *val);
                 out
             }
-            Inst8Kind::LoadMem { addr, .. } => addr.uses(),
+            Inst8Kind::LoadMem { addr, .. } | Inst8Kind::MemInc32 { addr, .. } => addr.uses(),
             Inst8Kind::StoreMem { addr, val, .. } => {
                 let mut out = addr.uses();
                 push_vreg(&mut out, *val);
@@ -414,6 +447,23 @@ impl Inst8 {
 pub enum Inst8Kind {
     Copy(Val8),
 
+    /// Whole-word comparison producing 0/1, computed as one expression over
+    /// the (exact, below 2^32) word values instead of a byte compare chain.
+    /// `signed` compares as two's complement.
+    Cmp32 {
+        op: Cmp32Op,
+        lhs: Word,
+        rhs: Word,
+        signed: bool,
+    },
+    /// Byte `lane` of the 32-bit product `lhs * rhs`, computed in one
+    /// expression (wide intermediates stay inside one `calc()`, exact up to
+    /// 2^53; only registered values are rounded).
+    Mul32Byte {
+        lhs: Word,
+        rhs: Word,
+        lane: u8,
+    },
     Add32Byte {
         lhs: Word,
         rhs: Word,
@@ -428,9 +478,7 @@ pub enum Inst8Kind {
         lhs: Word,
         rhs: Word,
     },
-    Add(Val8, Val8),   // (l + r) & 0xff
-    Carry(Val8, Val8), // (l + r) >> 8
-    Sub(Val8, Val8),   // (l - r) & 0xff
+    Sub(Val8, Val8), // (l - r) & 0xff
 
     MulLo(Val8, Val8), // (l * r) & 0xff
     MulHi(Val8, Val8), // (l * r) >> 8
@@ -470,6 +518,14 @@ pub enum Inst8Kind {
         addr: Addr,
         lane: u8,
         val: Val8,
+    },
+    /// Fused `load32; add32 delta; store32` of bytes `base..base + 4` of
+    /// `addr`: the new value is computed from the memory cells themselves,
+    /// so no load lookup or intermediate registers are needed.
+    MemInc32 {
+        base: u16,
+        addr: Addr,
+        delta: u32,
     },
 
     Getchar,
@@ -750,4 +806,16 @@ pub struct Ir8Program {
     pub memory_end: u32,
     pub init_bytes: Vec<u8>,
     pub global_init: Vec<u32>,
+}
+
+impl Ir8Program {
+    /// Byte `lane` of global `global_idx`'s initial value.
+    pub fn global_init_byte(&self, global_idx: u32, lane: u8) -> u32 {
+        let init = self
+            .global_init
+            .get(global_idx as usize)
+            .copied()
+            .unwrap_or(0);
+        (init >> (8 * u32::from(lane))) & 0xff
+    }
 }

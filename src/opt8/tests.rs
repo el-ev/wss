@@ -425,7 +425,7 @@ fn opt8_prefers_arch_register_after_copy() {
     let mut prog = mk_prog(vec![BasicBlock8 {
         id: Pc::new(0),
         insts: vec![
-            Inst8::with_dst(r(20), Inst8Kind::Add(r(8), r(9))),
+            Inst8::with_dst(r(20), Inst8Kind::Sub(r(8), r(9))),
             Inst8::with_dst(r(6), Inst8Kind::Copy(r(20))),
             Inst8::with_dst(r(30), Inst8Kind::Ne(r(20), r(4))),
         ],
@@ -452,7 +452,7 @@ fn opt8_does_not_prefer_arbitrary_lower_temp_after_copy() {
     let mut prog = mk_prog(vec![BasicBlock8 {
         id: Pc::new(0),
         insts: vec![
-            Inst8::with_dst(r(20), Inst8Kind::Add(r(8), r(9))),
+            Inst8::with_dst(r(20), Inst8Kind::Sub(r(8), r(9))),
             Inst8::with_dst(r(16), Inst8Kind::Copy(r(20))),
             Inst8::with_dst(r(30), Inst8Kind::Ne(r(20), r(4))),
         ],
@@ -816,7 +816,7 @@ fn opt8_instcombine_simplifies_common_arithmetic_and_bitwise_identities() {
     let mut prog = mk_prog(vec![BasicBlock8 {
         id: Pc::new(0),
         insts: vec![
-            Inst8::with_dst(r(20), Inst8Kind::Add(r(8), Val8::imm(0))),
+            Inst8::with_dst(r(20), Inst8Kind::Sub(r(8), Val8::imm(0))),
             Inst8::with_dst(r(21), Inst8Kind::Sub(r(9), Val8::imm(0))),
             Inst8::with_dst(r(22), Inst8Kind::MulLo(r(10), Val8::imm(1))),
             Inst8::with_dst(r(23), Inst8Kind::And8(r(11), r(11))),
@@ -1410,7 +1410,7 @@ fn opt8_canonicalizes_commutative_ops_with_constant_on_right() {
     let mut prog = mk_prog(vec![BasicBlock8 {
         id: Pc::new(0),
         insts: vec![
-            Inst8::with_dst(r(20), Inst8Kind::Add(Val8::imm(5), r(8))),
+            Inst8::with_dst(r(20), Inst8Kind::Xor8(Val8::imm(5), r(8))),
             Inst8::with_dst(r(21), Inst8Kind::And8(Val8::imm(0x0f), r(9))),
             Inst8::with_dst(r(22), Inst8Kind::Eq(Val8::imm(7), r(10))),
         ],
@@ -1423,7 +1423,7 @@ fn opt8_canonicalizes_commutative_ops_with_constant_on_right() {
 
     let insts = &prog.func_blocks[0][0].insts;
     let def_of = |dst: Val8| insts.iter().find(|i| i.dst == Some(dst)).map(|i| i.kind);
-    assert_eq!(def_of(r(20)), Some(Inst8Kind::Add(r(8), Val8::imm(5))));
+    assert_eq!(def_of(r(20)), Some(Inst8Kind::Xor8(r(8), Val8::imm(5))));
     assert_eq!(def_of(r(21)), Some(Inst8Kind::And8(r(9), Val8::imm(0x0f))));
     assert_eq!(def_of(r(22)), Some(Inst8Kind::Eq(r(10), Val8::imm(7))));
 }
@@ -1593,7 +1593,7 @@ fn opt8_predicate_branch_putchar_skips_when_arm_has_extra_insts() {
         BasicBlock8 {
             id: Pc::new(1),
             insts: vec![
-                Inst8::with_dst(r(20), Inst8Kind::Add(r(11), r(12))),
+                Inst8::with_dst(r(20), Inst8Kind::Sub(r(11), r(12))),
                 Inst8::no_dst(Inst8Kind::Putchar(r(20))),
             ],
             terminator: Terminator8::Goto(Pc::new(2)),
@@ -2321,4 +2321,87 @@ fn opt8_unroll_printf_loop_bounded_multi_putchar() {
         panic!("expected branch");
     };
     assert_eq!(final_cond, cond, "bounded loop keeps original branch cond");
+}
+
+/// `B0 → B1 (store init; call) → B2 → B1 | B3`: `B1` stores a byte's initial
+/// value with only `entry_insts` before it, then calls a function that may
+/// change memory; the call continues at `B2`, which can loop back to `B1`.
+fn initial_store_prog(entry_insts: Vec<Inst8>) -> Ir8Program {
+    let store = |val| {
+        Inst8::no_dst(Inst8Kind::StoreMem {
+            base: 0,
+            addr: Addr::new(Val8::imm(4), Val8::imm(0)),
+            lane: 0,
+            val,
+        })
+    };
+    let mut prog = mk_prog(vec![
+        BasicBlock8 {
+            id: Pc::new(0),
+            insts: entry_insts,
+            terminator: Terminator8::Goto(Pc::new(1)),
+        },
+        BasicBlock8 {
+            id: Pc::new(1),
+            insts: vec![
+                store(Val8::imm(0)),
+                Inst8::no_dst(Inst8Kind::CsStorePc {
+                    offset: 0,
+                    val: Pc::new(2),
+                }),
+            ],
+            terminator: Terminator8::CallSetup {
+                callee_entry: CallTarget::Pc(Pc::new(1000)),
+                cont: Pc::new(2),
+                args: vec![],
+                callee_arg_vregs: vec![],
+            },
+        },
+        BasicBlock8 {
+            id: Pc::new(2),
+            insts: vec![],
+            terminator: Terminator8::Branch {
+                cond: r(8),
+                if_true: Pc::new(1),
+                if_false: Pc::new(3),
+            },
+        },
+        BasicBlock8 {
+            id: Pc::new(3),
+            insts: vec![],
+            terminator: Terminator8::Exit { val: None },
+        },
+    ]);
+    prog.memory_end = 64;
+    prog.init_bytes = vec![0; 64];
+    prog
+}
+
+fn has_store(bb: &BasicBlock8) -> bool {
+    bb.insts
+        .iter()
+        .any(|i| matches!(i.kind, Inst8Kind::StoreMem { .. }))
+}
+
+#[test]
+fn opt8_initial_store_after_call_is_kept() {
+    // B1 is re-entered after the call, which may have changed the byte:
+    // the reset is needed on every iteration but the first.
+    let mut prog = initial_store_prog(vec![]);
+    super::drop_initial_stores(&mut prog);
+    assert!(has_store(&prog.func_blocks[0][1]));
+}
+
+#[test]
+fn opt8_initial_store_before_any_write_is_dropped() {
+    // A store of the initial value as the first write is a no-op.
+    let mut prog = initial_store_prog(vec![Inst8::no_dst(Inst8Kind::StoreMem {
+        base: 0,
+        addr: Addr::new(Val8::imm(8), Val8::imm(0)),
+        lane: 0,
+        val: Val8::imm(0),
+    })]);
+    super::drop_initial_stores(&mut prog);
+    assert!(!has_store(&prog.func_blocks[0][0]));
+    assert!(has_store(&prog.func_blocks[0][1]));
 }

@@ -235,9 +235,6 @@ body { animation: rng-roll-0 257ms steps(256, jump-end) infinite, rng-roll-1 263
 /*__WSS_KEEP_FN_INRANGE_START__*/
 @function --inrange(--x <number>, --k <number>) returns <integer> { result: calc(--lt(-1, var(--x)) * --lt(var(--x), var(--k))); }
 /*__WSS_KEEP_FN_INRANGE_END__*/
-/*__WSS_KEEP_FN_ADDR16_START__*/
-@function --addr16(--lo <number>, --hi <number>, --imm <number>) returns <integer> { result: round(down, calc(var(--imm) + var(--lo) + 256 * var(--hi))); }
-/*__WSS_KEEP_FN_ADDR16_END__*/
 /*__WSS_KEEP_FN_MHALF_START__*/
 @function --mhalf(--byte <number>) returns <integer> { result: round(down, calc(var(--byte) / 2)); }
 /*__WSS_KEEP_FN_MHALF_END__*/
@@ -250,9 +247,6 @@ body { animation: rng-roll-0 257ms steps(256, jump-end) infinite, rng-roll-1 263
 /*__WSS_KEEP_FN_MHI_START__*/
 @function --mhi(--w <number>) returns <integer> { result: mod(round(down, calc(var(--w) / 256)), 256); }
 /*__WSS_KEEP_FN_MHI_END__*/
-/*__WSS_KEEP_FN_M16_START__*/
-@function --m16(--lo <number>, --hi <number>) returns <integer> { result: calc(var(--lo) + 256 * var(--hi)); }
-/*__WSS_KEEP_FN_M16_END__*/
 /*__WSS_KEEP_FN_MLOAD_START__*/
 @function --mload(--byte <number>) returns <integer> { result: mod(round(down, calc(--read_m16(--mhalf(var(--byte))) / (1 + 255 * mod(var(--byte), 2)))), 256); }
 /*__WSS_KEEP_FN_MLOAD_END__*/

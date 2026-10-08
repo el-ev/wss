@@ -125,12 +125,26 @@ pub(super) fn rewrite_inst(mut inst: Inst8, subst: &HashMap<Val8, Val8>) -> Inst
             rhs: rw_word(subst, rhs),
             lane,
         },
+        Inst8Kind::Mul32Byte { lhs, rhs, lane } => Inst8Kind::Mul32Byte {
+            lhs: rw_word(subst, lhs),
+            rhs: rw_word(subst, rhs),
+            lane,
+        },
         Inst8Kind::Sub32Borrow { lhs, rhs } => Inst8Kind::Sub32Borrow {
             lhs: rw_word(subst, lhs),
             rhs: rw_word(subst, rhs),
         },
-        Inst8Kind::Add(l, r) => Inst8Kind::Add(rw(subst, l), rw(subst, r)),
-        Inst8Kind::Carry(l, r) => Inst8Kind::Carry(rw(subst, l), rw(subst, r)),
+        Inst8Kind::Cmp32 {
+            op,
+            lhs,
+            rhs,
+            signed,
+        } => Inst8Kind::Cmp32 {
+            op,
+            lhs: rw_word(subst, lhs),
+            rhs: rw_word(subst, rhs),
+            signed,
+        },
         Inst8Kind::Sub(l, r) => Inst8Kind::Sub(rw(subst, l), rw(subst, r)),
         Inst8Kind::MulLo(l, r) => Inst8Kind::MulLo(rw(subst, l), rw(subst, r)),
         Inst8Kind::MulHi(l, r) => Inst8Kind::MulHi(rw(subst, l), rw(subst, r)),
@@ -170,6 +184,11 @@ pub(super) fn rewrite_inst(mut inst: Inst8, subst: &HashMap<Val8, Val8>) -> Inst
             addr: rw_addr(subst, addr),
             lane,
             val: rw(subst, val),
+        },
+        Inst8Kind::MemInc32 { base, addr, delta } => Inst8Kind::MemInc32 {
+            base,
+            addr: rw_addr(subst, addr),
+            delta,
         },
         Inst8Kind::Putchar(v) => Inst8Kind::Putchar(rw(subst, v)),
         Inst8Kind::PutcharIf { val, enable } => Inst8Kind::PutcharIf {
@@ -233,6 +252,7 @@ pub(super) fn has_side_effect(kind: &Inst8Kind) -> bool {
             | Inst8Kind::PutcharIf { .. }
             | Inst8Kind::Getchar
             | Inst8Kind::StoreMem { .. }
+            | Inst8Kind::MemInc32 { .. }
             | Inst8Kind::GlobalSetByte { .. }
             | Inst8Kind::CsStore { .. }
             | Inst8Kind::CsStorePc { .. }
@@ -262,7 +282,9 @@ pub(super) fn inst_uses(kind: &Inst8Kind, live: &mut HashSet<Val8>) {
             add_use(live, *val);
             add_use(live, *enable);
         }
-        Inst8Kind::Add32Byte { lhs, rhs, lane } | Inst8Kind::Sub32Byte { lhs, rhs, lane } => {
+        Inst8Kind::Add32Byte { lhs, rhs, lane }
+        | Inst8Kind::Sub32Byte { lhs, rhs, lane }
+        | Inst8Kind::Mul32Byte { lhs, rhs, lane } => {
             for reg in lhs.uses_through_lane(*lane) {
                 add_use(live, reg);
             }
@@ -270,7 +292,7 @@ pub(super) fn inst_uses(kind: &Inst8Kind, live: &mut HashSet<Val8>) {
                 add_use(live, reg);
             }
         }
-        Inst8Kind::Sub32Borrow { lhs, rhs } => {
+        Inst8Kind::Sub32Borrow { lhs, rhs } | Inst8Kind::Cmp32 { lhs, rhs, .. } => {
             for reg in lhs.uses_through_lane(3) {
                 add_use(live, reg);
             }
@@ -279,9 +301,7 @@ pub(super) fn inst_uses(kind: &Inst8Kind, live: &mut HashSet<Val8>) {
             }
         }
 
-        Inst8Kind::Add(l, r)
-        | Inst8Kind::Carry(l, r)
-        | Inst8Kind::Sub(l, r)
+        Inst8Kind::Sub(l, r)
         | Inst8Kind::MulLo(l, r)
         | Inst8Kind::MulHi(l, r)
         | Inst8Kind::And8(l, r)
@@ -308,7 +328,7 @@ pub(super) fn inst_uses(kind: &Inst8Kind, live: &mut HashSet<Val8>) {
             add_use(live, *val);
         }
 
-        Inst8Kind::LoadMem { addr, .. } => {
+        Inst8Kind::LoadMem { addr, .. } | Inst8Kind::MemInc32 { addr, .. } => {
             add_use(live, addr.lo);
             add_use(live, addr.hi);
         }

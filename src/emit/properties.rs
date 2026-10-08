@@ -31,10 +31,9 @@ impl<'a> Emitter<'a> {
             (0..self.program.num_vregs).map(|r| Self::prop(&format!("--r{}", r), 0)),
         );
 
-        for (g, &gv) in self.program.global_init.iter().enumerate() {
-            let g = g as u32;
+        for g in 0..self.program.global_init.len() as u32 {
             for lane in 0..4u8 {
-                let init = (gv >> (u32::from(lane) * 8)) & 0xff;
+                let init = self.program.global_init_byte(g, lane);
                 let _ = write!(
                     out,
                     "{}",
@@ -60,6 +59,34 @@ impl<'a> Emitter<'a> {
                 "",
                 (0..self.page_count()).map(|page| Self::prop(&format!("--mwdp{}", page), 0)),
             );
+            if self.uses_mem_inc {
+                let _ = writeln!(out, "{}", Self::prop("--mik", -1));
+                let _ = writeln!(out, "{}", Self::prop("--mio", 0));
+                let _ = writeln!(out, "{}", Self::prop("--mid", 0));
+                for j in 0..3 {
+                    let _ = writeln!(out, "{}", Self::prop(&format!("--mic{}", j), -1));
+                    let _ = writeln!(out, "{}", Self::prop(&format!("--mir{}", j), 0));
+                    let _ = writeln!(out, "{}", Self::prop(&format!("--miv{}", j), 0));
+                }
+                let _ = writeln!(out, "{}", Self::prop("--mtpi0", -1));
+                let _ = writeln!(out, "{}", Self::prop("--mtpi2", -1));
+            }
+            {
+                let _ = writeln!(out, "{}", Self::prop("--mwdp_any", 0));
+                Self::emit_chunked_prefixed(
+                    out,
+                    8,
+                    "",
+                    (0..self.max_mem_store_slots).flat_map(|s| {
+                        ["", "b"].into_iter().flat_map(move |b| {
+                            [
+                                Self::prop(&format!("--mta{}{}", s, b), -1),
+                                Self::prop(&format!("--mtp{}{}", s, b), -1),
+                            ]
+                        })
+                    }),
+                );
+            }
         }
 
         if self.uses_callstack() {
@@ -78,6 +105,23 @@ impl<'a> Emitter<'a> {
                     (0..self.cs_page_count())
                         .map(|page| Self::prop(&format!("--cswdp{}", page), 0)),
                 );
+                {
+                    let _ = writeln!(out, "{}", Self::prop("--cswdp_any", 0));
+                    Self::emit_chunked_prefixed(
+                        out,
+                        8,
+                        "",
+                        (0..self.max_cs_store_slots).flat_map(|s| {
+                            [
+                                Self::prop(&format!("--ctl{}", s), -1),
+                                Self::prop(&format!("--cth{}", s), -1),
+                                Self::prop(&format!("--cvl{}", s), 0),
+                                Self::prop(&format!("--cvh{}", s), 0),
+                                Self::prop(&format!("--ctp{}", s), -1),
+                            ]
+                        }),
+                    );
+                }
             }
         }
 

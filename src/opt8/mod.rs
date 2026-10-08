@@ -1,15 +1,19 @@
 mod bool;
 mod facts;
+mod initstore;
 mod instcombine;
 mod instsimplify;
+mod meminc;
 mod rewrite;
 
 #[cfg(test)]
 mod tests;
 
 use bool::combine_boolean_chains;
+use initstore::drop_initial_stores;
 use instcombine::instcombine;
 use instsimplify::InstSimplify;
+use meminc::fuse_mem_inc;
 use rewrite::*;
 
 use std::collections::hash_map::DefaultHasher;
@@ -26,8 +30,8 @@ fn filter_by_mask<T>(items: &mut Vec<T>, keep: &[bool]) {
 }
 
 use crate::ir8::{
-    Addr, BasicBlock8, BoolNary8, Inst8, Inst8Kind, Ir8Program, Pc, Terminator8, VREG_START, Val8,
-    Word,
+    Addr, BasicBlock8, BoolNary8, Cmp32Op, Inst8, Inst8Kind, Ir8Program, Pc, Terminator8,
+    VREG_START, Val8, Word,
 };
 
 const MAX_OPT_RUN_ITERS: usize = 128;
@@ -60,6 +64,10 @@ pub fn run(prog: &mut Ir8Program) {
         }
     }
     unroll_printf_loop(prog);
+    // After the fixpoint: its memory passes (forwarding, dead stores) only
+    // model `LoadMem` / `StoreMem`, not the fused increment.
+    fuse_mem_inc(prog);
+    drop_initial_stores(prog);
 }
 
 fn back_copy_coalesce(prog: &mut Ir8Program) -> bool {
@@ -667,8 +675,6 @@ fn rename_inst_kind(kind: &Inst8Kind, rename: &HashMap<Val8, Val8>) -> Inst8Kind
     match kind {
         Inst8Kind::Copy(v) => Inst8Kind::Copy(r(*v)),
         Inst8Kind::BoolNot(v) => Inst8Kind::BoolNot(r(*v)),
-        Inst8Kind::Add(a, b) => Inst8Kind::Add(r(*a), r(*b)),
-        Inst8Kind::Carry(a, b) => Inst8Kind::Carry(r(*a), r(*b)),
         Inst8Kind::Sub(a, b) => Inst8Kind::Sub(r(*a), r(*b)),
         Inst8Kind::MulLo(a, b) => Inst8Kind::MulLo(r(*a), r(*b)),
         Inst8Kind::MulHi(a, b) => Inst8Kind::MulHi(r(*a), r(*b)),
@@ -687,6 +693,11 @@ fn rename_inst_kind(kind: &Inst8Kind, rename: &HashMap<Val8, Val8>) -> Inst8Kind
             rhs: rw(*rhs),
             lane: *lane,
         },
+        Inst8Kind::Mul32Byte { lhs, rhs, lane } => Inst8Kind::Mul32Byte {
+            lhs: rw(*lhs),
+            rhs: rw(*rhs),
+            lane: *lane,
+        },
         Inst8Kind::Sub32Byte { lhs, rhs, lane } => Inst8Kind::Sub32Byte {
             lhs: rw(*lhs),
             rhs: rw(*rhs),
@@ -695,6 +706,17 @@ fn rename_inst_kind(kind: &Inst8Kind, rename: &HashMap<Val8, Val8>) -> Inst8Kind
         Inst8Kind::Sub32Borrow { lhs, rhs } => Inst8Kind::Sub32Borrow {
             lhs: rw(*lhs),
             rhs: rw(*rhs),
+        },
+        Inst8Kind::Cmp32 {
+            op,
+            lhs,
+            rhs,
+            signed,
+        } => Inst8Kind::Cmp32 {
+            op: *op,
+            lhs: rw(*lhs),
+            rhs: rw(*rhs),
+            signed: *signed,
         },
         Inst8Kind::LoadMem { base, addr, lane } => Inst8Kind::LoadMem {
             base: *base,
@@ -946,6 +968,32 @@ fn detect_bounded_loop(
         }
     }
 
+    // A fused word compare `counter < end` gives the end word directly. A
+    // signed compare only orders like the unsigned one when `end` is a
+    // non-negative constant.
+    let is_counter_word = |w: Word| {
+        w.bytes()
+            .iter()
+            .zip(counter_bytes.iter())
+            .all(|(v, cb)| *v == *cb || post_inc.get(cb) == Some(v))
+    };
+    let fused_end = bb.insts.iter().find_map(|inst| match inst.kind {
+        Inst8Kind::Cmp32 {
+            op: Cmp32Op::Lt,
+            lhs,
+            rhs,
+            signed,
+        } if is_counter_word(lhs) && (!signed || rhs.b3.imm_value().is_some_and(|v| v < 0x80)) => {
+            Some(rhs)
+        }
+        _ => None,
+    });
+    if let Some(end) = fused_end {
+        for (lane, v) in end.bytes().into_iter().enumerate() {
+            end_for_lane[lane] = Some(v);
+        }
+    }
+
     // Need at least byte 0 to form an end word.
     let b0 = end_for_lane[0]?;
     let b1 = end_for_lane[1].unwrap_or(Val8::imm(0));
@@ -966,7 +1014,9 @@ fn detect_bounded_loop(
             continue;
         }
         if let Some(inst) = defs.get(&v) {
-            if matches!(inst.kind, Inst8Kind::LtU(a, _) if all_counter.contains(&a)) {
+            let fused = matches!(inst.kind, Inst8Kind::Cmp32 { op: Cmp32Op::Lt, lhs, .. }
+                if all_counter.contains(&lhs.b0));
+            if fused || matches!(inst.kind, Inst8Kind::LtU(a, _) if all_counter.contains(&a)) {
                 dep_on_ltu = true;
                 break;
             }

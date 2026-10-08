@@ -4,6 +4,7 @@
 
 mod doc;
 mod fold;
+mod opt;
 mod parse;
 #[cfg(test)]
 mod tests;
@@ -14,6 +15,7 @@ pub use doc::{
 };
 pub(crate) use doc::{is_custom_name_cont, is_custom_name_start};
 pub use fold::fold;
+pub use opt::{parse_registrations, propagate_state_facts};
 pub use parse::parse;
 pub(crate) use parse::skip_css_string;
 
