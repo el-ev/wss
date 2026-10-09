@@ -43,15 +43,10 @@ impl<'a> Emitter<'a> {
             let _ = writeln!(out);
         }
 
-        Self::emit_chunked_prefixed(
-            out,
-            8,
-            "",
-            self.mem_names
-                .iter()
-                .zip(&self.mem_init)
-                .map(|(name, &init)| Self::prop(name, init)),
-        );
+        // Memory cells stay unregistered: every value they take is already
+        // an integer token (the store snapshot, its initial literal, or an
+        // `--mmerge16` result typed by the function), and an unregistered
+        // property skips the per-recalc typed parse, ~1/3 of a cell's cost.
         if self.max_mem_store_slots > 0 {
             Self::emit_chunked_prefixed(
                 out,
@@ -90,13 +85,8 @@ impl<'a> Emitter<'a> {
         }
 
         if self.uses_callstack() {
+            // Callstack cells stay unregistered, like memory cells.
             let _ = writeln!(out, "{}", Self::prop("--cs_sp", 0));
-            Self::emit_chunked_prefixed(
-                out,
-                8,
-                "",
-                self.cs_names.iter().map(|name| Self::prop(name, 0)),
-            );
             if self.max_cs_store_slots > 0 {
                 Self::emit_chunked_prefixed(
                     out,

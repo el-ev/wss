@@ -307,6 +307,33 @@
     }
   },
   {
+    "id": "try_getchar_none",
+    "source": "tests/cases/try_getchar_none.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0xffffffff",
+      "rendered_includes": [
+        "-",
+        "Program exited with code",
+        "0xffffffff"
+      ]
+    }
+  },
+  {
+    "id": "try_getchar_drain",
+    "source": "tests/cases/try_getchar_drain.c",
+    "console_input": "hi!",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000368",
+      "rendered_includes": [
+        "hi!",
+        "Program exited with code",
+        "0x00000368"
+      ]
+    }
+  },
+  {
     "id": "arithmetic_basic",
     "source": "tests/cases/arithmetic_basic.c",
     "expect": {
@@ -865,6 +892,29 @@
       "ra": "0x0000001c",
       "rendered_includes": [
         "0x0000001c"
+      ]
+    }
+  },
+  {
+    "id": "divrem_const_i32",
+    "source": "tests/cases/divrem_const_i32.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x51259716",
+      "rendered_includes": [
+        "0x51259716"
+      ]
+    }
+  },
+  {
+    "id": "divrem_const_i32_coprocessor",
+    "source": "tests/cases/divrem_const_i32.c",
+    "js_coprocessor": true,
+    "expect": {
+      "pc": -1,
+      "ra": "0x51259716",
+      "rendered_includes": [
+        "0x51259716"
       ]
     }
   },

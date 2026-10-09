@@ -42,13 +42,58 @@ impl OwnerInfo {
     }
 }
 
-pub fn regalloc(mut ir8: Ir8Program, max_phys_regs: u16) -> anyhow::Result<Ir8Program> {
+pub fn regalloc(ir8: Ir8Program, max_phys_regs: u16) -> anyhow::Result<Ir8Program> {
     if max_phys_regs < VREG_START {
         bail!(
             "max physical register limit must be >= reserved register count ({}), got {}",
             VREG_START,
             max_phys_regs
         );
+    }
+    // Allocating in scheduled order raises register pressure (values are
+    // computed earlier); past the limit, fall back to the original order.
+    match regalloc_with(ir8.clone(), max_phys_regs, true) {
+        Err(err) if err.is::<RegLimitExceeded>() => regalloc_with(ir8, max_phys_regs, false),
+        res => res,
+    }
+}
+
+#[derive(Debug)]
+struct RegLimitExceeded {
+    num_vregs: u16,
+    max_phys_regs: u16,
+    active_count: u16,
+}
+
+impl std::fmt::Display for RegLimitExceeded {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "physical register limit exceeded: {} > {} (active={}, reserved={})",
+            self.num_vregs, self.max_phys_regs, self.active_count, VREG_START
+        )
+    }
+}
+
+impl std::error::Error for RegLimitExceeded {}
+
+fn regalloc_with(
+    mut ir8: Ir8Program,
+    max_phys_regs: u16,
+    scheduled_order: bool,
+) -> anyhow::Result<Ir8Program> {
+    // Allocate in the order of each block's ideal schedule, computed on
+    // virtual registers. In source order, a value is often dead before the
+    // next independent one is computed, so both get the same register: a
+    // false dependency the final schedule (after allocation) must respect,
+    // serializing work it could otherwise issue in one cycle. In scheduled
+    // order those values are live together and get distinct registers.
+    // Registers are cheap next to cycles: one costs a declaration per
+    // recalc, a cycle a recalc of every declaration.
+    if scheduled_order {
+        for bb in ir8.func_blocks.iter_mut().flatten() {
+            bb.insts = crate::schedule::schedule_block_ops(&bb.insts).concat();
+        }
     }
 
     let owners = build_owner_info(&ir8)?;
@@ -467,7 +512,7 @@ fn linear_scan(
     }
 
     let mut active: Vec<Active> = Vec::new();
-    let mut free_phys = BTreeSet::new();
+    let mut free_phys = FreePool::default();
     let mut next_phys: u16 = 1;
 
     let mut group_to_phys = HashMap::new();
@@ -477,7 +522,7 @@ fn linear_scan(
         let mut i = 0;
         while i < active.len() {
             if active[i].end < it.start {
-                free_phys.insert(active[i].phys_group);
+                free_phys.insert(active[i].phys_group, active[i].end);
                 active.swap_remove(i);
             } else {
                 i += 1;
@@ -490,15 +535,14 @@ fn linear_scan(
         let biased = copy_partners.get(&group).and_then(|partners| {
             partners.iter().find_map(|p| {
                 let phys = *group_to_phys.get(p)?;
-                free_phys.contains(&phys).then_some(phys)
+                free_phys.contains(phys).then_some(phys)
             })
         });
 
         let phys_group = if let Some(p) = biased {
-            free_phys.remove(&p);
+            free_phys.remove(p);
             p
-        } else if let Some(&p) = free_phys.iter().next() {
-            free_phys.remove(&p);
+        } else if let Some(p) = free_phys.pop_oldest() {
             p
         } else {
             let p = next_phys;
@@ -519,6 +563,40 @@ fn linear_scan(
     AllocationResult {
         group_to_phys,
         max_phys_group,
+    }
+}
+
+/// Free physical groups, handed out least recently freed first: the group
+/// freed last is the most likely to still be read in the cycle the new
+/// value is written, a false dependency for the scheduler.
+#[derive(Default)]
+struct FreePool {
+    freed_at: HashMap<u16, u32>,
+    by_age: BTreeSet<(u32, u16)>,
+}
+
+impl FreePool {
+    fn insert(&mut self, phys: u16, at: u32) {
+        if let Some(old) = self.freed_at.insert(phys, at) {
+            self.by_age.remove(&(old, phys));
+        }
+        self.by_age.insert((at, phys));
+    }
+
+    fn contains(&self, phys: u16) -> bool {
+        self.freed_at.contains_key(&phys)
+    }
+
+    fn remove(&mut self, phys: u16) {
+        if let Some(at) = self.freed_at.remove(&phys) {
+            self.by_age.remove(&(at, phys));
+        }
+    }
+
+    fn pop_oldest(&mut self) -> Option<u16> {
+        let (_, phys) = self.by_age.pop_first()?;
+        self.freed_at.remove(&phys);
+        Some(phys)
     }
 }
 
@@ -670,7 +748,7 @@ fn map_inst_kind_vals(
     f: &mut impl FnMut(Val8) -> anyhow::Result<Val8>,
 ) -> anyhow::Result<()> {
     match kind {
-        Inst8Kind::Getchar
+        Inst8Kind::Getchar { .. }
         | Inst8Kind::RandomByte { .. }
         | Inst8Kind::CsStorePc { .. }
         | Inst8Kind::CsLoadPc { .. }
@@ -692,6 +770,7 @@ fn map_inst_kind_vals(
             map_word_vals_through_lane(lhs, *lane, f)?;
             map_word_vals_through_lane(rhs, *lane, f)?;
         }
+        Inst8Kind::DivRem32ConstByte { lhs, .. } => map_word_vals(lhs, f)?,
         Inst8Kind::Sub32Borrow { lhs, rhs } | Inst8Kind::Cmp32 { lhs, rhs, .. } => {
             map_word_vals(lhs, f)?;
             map_word_vals(rhs, f)?;
@@ -835,13 +914,12 @@ fn compact_physical_vregs(prog: &mut Ir8Program, max_phys_regs: u16) -> anyhow::
         .context("too many active physical registers to index in u16")?;
     let num_vregs = VREG_START.saturating_add(active_count);
     if num_vregs > max_phys_regs {
-        bail!(
-            "physical register limit exceeded: {} > {} (active={}, reserved={})",
+        return Err(RegLimitExceeded {
             num_vregs,
             max_phys_regs,
             active_count,
-            VREG_START
-        );
+        }
+        .into());
     }
 
     if active.is_empty() {

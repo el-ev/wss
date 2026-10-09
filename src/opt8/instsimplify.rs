@@ -115,7 +115,9 @@ fn simplify_kind(kind: Inst8Kind, facts: &HashMap<Val8, RegFact>) -> Inst8Kind {
     let is_bool = |r: Val8| is_bool_fact(facts, r);
 
     match kind {
-        Inst8Kind::Getchar | Inst8Kind::RandomByte { .. } | Inst8Kind::GlobalGetByte { .. } => kind,
+        Inst8Kind::Getchar { .. }
+        | Inst8Kind::RandomByte { .. }
+        | Inst8Kind::GlobalGetByte { .. } => kind,
         Inst8Kind::Copy(_) => kind,
         Inst8Kind::Mul32Byte { lhs, rhs, lane } => {
             // The low `lane + 1` bytes of a product only depend on the low
@@ -129,6 +131,16 @@ fn simplify_kind(kind: Inst8Kind, facts: &HashMap<Val8, RegFact>) -> Inst8Kind {
                 _ => kind,
             }
         }
+        Inst8Kind::DivRem32ConstByte {
+            lhs,
+            denom,
+            signed,
+            rem,
+            lane,
+        } => match const_word_prefix(lhs, 3, facts) {
+            Some(a) => imm_kind(crate::ir8::divrem32_const_byte(a, denom, signed, rem, lane)),
+            None => kind,
+        },
         Inst8Kind::Add32Byte { lhs, rhs, lane } => {
             match (
                 const_word_prefix(lhs, lane, facts),

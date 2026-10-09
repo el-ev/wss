@@ -13,6 +13,6 @@ pub extern "C" fn _start()->i32{for&b in D{if b==126{for&c in D{match c{10=>{put
 // --- NOT A PART OF QUINE ---
 // compile: 
 //   mv quine.rs.txt quine.rs
-//   rustc --target wasm32-unknown-unknown --crate-type cdylib -C opt-level=z \
+//   rustc --target wasm32-unknown-unknown --crate-type cdylib -C opt-level=s \
 //    -C link-args="--allow-undefined --initial-memory=65536 -z stack-size=256 --global-base=256" \
 //    quine.rs -o quine.wasm

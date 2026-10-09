@@ -97,6 +97,7 @@ body { margin: 0; background: #f5f5f5; font-family: ui-monospace, SFMono-Regular
 /*__WSS_KEEP_SP_INDICATOR_CSS_START__*/
 #ind-sp::before { counter-reset: ind-sp var(--cs_sp); content: counter(ind-sp); }
 /*__WSS_KEEP_SP_INDICATOR_CSS_END__*/
+/*__WSS_KEEP_G0_INDICATOR_CSS_START__*/
 #ind-g0::before {
 content: "0x"
 --hex(round(down, calc(var(--g0_3) / 16))) --hex(mod(var(--g0_3), 16))
@@ -104,6 +105,7 @@ content: "0x"
 --hex(round(down, calc(var(--g0_1) / 16))) --hex(mod(var(--g0_1), 16))
 --hex(round(down, calc(var(--g0_0) / 16))) --hex(mod(var(--g0_0), 16));
 }
+/*__WSS_KEEP_G0_INDICATOR_CSS_END__*/
 /*__WSS_KEEP_INDS_CSS_END__*/
 
 @function --support-test() returns <integer> { result: calc(1 + 1); }
@@ -233,7 +235,7 @@ body { animation: rng-roll-0 257ms steps(256, jump-end) infinite, rng-roll-1 263
 @function --ge(--a <number>, --b <number>) returns <integer> { result: round(up, calc((sign(calc(var(--a) - var(--b))) + 1) / 2)); }
 /*__WSS_KEEP_FN_GE_END__*/
 /*__WSS_KEEP_FN_INRANGE_START__*/
-@function --inrange(--x <number>, --k <number>) returns <integer> { result: calc(--lt(-1, var(--x)) * --lt(var(--x), var(--k))); }
+@function --inrange(--x <number>, --lo <number>, --hi <number>) returns <integer> { result: calc(--lt(var(--x), var(--hi)) - --lt(var(--x), var(--lo))); }
 /*__WSS_KEEP_FN_INRANGE_END__*/
 /*__WSS_KEEP_FN_MHALF_START__*/
 @function --mhalf(--byte <number>) returns <integer> { result: round(down, calc(var(--byte) / 2)); }
@@ -278,7 +280,9 @@ Please try an up-to-date Chromium-based browser.
     <!--__WSS_KEEP_SP_INDICATOR_HTML_START__-->
     <div class="ind"><span class="k">SP</span><span id="ind-sp" class="v"></span></div>
     <!--__WSS_KEEP_SP_INDICATOR_HTML_END__-->
+    <!--__WSS_KEEP_G0_INDICATOR_HTML_START__-->
     <div class="ind"><span class="k">G0</span><span id="ind-g0" class="v"></span></div>
+    <!--__WSS_KEEP_G0_INDICATOR_HTML_END__-->
 </div>
 <!--__WSS_KEEP_INDS_HTML_END__-->
 <!--__WSS_KEEP_CS_VISUALIZER_HTML_START__-->
@@ -301,21 +305,18 @@ Please try an up-to-date Chromium-based browser.
     const phasesPerInstruction = 4;
     const terminalPcs = new Set([/*__WSS_TERMINAL_PCS__*/]);
     const followSlackPx = 4;
+    let followScreenBottom = true;
+    let halted = false;
+    let animationPending = false;
+    /*__WSS_KEEP_JS_CLOCK_DEBUGGER_RUNTIME_START__*/
     const minSpeedMultiplier = 0.01;
     const maxSpeedMultiplier = 16;
     const minSpeedLog = Math.log10(minSpeedMultiplier);
     const maxSpeedLog = Math.log10(maxSpeedMultiplier);
-    let followScreenBottom = true;
     let speedMultiplier = 1;
     let speedCarry = 0;
     let pendingStepCount = 0;
-    let paused = false;
-    /*__WSS_KEEP_JS_CLOCK_DEBUGGER_RUNTIME_START__*/
-    paused = true;
-    /*__WSS_KEEP_JS_CLOCK_DEBUGGER_RUNTIME_END__*/
-    let halted = false;
-    let animationPending = false;
-    /*__WSS_KEEP_JS_CLOCK_DEBUGGER_RUNTIME_START__*/
+    let paused = true;
     let debugRunBtn = null;
     let debugStepBtn = null;
     let debugSpeedOut = null;
@@ -357,6 +358,11 @@ Please try an up-to-date Chromium-based browser.
         return parsed;
     }
 
+    function readPc(style) {
+        return readIntStyle(style, "--pc", readIntStyle(style, "--_1pc", 0));
+    }
+
+    /*__WSS_KEEP_JS_CLOCK_DEBUGGER_RUNTIME_START__*/
     function formatSpeedLabel(value) {
         if (value < 0.1) return `${value.toFixed(3)}x`;
         if (value < 1) return `${value.toFixed(2)}x`;
@@ -364,11 +370,6 @@ Please try an up-to-date Chromium-based browser.
         return `${rounded.toFixed(rounded % 1 === 0 ? 0 : 2)}x`;
     }
 
-    function readPc(style) {
-        return readIntStyle(style, "--pc", readIntStyle(style, "--_1pc", 0));
-    }
-
-    /*__WSS_KEEP_JS_CLOCK_DEBUGGER_RUNTIME_START__*/
     function refreshDebuggerLabels(style) {
         if (!debugStateOut) return;
         const pc = readPc(style);
@@ -644,7 +645,9 @@ Please try an up-to-date Chromium-based browser.
         animationPending = false;
         if (halted) return;
 
-        let instructionsThisFrame = 0;
+        let instructionsThisFrame = 1;
+        /*__WSS_KEEP_JS_CLOCK_DEBUGGER_RUNTIME_START__*/
+        instructionsThisFrame = 0;
         if (pendingStepCount > 0) {
             instructionsThisFrame = pendingStepCount;
             pendingStepCount = 0;
@@ -654,6 +657,7 @@ Please try an up-to-date Chromium-based browser.
             instructionsThisFrame = Math.floor(speedCarry);
             speedCarry -= instructionsThisFrame;
         }
+        /*__WSS_KEEP_JS_CLOCK_DEBUGGER_RUNTIME_END__*/
 
         let style = getComputedStyle(terminalEl);
         let pc = readPc(style);
@@ -675,23 +679,24 @@ Please try an up-to-date Chromium-based browser.
         if (!Number.isNaN(pc) && terminalPcs.has(pc)) {
             halted = true;
         }
+        /*__WSS_KEEP_JS_CLOCK_DEBUGGER_RUNTIME_START__*/
         if (halted) {
             paused = true;
         }
-        /*__WSS_KEEP_JS_CLOCK_DEBUGGER_RUNTIME_START__*/
         refreshDebuggerLabels(style);
+        if (paused && pendingStepCount === 0) return;
         /*__WSS_KEEP_JS_CLOCK_DEBUGGER_RUNTIME_END__*/
-        if (!halted && (!paused || pendingStepCount > 0)) {
+        if (!halted) {
             scheduleAnimation();
         }
     }
 
+    /*__WSS_KEEP_JS_CLOCK_DEBUGGER_RUNTIME_START__*/
     function clampSpeed(value) {
         if (!Number.isFinite(value)) return 1;
         return Math.min(maxSpeedMultiplier, Math.max(minSpeedMultiplier, value));
     }
 
-    /*__WSS_KEEP_JS_CLOCK_DEBUGGER_RUNTIME_START__*/
     function initializeDebuggerPopup() {
         const toggleBtn = document.createElement("button");
         toggleBtn.type = "button";
@@ -838,10 +843,9 @@ Please try an up-to-date Chromium-based browser.
     /*__WSS_KEEP_JS_CLOCK_DEBUGGER_RUNTIME_START__*/
     initializeDebuggerPopup();
     refreshDebuggerLabels(getComputedStyle(terminalEl));
+    // The page starts paused: the first frame below steps nothing.
     /*__WSS_KEEP_JS_CLOCK_DEBUGGER_RUNTIME_END__*/
-    if (!paused) {
-        scheduleAnimation();
-    }
+    scheduleAnimation();
 })();
 </script>
 <!--__WSS_KEEP_JS_CLOCK_RUNTIME_END__-->

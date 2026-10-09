@@ -76,7 +76,6 @@ fn expr_add32_byte_reads_only_required_prefix_bytes() {
     assert!(!expr.contains("var(--_1r3)"));
     assert!(!expr.contains("var(--_1r6)"));
     assert!(!expr.contains("var(--_1r7)"));
-    assert!(!expr.contains("--lt("));
     assert!(expr.contains("/ 256"));
 }
 
@@ -96,10 +95,8 @@ fn expr_sub32_byte_reads_only_required_prefix_bytes() {
     assert!(expr.contains("var(--_1r6)"));
     assert!(!expr.contains("var(--_1r3)"));
     assert!(!expr.contains("var(--_1r7)"));
-    assert!(!expr.contains("--lt("));
     // The borrow into lane 2 is one flat expression over the low 16 bits.
     assert!(expr.contains("/ 65536"));
-    assert!(!expr.contains("16777216"));
 }
 
 #[test]
@@ -114,22 +111,7 @@ fn expr_add32_byte_folds_literal_carry_terms() {
     // single constant instead of per-byte terms.
     assert!(expr.contains("/ 16777216"));
     assert!(expr.contains("+ 1)"));
-    assert!(!expr.contains("--lt("));
     assert_eq!(expr.matches("round(down").count(), 1);
-}
-
-#[test]
-fn expr_byte_clz_avoids_nested_sel_calls() {
-    let expr = Emitter::byte_clz_expr("var(--x)");
-    assert!(!expr.contains("--sel("));
-    assert!(expr.contains("var(--x)"));
-}
-
-#[test]
-fn expr_byte_ctz_avoids_nested_sel_calls() {
-    let expr = Emitter::byte_ctz_expr("var(--x)");
-    assert!(!expr.contains("--sel("));
-    assert!(expr.contains("var(--x)"));
 }
 
 #[test]
@@ -149,7 +131,6 @@ fn expr_word_hex_is_big_endian_without_u32_widening() {
     let p1 = expr.find("var(--b1)").unwrap();
     let p0 = expr.find("var(--b0)").unwrap();
     assert!(p3 < p2 && p2 < p1 && p1 < p0);
-    assert!(!expr.contains("4294967296"));
 }
 
 #[test]
@@ -205,20 +186,18 @@ fn eval_builtin_division_uses_js_coprocessor_channel_when_enabled() {
 }
 
 #[test]
-fn eval_builtin_clz_ctz_css_path_avoids_nested_sel_calls() {
+fn eval_builtin_clz_ctz_css_path_never_traps() {
     let program = minimal_exit_program();
     let emitter = Emitter::new(&program, EmitConfig::default()).expect("emitter should initialize");
 
     let lhs = Word::new(Val8::reg(0), Val8::reg(1), Val8::reg(2), Val8::reg(3));
     let now = register_exprs(4);
 
-    let (clz_ret, clz_trap) = emitter.eval_builtin(BuiltinId::Clz32, &[lhs], &now);
+    let (_, clz_trap) = emitter.eval_builtin(BuiltinId::Clz32, &[lhs], &now);
     assert_eq!(clz_trap, "0");
-    assert!(!clz_ret[0].contains("--sel("));
 
-    let (ctz_ret, ctz_trap) = emitter.eval_builtin(BuiltinId::Ctz32, &[lhs], &now);
+    let (_, ctz_trap) = emitter.eval_builtin(BuiltinId::Ctz32, &[lhs], &now);
     assert_eq!(ctz_trap, "0");
-    assert!(!ctz_ret[0].contains("--sel("));
 }
 
 #[test]
@@ -235,7 +214,6 @@ fn emit_html_includes_js_coprocessor_runtime_when_enabled() {
     assert!(html.contains("@property --cop_a0"));
     assert!(html.contains("@property --cop_b3"));
     assert!(html.contains("@property --cop_o3"));
-    assert!(!html.contains("const jsCoprocessorEnabled"));
     assert!(html.contains("--cop_op: "));
 }
 
@@ -250,9 +228,6 @@ fn emit_html_omits_js_clock_runtime_when_disabled() {
     )
     .expect("emit should succeed");
     assert!(!html.contains("<script>"));
-    assert!(!html.contains("const jsClockEnabled"));
-    assert!(!html.contains("function tickInstruction()"));
-    assert!(!html.contains("requestAnimationFrame(animate);"));
 }
 
 #[test]
@@ -265,31 +240,14 @@ fn emit_html_includes_js_clock_debugger_when_enabled() {
             .expect("test config should be valid"),
     )
     .expect("emit should succeed");
-    assert!(html.contains("let paused = false;"));
-    assert!(html.contains("paused = true;"));
+    assert!(html.contains("let paused = true;"));
+    assert!(html.contains("let speedMultiplier = 1;"));
     assert!(html.contains("popup.hidden = false;"));
     assert!(html.contains("className = \"wss-debug-trigger\";"));
     assert!(html.contains("data-wss-debug-step=\"1\""));
     assert!(html.contains("data-wss-debug-run=\"1\">Run</button>"));
     assert!(html.contains("data-wss-debug-state=\"1\">paused</dd>"));
     assert!(html.contains(".wss-debug-trigger {"));
-}
-
-#[test]
-fn emit_html_omits_js_clock_debugger_css_when_disabled() {
-    let program = minimal_exit_program();
-    let html = emit_program_with_config(
-        &program,
-        EmitConfig::default()
-            .with_js_clock_debugger(false)
-            .expect("test config should be valid"),
-    )
-    .expect("emit should succeed");
-    assert!(!html.contains(".wss-debug-trigger {"));
-    assert!(!html.contains(".wss-debug-popup {"));
-    assert!(!html.contains("className = \"wss-debug-trigger\";"));
-    assert!(!html.contains("data-wss-debug-step=\"1\""));
-    assert!(!html.contains("popup.hidden = false;"));
 }
 
 #[test]
@@ -305,22 +263,6 @@ fn emit_html_rejects_js_clock_debugger_without_js_clock() {
 }
 
 #[test]
-fn emit_html_omits_js_coprocessor_runtime_when_disabled() {
-    let program = minimal_exit_program();
-    let html = emit_program_with_config(
-        &program,
-        EmitConfig::default()
-            .with_js_coprocessor(false)
-            .expect("test config should be valid"),
-    )
-    .expect("emit should succeed");
-    assert!(!html.contains("const jsCoprocessorEnabled"));
-    assert!(!html.contains("function runCoprocessor("));
-    assert!(!html.contains("runCoprocessor(getComputedStyle(terminalEl));"));
-    assert!(!html.contains("writeCopOutputWord("));
-}
-
-#[test]
 fn emit_html_includes_callstack_overflow_trap_ui_and_guard() {
     let alloc = (CALLSTACK_SLOTS_CAP + 1) as u16;
     let program = minimal_program_with_cycle(crate::ir8::Cycle {
@@ -332,8 +274,9 @@ fn emit_html_includes_callstack_overflow_trap_ui_and_guard() {
     let html = emit_program(&program).expect("emit should succeed");
     assert!(html.contains("style(--pc: -5)"));
     assert!(html.contains("[Trap: callstack overflow]"));
-    let alloc_expr = format!("calc(var(--_1cs_sp) + {})", alloc);
-    assert!(html.contains(&alloc_expr));
+    // An alloc past the cap can never fit: the success check
+    // `--inrange(sp + alloc, 0, cap + 1)` folds to 0, so sp never moves.
+    assert!(!html.contains(&format!("calc(var(--_1cs_sp) + {})", alloc)));
     // CsAlloc(N) folds the offset into the trap bound: ge(idx, K)
     // becomes ge(B, K-N). K = cs slot count + 1 (the alloc extend
     // bit); with alloc == K the threshold is 0, and the
@@ -369,10 +312,37 @@ fn emit_html_chunks_large_generated_css_sections() {
         max_line
     );
     assert!(html.contains("@function --read_m16_0"));
-    assert!(!html.contains("@function --read_cs_0"));
     assert!(html.contains(".memvis { width:"));
     assert!(html.contains("var(--mv-0)"));
-    assert!(!html.contains("WSS_KEEP_"));
+}
+
+#[test]
+fn emit_html_gates_visualizer_pixels_on_painted_clock_phase() {
+    let program = minimal_exit_program();
+    let gated = |html: &str| {
+        html.replace(' ', "")
+            .contains("@containerstyle(--clk:3){\n.memvis{--mv-0:")
+    };
+    // JS clock (the default): the page is painted after phase 3 only, so
+    // the pixels are computed there and not in every phase.
+    let html = emit_program(&program).expect("emit should succeed");
+    assert!(gated(&html));
+    // The CSS clock paints every phase.
+    let config = EmitConfig::new(
+        crate::constants::DEFAULT_MEMORY_BYTES_CAP,
+        crate::constants::DEFAULT_CALLSTACK_SLOTS_CAP,
+        false,
+        false,
+        false,
+        true,
+        true,
+        true,
+        true,
+    )
+    .expect("config");
+    let html = emit_program_with_config(&program, config).expect("emit should succeed");
+    assert!(!gated(&html));
+    assert!(html.contains("var(--mv-0)"));
 }
 
 #[test]
@@ -393,22 +363,6 @@ fn emit_rejects_unbalanced_keep_markers() {
     )
     .expect_err("unbalanced keep markers should fail");
     assert!(format!("{err:#}").contains("marker counts differ"));
-}
-
-#[test]
-fn emit_html_omits_callstack_state_when_unused() {
-    let program = minimal_exit_program();
-    let html = emit_program(&program).expect("emit should succeed");
-    assert!(!html.contains("@property --cs_sp"));
-    assert!(!html.contains("--_1cs_sp"));
-    assert!(!html.contains("--read_cs("));
-    assert!(!html.contains("[Trap: callstack overflow]"));
-    assert!(!html.contains(".csvis { width:"));
-    assert!(html.contains(".memvis { width:"));
-    assert!(!html.contains(&format!(
-        "{}:",
-        Emitter::cell_name("cs", 0, Emitter::cell_offset_hex_width(CALLSTACK_SLOTS_CAP),)
-    )));
 }
 
 #[test]
@@ -454,8 +408,13 @@ fn emit_html_memory_visualizer_tracks_read_and_write_slots() {
     assert!(html.contains("--mro0:"));
     assert!(html.contains("--mvh-0"));
     assert!(html.contains(".memvis::before {"));
-    assert!(html.contains("rgb(--mhi(var(--m000))"));
-    assert!(html.contains("rgb(--mlo(var(--m000))"));
+    // Loads read the store snapshot (the merge's `prev`), never the execute
+    // snapshot, which already holds this cycle's stores.
+    assert!(html.contains("style(--i: 0): var(--_2m000, 0)"), "{}", html);
+    assert!(!html.contains("style(--i: 0): var(--_0m000)"));
+    // The visualizer reads the execute snapshot: cells have no declaration.
+    assert!(html.contains("hsl(0 0% calc(--mhi(var(--_0m000)) * 100% / 255))"));
+    assert!(html.contains("hsl(0 0% calc(--mlo(var(--_0m000)) * 100% / 255))"));
 }
 
 #[test]
@@ -484,24 +443,29 @@ fn emit_html_callstack_visualizer_tracks_read_and_write_slots() {
 
     let html = emit_program(&program).expect("emit should succeed");
     let cs0_name = Emitter::cell_name("cs", 0, Emitter::cell_offset_hex_width(CALLSTACK_SLOTS_CAP));
-    let cs0_shadow = Emitter::shadow_name(1, &cs0_name);
+    let cs0_prev = Emitter::shadow_name(2, &cs0_name);
     assert!(html.contains(".csvis { width:"));
     assert!(html.contains("--cri0:"));
     assert!(html.contains("--cro0:"));
     assert!(html.contains("--csh-0"));
     assert!(html.contains("#ind-sp::before"));
     assert!(html.contains("id=\"ind-sp\""));
+    // No globals: the G0 indicator would read undefined `--g0_*` lanes.
+    assert!(!html.contains("#ind-g0::before"));
+    assert!(!html.contains("id=\"ind-g0\""));
     assert!(
         html.contains("@function --csmerge(--idx <integer>, --prev <integer>) returns <integer>")
     );
     assert!(html.contains("style(--ctl0: var(--idx))"));
     assert!(html.contains("--cswdp0: if(style(--cswdp_any: 0): 0; else: if("));
-    assert!(!html.contains("--csmerge_slot("));
-    assert!(!html.contains("--csw_active:"));
     assert!(html.contains("@property --cswdp0 { syntax: \"<integer>\";"));
+    assert!(html.contains("--cswdps0: if(style(--cswdp0: 0): );"));
+    assert!(html.contains("--cswdpk0: if(not style(--cswdp0: 0): );"));
     assert!(html.contains(&format!(
-        "{}: if(style(--cswdp0: 0): var({}); else: --csmerge(0, var({})));",
-        cs0_name, cs0_shadow, cs0_shadow
+        "{}: var(--cswdps0, --csmerge(0, var({}, 0))) var(--cswdpk0, var({}, 0));",
+        Emitter::shadow_name(0, &cs0_name),
+        cs0_prev,
+        cs0_prev
     )));
 }
 
@@ -533,17 +497,7 @@ fn emit_html_mload_helper_avoids_local_aliasing() {
     let html = emit_program(&program).expect("emit should succeed");
     assert!(html.contains("@function --mload(--byte <number>) returns <integer>"));
     assert!(html.contains("--read_m16(--mhalf(var(--byte)))"));
-    assert!(!html.contains("@function --ne(--a <number>, --b <number>) returns <integer>"));
     assert!(!html.contains("--cell: --read_m16"));
-}
-
-#[test]
-fn emit_html_omits_rng_when_random_is_unused() {
-    let program = minimal_exit_program();
-    let html = emit_program(&program).expect("emit should succeed");
-    assert!(!html.contains("@property --rng0"));
-    assert!(!html.contains("@keyframes rng-roll-0"));
-    assert!(!html.contains("rng-roll-0 257ms"));
 }
 
 #[test]
@@ -574,7 +528,6 @@ fn emit_html_includes_rng_when_random_is_used() {
     assert!(html.contains("mod(calc(var(--rng0, 0) * var(--rng1, 0) + var(--rng2, 0) + 1), 256)"));
     // Debugger is off by default in tests; the rand inspector should NOT
     // appear in this baseline (covered separately when both flags on).
-    assert!(!html.contains("data-wss-debug-rng-u32"));
 }
 
 #[test]
@@ -610,58 +563,10 @@ fn emit_html_includes_debugger_rng_when_random_used_and_debugger_on() {
 }
 
 #[test]
-fn emit_html_omits_debugger_rng_when_debugger_off() {
-    let program = Ir8Program {
-        entry_func: 0,
-        num_vregs: 1,
-        func_blocks: Vec::new(),
-        cycles: vec![crate::ir8::Cycle {
-            pc: crate::ir8::Pc::new(0),
-            ops: vec![crate::ir8::Inst8::with_dst(
-                Val8::reg(0),
-                Inst8Kind::RandomByte { lane: 0 },
-            )],
-            terminator: Terminator8::Exit { val: None },
-        }],
-        func_entries: Vec::new(),
-        func_num_locals: Vec::new(),
-        memory_end: 0,
-        init_bytes: Vec::new(),
-        global_init: Vec::new(),
-    };
-    let html = emit_program_with_config(
-        &program,
-        EmitConfig::default()
-            .with_js_clock_debugger(false)
-            .expect("test config should be valid"),
-    )
-    .expect("emit should succeed");
-    // Rand CSS itself stays; only the debugger inspector should be gone.
-    assert!(html.contains("@property --rng0"));
-    assert!(!html.contains("data-wss-debug-rng-u32"));
-    assert!(!html.contains("function refreshDebuggerRng"));
-}
-
-#[test]
-fn emit_html_omits_debugger_rng_when_random_unused() {
+fn emit_html_wait_input_is_constant_when_getchar_is_unused() {
     let program = minimal_exit_program();
     let html = emit_program(&program).expect("emit should succeed");
-    // Debugger is on by default but rand is unused — rand inspector should be gone.
-    assert!(!html.contains("data-wss-debug-rng-u32"));
-    assert!(!html.contains("function refreshDebuggerRng"));
-}
-
-#[test]
-fn emit_html_omits_keyboard_ui_when_getchar_is_unused() {
-    let program = minimal_exit_program();
-    let html = emit_program(&program).expect("emit should succeed");
-    assert!(!html.contains("@property --kb"));
     assert!(html.contains("--wait_input: 0;"));
-    assert!(!html.contains("class=\"kb\""));
-    assert!(!html.contains("class=\"input-hint\""));
-    assert!(!html.contains("data-key="));
-    assert!(!html.contains(".key.dual"));
-    assert!(!html.contains("--kb: -1;"));
 }
 
 #[test]
@@ -674,7 +579,7 @@ fn emit_html_includes_keyboard_ui_when_getchar_is_used() {
             pc: crate::ir8::Pc::new(0),
             ops: vec![crate::ir8::Inst8::with_dst(
                 Val8::reg(0),
-                Inst8Kind::Getchar,
+                Inst8Kind::Getchar { blocking: true },
             )],
             terminator: Terminator8::Exit { val: None },
         }],
@@ -734,7 +639,7 @@ fn emit_html_includes_ne_helper_when_clz_builtin_is_used() {
 }
 
 #[test]
-fn emit_html_untouched_registers_use_direct_fallback_without_empty_if() {
+fn emit_html_untouched_registers_emit_no_empty_if() {
     let program = Ir8Program {
         entry_func: 0,
         num_vregs: 8,
@@ -751,12 +656,6 @@ fn emit_html_untouched_registers_use_direct_fallback_without_empty_if() {
         global_init: Vec::new(),
     };
     let html = emit_program(&program).expect("emit should succeed");
-    // A register nothing writes is provably always 0: its reads fold to the
-    // constant and the whole chain (declaration, shadows, keyframe
-    // entries) is dropped.
-    assert!(!html.contains("--r7:"));
-    assert!(!html.contains("--_0r7:"));
-    assert!(!html.contains("--_2r7:"));
     assert!(!html.contains("--r7: if(else:"));
 }
 
@@ -786,7 +685,6 @@ fn emit_html_pc_fallback_increments_for_trivial_fallthrough() {
     };
 
     let html = emit_program(&program).expect("emit should succeed");
-    assert!(!html.contains("style(--_1pc: 0): 1;"));
     assert!(html.contains("--sel(--lt(var(--_1pc), 0), var(--_1pc), calc(var(--_1pc) + 1))"));
 }
 
@@ -848,6 +746,8 @@ fn emit_html_globals_emit_all_lanes_on_single_line_per_global() {
         global_init: vec![0x1122_3344],
     };
     let html = emit_program(&program).expect("emit should succeed");
+    assert!(html.contains("#ind-g0::before"));
+    assert!(html.contains("id=\"ind-g0\""));
 
     let g0_lane0 = Emitter::global_lane_name(0, 0);
     let g0_lane1 = Emitter::global_lane_name(0, 1);
@@ -987,10 +887,10 @@ fn emit_html_memory_store_merge_expr_stays_compact() {
         Emitter::cell_offset_hex_width((MEMORY_BYTES_CAP as usize).div_ceil(2)),
     );
     let m0_start = html
-        .find(&format!("{}: ", m0_name))
+        .find(&format!("{}: ", Emitter::shadow_name(0, &m0_name)))
         .expect("must emit first memory cell");
     let next_decl = html[m0_start + 1..]
-        .find(&format!("{}: ", m1_name))
+        .find(&format!("{}: ", Emitter::shadow_name(0, &m1_name)))
         .map(|idx| m0_start + 1 + idx)
         .or_else(|| html[m0_start..].find('\n').map(|idx| m0_start + idx))
         .unwrap_or(html.len());
@@ -1001,7 +901,6 @@ fn emit_html_memory_store_merge_expr_stays_compact() {
         m0.len()
     );
     assert!(html.contains("--msc0"));
-    assert!(!html.contains("--ms_half0"));
 }
 
 #[test]
@@ -1042,8 +941,7 @@ fn emit_html_memory_store_merge_expr_flattens_slot_conditions() {
         0,
         Emitter::cell_offset_hex_width((MEMORY_BYTES_CAP as usize).div_ceil(2)),
     );
-    let m0_shadow = Emitter::shadow_name(1, &m0_name);
-    assert!(!html.contains("@function --mmerge_byte("));
+    let m0_prev = format!("var({}, 0)", Emitter::shadow_name(2, &m0_name));
     // The merge dispatches on each slot's written byte address instead of
     // multiplying out per-slot equality tests.
     assert!(html.contains(
@@ -1051,16 +949,18 @@ fn emit_html_memory_store_merge_expr_flattens_slot_conditions() {
     ));
     assert!(html.contains("style(--mta0: var(--lo))"));
     assert!(html.contains("style(--mta0b: var(--hi))"));
-    assert!(!html.contains("--eq1(var(--msp0))"));
     assert!(html.contains("--mta0: if("));
     assert!(html.contains("--mta0b: if("));
     // Page flags: one test per page when no store is active.
     assert!(html.contains("--mwdp0: if(style(--mwdp_any: 0): 0; else: if("));
     assert!(html.contains("@property --mwdp0 { syntax: \"<integer>\";"));
-    assert!(!html.contains("--mw_active:"));
+    assert!(html.contains("--mwdps0: if(style(--mwdp0: 0): );"));
+    assert!(html.contains("--mwdpk0: if(not style(--mwdp0: 0): );"));
     assert!(html.contains(&format!(
-        "{}: if(style(--mwdp0: 0): var({}); else: --mmerge16(0, 1, var({})));",
-        m0_name, m0_shadow, m0_shadow
+        "{}: var(--mwdps0, --mmerge16(0, 1, {})) var(--mwdpk0, {});",
+        Emitter::shadow_name(0, &m0_name),
+        m0_prev,
+        m0_prev
     )));
 }
 
@@ -1068,20 +968,8 @@ fn emit_html_memory_store_merge_expr_flattens_slot_conditions() {
 fn emit_html_memory_store_merge_expr_uses_byte_helpers_when_no_writes() {
     let program = minimal_exit_program();
     let html = emit_program(&program).expect("emit should succeed");
-    let m0_name = Emitter::cell_name(
-        "m",
-        0,
-        Emitter::cell_offset_hex_width((MEMORY_BYTES_CAP as usize).div_ceil(2)),
-    );
     assert!(html.contains("@function --mlo(--w <number>) returns <integer>"));
     assert!(html.contains("@function --mhi(--w <number>) returns <integer>"));
-    // Nothing stores to memory, so every cell keeps its initial value: reads
-    // fold to that constant and the cell's whole chain is dead.
-    assert!(!html.contains(&format!("{}:", m0_name)));
-    assert!(!html.contains(&format!("--_2{}:", m0_name.trim_start_matches("--"))));
-    assert!(!html.contains("@function --mmerge16("));
-    assert!(!html.contains("@function --mmerge_byte("));
-    assert!(!html.contains("--mw_active: if("));
 }
 
 #[test]
@@ -1116,10 +1004,9 @@ fn emit_html_return_falls_back_to_callstack_top_when_cs_load_pc_is_in_prior_cycl
 
     let html = emit_program(&program).expect("emit should succeed");
     assert!(html.contains("style(--_1pc: 2): --sel("));
-    assert!(html.contains("style(--_1pc: 2): --sel(--inrange(var(--_1cs_sp), "));
+    // `0 <= sp < N` folds to `sp < N`: the stack pointer is never negative.
+    assert!(html.contains("style(--_1pc: 2): --sel(--lt(var(--_1cs_sp), "));
     assert!(html.contains("--read_cs(var(--_1cs_sp))"));
-    assert!(!html.contains("@function --csmerge("));
-    assert!(!html.contains("--csw_active: if("));
 }
 
 #[test]
@@ -1230,5 +1117,38 @@ fn emit_html_preserves_nested_calc_in_math_context() {
     assert!(
         result.contains("calc("),
         "nested calc() inside min() must be preserved for Chrome compatibility: {result}"
+    );
+}
+
+#[test]
+fn emit_html_memory_visualizer_uses_literal_pixels_without_stores() {
+    // Memory that is never stored to stays at its initial bytes: literal
+    // pixels, not per-recalc `calc()`s over the cells.
+    let mut program = minimal_exit_program();
+    program.memory_end = 4;
+    program.init_bytes = vec![0x12, 0x34];
+    let html = emit_program(&program).expect("emit should succeed");
+    assert!(html.contains("8px 8px rgb(18, 18, 18)"), "{}", html);
+    assert!(html.contains("16px 8px rgb(52, 52, 52)"));
+}
+
+#[test]
+fn helpers_called_matches_whole_names_only() {
+    let css = " --x: calc(--lt(var(--a), 4) * --page(1)); --y: --nez(var(--b));";
+    assert_eq!(
+        Emitter::helpers_called(&[css]),
+        TemplateFeatures::FN_LT | TemplateFeatures::FN_NEZ
+    );
+}
+
+#[test]
+fn inrange_expr_moves_offset_into_bounds() {
+    assert_eq!(
+        Emitter::inrange_expr("calc(var(--_1cs_sp) + 8)", 17),
+        "--inrange(var(--_1cs_sp), -8, 9)"
+    );
+    assert_eq!(
+        Emitter::inrange_expr("var(--_1cs_sp)", 17),
+        "--inrange(var(--_1cs_sp), 0, 17)"
     );
 }

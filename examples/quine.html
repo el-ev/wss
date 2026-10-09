@@ -1,4 +1,4 @@
-<!-- compile command: wss /tmp/quine.wasm -o quine.html --memory-bytes 768 --stack-slots 64 -->
+<!-- compile command: wss /tmp/claude-1000/-home-iris-Projects-wss/6f9d821a-2f41-497d-ac09-b90afcf880aa/scratchpad/examples/quine.wasm -o quine.html --memory-bytes 768 --stack-slots 64 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -23,9 +23,6 @@
 .ind .v::before { content:"0";}
 #ind-pc::before { counter-reset:ind-pc var(--pc);content:counter(ind-pc);}
 #ind-sp::before { counter-reset:ind-sp var(--cs_sp);content:counter(ind-sp);}
-#ind-g0::before {
-content:"0x" --hex(round(down,calc(var(--g0_3)/16))) --hex(mod(var(--g0_3),16)) --hex(round(down,calc(var(--g0_2)/16))) --hex(mod(var(--g0_2),16)) --hex(round(down,calc(var(--g0_1)/16))) --hex(mod(var(--g0_1),16)) --hex(round(down,calc(var(--g0_0)/16))) --hex(mod(var(--g0_0),16));
-}
 @function --support-test() returns <integer> { result:calc(1 + 1);}
 @property --clk { syntax:"<integer>";initial-value:0;inherits:true;}
 @property --fb { syntax:"<content-list>";initial-value:"";inherits:true;}
@@ -36,57 +33,9 @@ content:"0x" --hex(round(down,calc(var(--g0_3)/16))) --hex(mod(var(--g0_3),16)) 
 @property --r8 { syntax:"<integer>";initial-value:0;inherits:true;}@property --r9 { syntax:"<integer>";initial-value:0;inherits:true;}@property --r10 { syntax:"<integer>";initial-value:0;inherits:true;}@property --r11 { syntax:"<integer>";initial-value:0;inherits:true;}@property --r12 { syntax:"<integer>";initial-value:0;inherits:true;}@property --r13 { syntax:"<integer>";initial-value:0;inherits:true;}@property --r14 { syntax:"<integer>";initial-value:0;inherits:true;}@property --r15 { syntax:"<integer>";initial-value:0;inherits:true;}
 @property --r16 { syntax:"<integer>";initial-value:0;inherits:true;}@property --r17 { syntax:"<integer>";initial-value:0;inherits:true;}@property --r18 { syntax:"<integer>";initial-value:0;inherits:true;}@property --r19 { syntax:"<integer>";initial-value:0;inherits:true;}@property --r20 { syntax:"<integer>";initial-value:0;inherits:true;}@property --r21 { syntax:"<integer>";initial-value:0;inherits:true;}@property --r22 { syntax:"<integer>";initial-value:0;inherits:true;}@property --r23 { syntax:"<integer>";initial-value:0;inherits:true;}
 @property --r24 { syntax:"<integer>";initial-value:0;inherits:true;}@property --r25 { syntax:"<integer>";initial-value:0;inherits:true;}@property --r26 { syntax:"<integer>";initial-value:0;inherits:true;}@property --r27 { syntax:"<integer>";initial-value:0;inherits:true;}@property --r28 { syntax:"<integer>";initial-value:0;inherits:true;}@property --r29 { syntax:"<integer>";initial-value:0;inherits:true;}@property --r30 { syntax:"<integer>";initial-value:0;inherits:true;}@property --r31 { syntax:"<integer>";initial-value:0;inherits:true;}
-@property --r32 { syntax:"<integer>";initial-value:0;inherits:true;}@property --r33 { syntax:"<integer>";initial-value:0;inherits:true;}@property --r34 { syntax:"<integer>";initial-value:0;inherits:true;}@property --r35 { syntax:"<integer>";initial-value:0;inherits:true;}@property --r36 { syntax:"<integer>";initial-value:0;inherits:true;}@property --r37 { syntax:"<integer>";initial-value:0;inherits:true;}@property --r38 { syntax:"<integer>";initial-value:0;inherits:true;}
-@property --m000 { syntax:"<integer>";initial-value:27944;inherits:true;}@property --m002 { syntax:"<integer>";initial-value:25711;inherits:true;}@property --m004 { syntax:"<integer>";initial-value:27765;inherits:true;}@property --m006 { syntax:"<integer>";initial-value:10341;inherits:true;}@property --m008 { syntax:"<integer>";initial-value:28009;inherits:true;}@property --m00a { syntax:"<integer>";initial-value:28528;inherits:true;}@property --m00c { syntax:"<integer>";initial-value:29810;inherits:true;}@property --m00e { syntax:"<integer>";initial-value:8736;inherits:true;}
-@property --m010 { syntax:"<integer>";initial-value:28261;inherits:true;}@property --m012 { syntax:"<integer>";initial-value:8822;inherits:true;}@property --m014 { syntax:"<integer>";initial-value:8736;inherits:true;}@property --m016 { syntax:"<integer>";initial-value:30064;inherits:true;}@property --m018 { syntax:"<integer>";initial-value:25460;inherits:true;}@property --m01a { syntax:"<integer>";initial-value:24936;inherits:true;}@property --m01c { syntax:"<integer>";initial-value:8818;inherits:true;}@property --m01e { syntax:"<integer>";initial-value:26152;inherits:true;}
-@property --m020 { syntax:"<integer>";initial-value:28277;inherits:true;}@property --m022 { syntax:"<integer>";initial-value:10339;inherits:true;}@property --m024 { syntax:"<integer>";initial-value:24944;inherits:true;}@property --m026 { syntax:"<integer>";initial-value:24946;inherits:true;}@property --m028 { syntax:"<integer>";initial-value:8301;inherits:true;}@property --m02a { syntax:"<integer>";initial-value:13161;inherits:true;}@property --m02c { syntax:"<integer>";initial-value:10546;inherits:true;}@property --m02e { syntax:"<integer>";initial-value:29224;inherits:true;}
-@property --m030 { syntax:"<integer>";initial-value:29541;inherits:true;}@property --m032 { syntax:"<integer>";initial-value:27765;inherits:true;}@property --m034 { syntax:"<integer>";initial-value:8308;inherits:true;}@property --m036 { syntax:"<integer>";initial-value:13161;inherits:true;}@property --m038 { syntax:"<integer>";initial-value:10546;inherits:true;}@property --m03a { syntax:"<integer>";initial-value:10537;inherits:true;}@property --m03c { syntax:"<integer>";initial-value:27944;inherits:true;}@property --m03e { syntax:"<integer>";initial-value:28005;inherits:true;}
-@property --m040 { syntax:"<integer>";initial-value:29295;inherits:true;}@property --m042 { syntax:"<integer>";initial-value:8313;inherits:true;}@property --m044 { syntax:"<integer>";initial-value:10545;inherits:true;}@property --m046 { syntax:"<integer>";initial-value:25640;inherits:true;}@property --m048 { syntax:"<integer>";initial-value:29793;inherits:true;}@property --m04a { syntax:"<integer>";initial-value:10337;inherits:true;}@property --m04c { syntax:"<integer>";initial-value:13161;inherits:true;}@property --m04e { syntax:"<integer>";initial-value:11826;inherits:true;}
-@property --m050 { syntax:"<integer>";initial-value:28515;inherits:true;}@property --m052 { syntax:"<integer>";initial-value:29550;inherits:true;}@property --m054 { syntax:"<integer>";initial-value:8308;inherits:true;}@property --m056 { syntax:"<integer>";initial-value:10544;inherits:true;}@property --m058 { syntax:"<integer>";initial-value:8738;inherits:true;}@property --m05a { syntax:"<integer>";initial-value:10281;inherits:true;}@property --m05c { syntax:"<integer>";initial-value:30054;inherits:true;}@property --m05e { syntax:"<integer>";initial-value:25454;inherits:true;}
-@property --m060 { syntax:"<integer>";initial-value:28712;inherits:true;}@property --m062 { syntax:"<integer>";initial-value:29281;inherits:true;}@property --m064 { syntax:"<integer>";initial-value:28001;inherits:true;}@property --m066 { syntax:"<integer>";initial-value:26912;inherits:true;}@property --m068 { syntax:"<integer>";initial-value:12851;inherits:true;}@property --m06a { syntax:"<integer>";initial-value:26912;inherits:true;}@property --m06c { syntax:"<integer>";initial-value:12851;inherits:true;}@property --m06e { syntax:"<integer>";initial-value:26912;inherits:true;}
-@property --m070 { syntax:"<integer>";initial-value:12851;inherits:true;}@property --m072 { syntax:"<integer>";initial-value:10281;inherits:true;}@property --m074 { syntax:"<integer>";initial-value:28524;inherits:true;}@property --m076 { syntax:"<integer>";initial-value:28783;inherits:true;}@property --m078 { syntax:"<integer>";initial-value:26920;inherits:true;}@property --m07a { syntax:"<integer>";initial-value:10342;inherits:true;}@property --m07c { syntax:"<integer>";initial-value:13161;inherits:true;}@property --m07e { syntax:"<integer>";initial-value:11826;inherits:true;}
-@property --m080 { syntax:"<integer>";initial-value:29029;inherits:true;}@property --m082 { syntax:"<integer>";initial-value:26920;inherits:true;}@property --m084 { syntax:"<integer>";initial-value:12851;inherits:true;}@property --m086 { syntax:"<integer>";initial-value:27694;inherits:true;}@property --m088 { syntax:"<integer>";initial-value:24943;inherits:true;}@property --m08a { syntax:"<integer>";initial-value:14436;inherits:true;}@property --m08c { syntax:"<integer>";initial-value:30047;inherits:true;}@property --m08e { syntax:"<integer>";initial-value:27688;inherits:true;}
-@property --m090 { syntax:"<integer>";initial-value:25455;inherits:true;}@property --m092 { syntax:"<integer>";initial-value:27745;inherits:true;}@property --m094 { syntax:"<integer>";initial-value:26414;inherits:true;}@property --m096 { syntax:"<integer>";initial-value:29797;inherits:true;}@property --m098 { syntax:"<integer>";initial-value:12320;inherits:true;}@property --m09a { syntax:"<integer>";initial-value:10537;inherits:true;}@property --m09c { syntax:"<integer>";initial-value:27688;inherits:true;}@property --m09e { syntax:"<integer>";initial-value:25455;inherits:true;}
-@property --m0a0 { syntax:"<integer>";initial-value:27745;inherits:true;}@property --m0a2 { syntax:"<integer>";initial-value:26414;inherits:true;}@property --m0a4 { syntax:"<integer>";initial-value:29797;inherits:true;}@property --m0a6 { syntax:"<integer>";initial-value:12832;inherits:true;}@property --m0a8 { syntax:"<integer>";initial-value:10537;inherits:true;}@property --m0aa { syntax:"<integer>";initial-value:29736;inherits:true;}@property --m0ac { syntax:"<integer>";initial-value:25960;inherits:true;}@property --m0ae { syntax:"<integer>";initial-value:10350;inherits:true;}
-@property --m0b0 { syntax:"<integer>";initial-value:29284;inherits:true;}@property --m0b2 { syntax:"<integer>";initial-value:28783;inherits:true;}@property --m0b4 { syntax:"<integer>";initial-value:25384;inherits:true;}@property --m0b6 { syntax:"<integer>";initial-value:27745;inherits:true;}@property --m0b8 { syntax:"<integer>";initial-value:8300;inherits:true;}@property --m0ba { syntax:"<integer>";initial-value:10288;inherits:true;}@property --m0bc { syntax:"<integer>";initial-value:13161;inherits:true;}@property --m0be { syntax:"<integer>";initial-value:11826;inherits:true;}
-@property --m0c0 { syntax:"<integer>";initial-value:28515;inherits:true;}@property --m0c2 { syntax:"<integer>";initial-value:29550;inherits:true;}@property --m0c4 { syntax:"<integer>";initial-value:8308;inherits:true;}@property --m0c6 { syntax:"<integer>";initial-value:12857;inherits:true;}@property --m0c8 { syntax:"<integer>";initial-value:10537;inherits:true;}@property --m0ca { syntax:"<integer>";initial-value:10537;inherits:true;}@property --m0cc { syntax:"<integer>";initial-value:10281;inherits:true;}@property --m0ce { syntax:"<integer>";initial-value:29284;inherits:true;}
-@property --m0d0 { syntax:"<integer>";initial-value:28783;inherits:true;}@property --m0d2 { syntax:"<integer>";initial-value:25384;inherits:true;}@property --m0d4 { syntax:"<integer>";initial-value:27745;inherits:true;}@property --m0d6 { syntax:"<integer>";initial-value:8300;inherits:true;}@property --m0d8 { syntax:"<integer>";initial-value:10288;inherits:true;}@property --m0da { syntax:"<integer>";initial-value:13161;inherits:true;}@property --m0dc { syntax:"<integer>";initial-value:11826;inherits:true;}@property --m0de { syntax:"<integer>";initial-value:28524;inherits:true;}
-@property --m0e0 { syntax:"<integer>";initial-value:25697;inherits:true;}@property --m0e2 { syntax:"<integer>";initial-value:24376;inherits:true;}@property --m0e4 { syntax:"<integer>";initial-value:10357;inherits:true;}@property --m0e6 { syntax:"<integer>";initial-value:28524;inherits:true;}@property --m0e8 { syntax:"<integer>";initial-value:24931;inherits:true;}@property --m0ea { syntax:"<integer>";initial-value:11884;inherits:true;}@property --m0ec { syntax:"<integer>";initial-value:25959;inherits:true;}@property --m0ee { syntax:"<integer>";initial-value:8308;inherits:true;}
-@property --m0f0 { syntax:"<integer>";initial-value:10544;inherits:true;}@property --m0f2 { syntax:"<integer>";initial-value:10537;inherits:true;}@property --m0f4 { syntax:"<integer>";initial-value:10281;inherits:true;}@property --m0f6 { syntax:"<integer>";initial-value:28524;inherits:true;}@property --m0f8 { syntax:"<integer>";initial-value:24931;inherits:true;}@property --m0fa { syntax:"<integer>";initial-value:11884;inherits:true;}@property --m0fc { syntax:"<integer>";initial-value:25971;inherits:true;}@property --m0fe { syntax:"<integer>";initial-value:8308;inherits:true;}
-@property --m100 { syntax:"<integer>";initial-value:10288;inherits:true;}@property --m102 { syntax:"<integer>";initial-value:13161;inherits:true;}@property --m104 { syntax:"<integer>";initial-value:11826;inherits:true;}@property --m106 { syntax:"<integer>";initial-value:25697;inherits:true;}@property --m108 { syntax:"<integer>";initial-value:10340;inherits:true;}@property --m10a { syntax:"<integer>";initial-value:28524;inherits:true;}@property --m10c { syntax:"<integer>";initial-value:24931;inherits:true;}@property --m10e { syntax:"<integer>";initial-value:11884;inherits:true;}
-@property --m110 { syntax:"<integer>";initial-value:25959;inherits:true;}@property --m112 { syntax:"<integer>";initial-value:8308;inherits:true;}@property --m114 { syntax:"<integer>";initial-value:10544;inherits:true;}@property --m116 { syntax:"<integer>";initial-value:26920;inherits:true;}@property --m118 { syntax:"<integer>";initial-value:12851;inherits:true;}@property --m11a { syntax:"<integer>";initial-value:25390;inherits:true;}@property --m11c { syntax:"<integer>";initial-value:28271;inherits:true;}@property --m11e { syntax:"<integer>";initial-value:29811;inherits:true;}
-@property --m120 { syntax:"<integer>";initial-value:12576;inherits:true;}@property --m122 { syntax:"<integer>";initial-value:10537;inherits:true;}@property --m124 { syntax:"<integer>";initial-value:10281;inherits:true;}@property --m126 { syntax:"<integer>";initial-value:29282;inherits:true;}@property --m128 { syntax:"<integer>";initial-value:26975;inherits:true;}@property --m12a { syntax:"<integer>";initial-value:8294;inherits:true;}@property --m12c { syntax:"<integer>";initial-value:10288;inherits:true;}@property --m12e { syntax:"<integer>";initial-value:13161;inherits:true;}
-@property --m130 { syntax:"<integer>";initial-value:11826;inherits:true;}@property --m132 { syntax:"<integer>";initial-value:29804;inherits:true;}@property --m134 { syntax:"<integer>";initial-value:30047;inherits:true;}@property --m136 { syntax:"<integer>";initial-value:27688;inherits:true;}@property --m138 { syntax:"<integer>";initial-value:25455;inherits:true;}@property --m13a { syntax:"<integer>";initial-value:27745;inherits:true;}@property --m13c { syntax:"<integer>";initial-value:26414;inherits:true;}@property --m13e { syntax:"<integer>";initial-value:29797;inherits:true;}
-@property --m140 { syntax:"<integer>";initial-value:12320;inherits:true;}@property --m142 { syntax:"<integer>";initial-value:10281;inherits:true;}@property --m144 { syntax:"<integer>";initial-value:28524;inherits:true;}@property --m146 { syntax:"<integer>";initial-value:24931;inherits:true;}@property --m148 { syntax:"<integer>";initial-value:11884;inherits:true;}@property --m14a { syntax:"<integer>";initial-value:25959;inherits:true;}@property --m14c { syntax:"<integer>";initial-value:8308;inherits:true;}@property --m14e { syntax:"<integer>";initial-value:10545;inherits:true;}
-@property --m150 { syntax:"<integer>";initial-value:10537;inherits:true;}@property --m152 { syntax:"<integer>";initial-value:10537;inherits:true;}@property --m154 { syntax:"<integer>";initial-value:26152;inherits:true;}@property --m156 { syntax:"<integer>";initial-value:28277;inherits:true;}@property --m158 { syntax:"<integer>";initial-value:10339;inherits:true;}@property --m15a { syntax:"<integer>";initial-value:30821;inherits:true;}@property --m15c { syntax:"<integer>";initial-value:28528;inherits:true;}@property --m15e { syntax:"<integer>";initial-value:29810;inherits:true;}
-@property --m160 { syntax:"<integer>";initial-value:8736;inherits:true;}@property --m162 { syntax:"<integer>";initial-value:29535;inherits:true;}@property --m164 { syntax:"<integer>";initial-value:24948;inherits:true;}@property --m166 { syntax:"<integer>";initial-value:29810;inherits:true;}@property --m168 { syntax:"<integer>";initial-value:10530;inherits:true;}@property --m16a { syntax:"<integer>";initial-value:29224;inherits:true;}@property --m16c { syntax:"<integer>";initial-value:29541;inherits:true;}@property --m16e { syntax:"<integer>";initial-value:27765;inherits:true;}
-@property --m170 { syntax:"<integer>";initial-value:8308;inherits:true;}@property --m172 { syntax:"<integer>";initial-value:13161;inherits:true;}@property --m174 { syntax:"<integer>";initial-value:10546;inherits:true;}@property --m176 { syntax:"<integer>";initial-value:25384;inherits:true;}@property --m178 { syntax:"<integer>";initial-value:27745;inherits:true;}@property --m17a { syntax:"<integer>";initial-value:8300;inherits:true;}@property --m17c { syntax:"<integer>";initial-value:10289;inherits:true;}@property --m17e { syntax:"<integer>";initial-value:13161;inherits:true;}
-@property --m180 { syntax:"<integer>";initial-value:11826;inherits:true;}@property --m182 { syntax:"<integer>";initial-value:28515;inherits:true;}@property --m184 { syntax:"<integer>";initial-value:29550;inherits:true;}@property --m186 { syntax:"<integer>";initial-value:8308;inherits:true;}@property --m188 { syntax:"<integer>";initial-value:10544;inherits:true;}@property --m18a { syntax:"<integer>";initial-value:26920;inherits:true;}@property --m18c { syntax:"<integer>";initial-value:12851;inherits:true;}@property --m18e { syntax:"<integer>";initial-value:25390;inherits:true;}
-@property --m190 { syntax:"<integer>";initial-value:28271;inherits:true;}@property --m192 { syntax:"<integer>";initial-value:29811;inherits:true;}@property --m194 { syntax:"<integer>";initial-value:14368;inherits:true;}@property --m196 { syntax:"<integer>";initial-value:10553;inherits:true;}@property --m198 { syntax:"<integer>";initial-value:26920;inherits:true;}@property --m19a { syntax:"<integer>";initial-value:12851;inherits:true;}@property --m19c { syntax:"<integer>";initial-value:25390;inherits:true;}@property --m19e { syntax:"<integer>";initial-value:28271;inherits:true;}
-@property --m1a0 { syntax:"<integer>";initial-value:29811;inherits:true;}@property --m1a2 { syntax:"<integer>";initial-value:12832;inherits:true;}@property --m1a4 { syntax:"<integer>";initial-value:13877;inherits:true;}@property --m1a6 { syntax:"<integer>";initial-value:10537;inherits:true;}@property --m1a8 { syntax:"<integer>";initial-value:25384;inherits:true;}@property --m1aa { syntax:"<integer>";initial-value:27745;inherits:true;}@property --m1ac { syntax:"<integer>";initial-value:8300;inherits:true;}@property --m1ae { syntax:"<integer>";initial-value:10289;inherits:true;}
-@property --m1b0 { syntax:"<integer>";initial-value:13161;inherits:true;}@property --m1b2 { syntax:"<integer>";initial-value:11826;inherits:true;}@property --m1b4 { syntax:"<integer>";initial-value:28515;inherits:true;}@property --m1b6 { syntax:"<integer>";initial-value:29550;inherits:true;}@property --m1b8 { syntax:"<integer>";initial-value:8308;inherits:true;}@property --m1ba { syntax:"<integer>";initial-value:10544;inherits:true;}@property --m1bc { syntax:"<integer>";initial-value:26920;inherits:true;}@property --m1be { syntax:"<integer>";initial-value:12851;inherits:true;}
-@property --m1c0 { syntax:"<integer>";initial-value:25390;inherits:true;}@property --m1c2 { syntax:"<integer>";initial-value:28271;inherits:true;}@property --m1c4 { syntax:"<integer>";initial-value:29811;inherits:true;}@property --m1c6 { syntax:"<integer>";initial-value:13600;inherits:true;}@property --m1c8 { syntax:"<integer>";initial-value:12596;inherits:true;}@property --m1ca { syntax:"<integer>";initial-value:10281;inherits:true;}@property --m1cc { syntax:"<integer>";initial-value:13161;inherits:true;}@property --m1ce { syntax:"<integer>";initial-value:11826;inherits:true;}
-@property --m1d0 { syntax:"<integer>";initial-value:28515;inherits:true;}@property --m1d2 { syntax:"<integer>";initial-value:29550;inherits:true;}@property --m1d4 { syntax:"<integer>";initial-value:8308;inherits:true;}@property --m1d6 { syntax:"<integer>";initial-value:13363;inherits:true;}@property --m1d8 { syntax:"<integer>";initial-value:10537;inherits:true;}@property --m1da { syntax:"<integer>";initial-value:25384;inherits:true;}@property --m1dc { syntax:"<integer>";initial-value:27745;inherits:true;}@property --m1de { syntax:"<integer>";initial-value:8300;inherits:true;}
-@property --m1e0 { syntax:"<integer>";initial-value:10289;inherits:true;}@property --m1e2 { syntax:"<integer>";initial-value:13161;inherits:true;}@property --m1e4 { syntax:"<integer>";initial-value:11826;inherits:true;}@property --m1e6 { syntax:"<integer>";initial-value:28515;inherits:true;}@property --m1e8 { syntax:"<integer>";initial-value:29550;inherits:true;}@property --m1ea { syntax:"<integer>";initial-value:8308;inherits:true;}@property --m1ec { syntax:"<integer>";initial-value:14648;inherits:true;}@property --m1ee { syntax:"<integer>";initial-value:10281;inherits:true;}
-@property --m1f0 { syntax:"<integer>";initial-value:13161;inherits:true;}@property --m1f2 { syntax:"<integer>";initial-value:11826;inherits:true;}@property --m1f4 { syntax:"<integer>";initial-value:28515;inherits:true;}@property --m1f6 { syntax:"<integer>";initial-value:29550;inherits:true;}@property --m1f8 { syntax:"<integer>";initial-value:8308;inherits:true;}@property --m1fa { syntax:"<integer>";initial-value:13365;inherits:true;}@property --m1fc { syntax:"<integer>";initial-value:10545;inherits:true;}@property --m1fe { syntax:"<integer>";initial-value:26920;inherits:true;}
-@property --m200 { syntax:"<integer>";initial-value:12851;inherits:true;}@property --m202 { syntax:"<integer>";initial-value:25390;inherits:true;}@property --m204 { syntax:"<integer>";initial-value:28271;inherits:true;}@property --m206 { syntax:"<integer>";initial-value:29811;inherits:true;}@property --m208 { syntax:"<integer>";initial-value:12832;inherits:true;}@property --m20a { syntax:"<integer>";initial-value:13877;inherits:true;}@property --m20c { syntax:"<integer>";initial-value:10537;inherits:true;}@property --m20e { syntax:"<integer>";initial-value:26920;inherits:true;}
-@property --m210 { syntax:"<integer>";initial-value:12851;inherits:true;}@property --m212 { syntax:"<integer>";initial-value:25390;inherits:true;}@property --m214 { syntax:"<integer>";initial-value:28271;inherits:true;}@property --m216 { syntax:"<integer>";initial-value:29811;inherits:true;}@property --m218 { syntax:"<integer>";initial-value:12320;inherits:true;}@property --m21a { syntax:"<integer>";initial-value:10537;inherits:true;}@property --m21c { syntax:"<integer>";initial-value:41;inherits:true;}@property --m21e { syntax:"<integer>";initial-value:0;inherits:true;}
-@property --m220 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m222 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m224 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m226 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m228 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m22a { syntax:"<integer>";initial-value:0;inherits:true;}@property --m22c { syntax:"<integer>";initial-value:0;inherits:true;}@property --m22e { syntax:"<integer>";initial-value:0;inherits:true;}
-@property --m230 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m232 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m234 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m236 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m238 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m23a { syntax:"<integer>";initial-value:0;inherits:true;}@property --m23c { syntax:"<integer>";initial-value:0;inherits:true;}@property --m23e { syntax:"<integer>";initial-value:0;inherits:true;}
-@property --m240 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m242 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m244 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m246 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m248 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m24a { syntax:"<integer>";initial-value:0;inherits:true;}@property --m24c { syntax:"<integer>";initial-value:0;inherits:true;}@property --m24e { syntax:"<integer>";initial-value:0;inherits:true;}
-@property --m250 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m252 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m254 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m256 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m258 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m25a { syntax:"<integer>";initial-value:0;inherits:true;}@property --m25c { syntax:"<integer>";initial-value:0;inherits:true;}@property --m25e { syntax:"<integer>";initial-value:0;inherits:true;}
-@property --m260 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m262 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m264 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m266 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m268 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m26a { syntax:"<integer>";initial-value:0;inherits:true;}@property --m26c { syntax:"<integer>";initial-value:0;inherits:true;}@property --m26e { syntax:"<integer>";initial-value:0;inherits:true;}
-@property --m270 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m272 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m274 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m276 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m278 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m27a { syntax:"<integer>";initial-value:0;inherits:true;}@property --m27c { syntax:"<integer>";initial-value:0;inherits:true;}@property --m27e { syntax:"<integer>";initial-value:0;inherits:true;}
-@property --m280 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m282 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m284 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m286 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m288 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m28a { syntax:"<integer>";initial-value:0;inherits:true;}@property --m28c { syntax:"<integer>";initial-value:0;inherits:true;}@property --m28e { syntax:"<integer>";initial-value:0;inherits:true;}
-@property --m290 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m292 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m294 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m296 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m298 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m29a { syntax:"<integer>";initial-value:0;inherits:true;}@property --m29c { syntax:"<integer>";initial-value:0;inherits:true;}@property --m29e { syntax:"<integer>";initial-value:0;inherits:true;}
-@property --m2a0 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m2a2 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m2a4 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m2a6 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m2a8 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m2aa { syntax:"<integer>";initial-value:0;inherits:true;}@property --m2ac { syntax:"<integer>";initial-value:0;inherits:true;}@property --m2ae { syntax:"<integer>";initial-value:0;inherits:true;}
-@property --m2b0 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m2b2 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m2b4 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m2b6 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m2b8 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m2ba { syntax:"<integer>";initial-value:0;inherits:true;}@property --m2bc { syntax:"<integer>";initial-value:0;inherits:true;}@property --m2be { syntax:"<integer>";initial-value:0;inherits:true;}
-@property --m2c0 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m2c2 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m2c4 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m2c6 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m2c8 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m2ca { syntax:"<integer>";initial-value:0;inherits:true;}@property --m2cc { syntax:"<integer>";initial-value:0;inherits:true;}@property --m2ce { syntax:"<integer>";initial-value:0;inherits:true;}
-@property --m2d0 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m2d2 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m2d4 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m2d6 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m2d8 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m2da { syntax:"<integer>";initial-value:0;inherits:true;}@property --m2dc { syntax:"<integer>";initial-value:0;inherits:true;}@property --m2de { syntax:"<integer>";initial-value:0;inherits:true;}
-@property --m2e0 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m2e2 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m2e4 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m2e6 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m2e8 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m2ea { syntax:"<integer>";initial-value:0;inherits:true;}@property --m2ec { syntax:"<integer>";initial-value:0;inherits:true;}@property --m2ee { syntax:"<integer>";initial-value:0;inherits:true;}
-@property --m2f0 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m2f2 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m2f4 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m2f6 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m2f8 { syntax:"<integer>";initial-value:0;inherits:true;}@property --m2fa { syntax:"<integer>";initial-value:0;inherits:true;}@property --m2fc { syntax:"<integer>";initial-value:0;inherits:true;}@property --m2fe { syntax:"<integer>";initial-value:0;inherits:true;}
+@property --r32 { syntax:"<integer>";initial-value:0;inherits:true;}@property --r33 { syntax:"<integer>";initial-value:0;inherits:true;}@property --r34 { syntax:"<integer>";initial-value:0;inherits:true;}@property --r35 { syntax:"<integer>";initial-value:0;inherits:true;}@property --r36 { syntax:"<integer>";initial-value:0;inherits:true;}@property --r37 { syntax:"<integer>";initial-value:0;inherits:true;}@property --r38 { syntax:"<integer>";initial-value:0;inherits:true;}@property --r39 { syntax:"<integer>";initial-value:0;inherits:true;}
+@property --r40 { syntax:"<integer>";initial-value:0;inherits:true;}@property --r41 { syntax:"<integer>";initial-value:0;inherits:true;}@property --r42 { syntax:"<integer>";initial-value:0;inherits:true;}@property --r43 { syntax:"<integer>";initial-value:0;inherits:true;}
 @property --cs_sp { syntax:"<integer>";initial-value:0;inherits:true;}
-@property --cs0 { syntax:"<integer>";initial-value:0;inherits:true;}
 @property --cswdp0 { syntax:"<integer>";initial-value:0;inherits:true;}
 @property --cswdp_any { syntax:"<integer>";initial-value:0;inherits:true;}
 @property --ctl0 { syntax:"<integer>";initial-value:-1;inherits:true;}@property --cth0 { syntax:"<integer>";initial-value:-1;inherits:true;}@property --cvl0 { syntax:"<integer>";initial-value:0;inherits:true;}@property --cvh0 { syntax:"<integer>";initial-value:0;inherits:true;}@property --ctp0 { syntax:"<integer>";initial-value:-1;inherits:true;}
@@ -113,11 +62,11 @@ animation-play-state:paused,paused;
 @container style(--clk:3) { animation-play-state:paused,running }
 --_1pc:var(--_2pc,2000);
 --_1r4:var(--_2r4,0);--_1r5:var(--_2r5,0);--_1r6:var(--_2r6,0);--_1r7:var(--_2r7,0);
---_1r8:var(--_2r8,0);--_1r9:var(--_2r9,0);--_1r10:var(--_2r10,0);--_1r11:var(--_2r11,0);--_1r12:var(--_2r12,0);--_1r13:var(--_2r13,0);--_1r16:var(--_2r16,0);--_1r17:var(--_2r17,0);--_1r21:var(--_2r21,0);--_1r22:var(--_2r22,0);--_1r23:var(--_2r23,0);
---_1r25:var(--_2r25,0);--_1r26:var(--_2r26,0);--_1r27:var(--_2r27,0);--_1r28:var(--_2r28,0);--_1r29:var(--_2r29,0);--_1r30:var(--_2r30,0);--_1r31:var(--_2r31,0);
---_1r32:var(--_2r32,0);--_1r33:var(--_2r33,0);--_1r34:var(--_2r34,0);--_1r35:var(--_2r35,0);--_1r36:var(--_2r36,0);--_1r37:var(--_2r37,0);--_1r38:var(--_2r38,0);
+--_1r8:var(--_2r8,0);--_1r9:var(--_2r9,0);--_1r10:var(--_2r10,0);--_1r11:var(--_2r11,0);--_1r12:var(--_2r12,0);--_1r13:var(--_2r13,0);--_1r16:var(--_2r16,0);--_1r17:var(--_2r17,0);--_1r20:var(--_2r20,0);--_1r21:var(--_2r21,0);--_1r22:var(--_2r22,0);--_1r23:var(--_2r23,0);
+--_1r24:var(--_2r24,0);--_1r26:var(--_2r26,0);--_1r27:var(--_2r27,0);--_1r28:var(--_2r28,0);--_1r29:var(--_2r29,0);--_1r30:var(--_2r30,0);--_1r31:var(--_2r31,0);
+--_1r32:var(--_2r32,0);--_1r33:var(--_2r33,0);--_1r34:var(--_2r34,0);--_1r35:var(--_2r35,0);--_1r36:var(--_2r36,0);--_1r37:var(--_2r37,0);--_1r38:var(--_2r38,0);--_1r39:var(--_2r39,0);
+--_1r40:var(--_2r40,0);--_1r41:var(--_2r41,0);--_1r42:var(--_2r42,0);--_1r43:var(--_2r43,0);
 --_1cs_sp:var(--_2cs_sp,0);
---_1cs0:var(--_2cs0,0);
 --_1fb:var(--_2fb,"");
 --mri0:if(style(--_1pc:1000):var(--mb0);else:0);
 --mri1:if(style(--_1pc:1000):calc(var(--mb0) + 1);else:0);
@@ -127,53 +76,58 @@ animation-play-state:paused,paused;
 --mro1:if(style(--_1pc:1000):--lt(var(--mb0),767);else:0);
 --mro2:if(style(--_1pc:1000):--lt(var(--mb0),766);else:0);
 --mro3:if(style(--_1pc:1000):--lt(var(--mb0),765);else:0);
---mb0:if(style(--_1pc:1000):calc(var(--_1r8) + calc(var(--_1r9)*256));else:0);
+--mb0:if(style(--_1pc:1000):calc(var(--_1r8) + var(--_1r9)*256);else:0);
 --csi0:if(style(--pcg0:1):var(--_1cs_sp);else:0);
---cso0:if(style(--pcg0:1):--inrange(var(--_1cs_sp),1);else:0);
---cth0:if(style(--pcg0:1):calc(--inrange(var(--_1cs_sp),1)*(var(--_1cs_sp) + 1) - 1);else:-1);
+--cso0:if(style(--pcg0:1):--lt(var(--_1cs_sp),1);else:0);
+--cth0:if(style(--pcg0:1):calc(--lt(var(--_1cs_sp),1)*(var(--_1cs_sp) + 1) - 1);else:-1);
 --cvl0:if(style(--_1pc:2000):210;style(--_1pc:2003):213;style(--_1pc:2006):216;else:0);
 --cvh0:if(style(--pcg0:1):7;else:0);
 --ctp0:round(down,max(var(--cth0),var(--cth0))/16);
+--cswdps0:if(style(--cswdp0:0):);--cswdpk0:if(not style(--cswdp0:0):);
 --cswdp_any:calc(var(--ctp0) + 1);
 --cswdp0:if(style(--cswdp_any:0):0;else:if(style(--ctp0:0):1;else:0));
---cri0:if(style(--_1pc:1010):var(--_1cs_sp);else:0);
---cro0:if(style(--_1pc:1010):--inrange(var(--_1cs_sp),1);else:0);
---pc:if(style(--_1pc:1000):--sel(calc(--ge(var(--_1r9),3) + --ge(var(--mb0),765)),-3,1001);style(--_1pc:1008):--sel(max(0,sign(calc(calc(var(--_1r12) + calc(var(--_1r13)*256)) - calc(var(--_1r8) + calc(var(--_1r9)*256) + calc(var(--_1r10)*65536) + calc(var(--_1r11)*16777216))))),1000,1009);style(--_1pc:1009):--sel(calc(--lt(var(--_1cs_sp),1) + --ge(var(--_1cs_sp),3)),-5,1010);style(--_1pc:1010):calc(--ge(var(--_1cs_sp),1)*-5 + (1 - --ge(var(--_1cs_sp),1))*--sel(--inrange(var(--_1cs_sp),1),--read_cs(var(--_1cs_sp)),var(--_1pc)));style(--_1pc:2000):--sel(--ge(var(--_1cs_sp),1),-5,2001);style(--pcg1:1):--sel(--ge(var(--_1cs_sp),1),-5,1000);style(--_1pc:2002):--sel(--ge(var(--_1cs_sp),2),-5,2003);style(--_1pc:2003):--sel(--ge(var(--_1cs_sp),1),-5,2004);style(--_1pc:2005):--sel(--ge(var(--_1cs_sp),2),-5,2006);style(--_1pc:2006):--sel(--ge(var(--_1cs_sp),1),-5,2007);style(--_1pc:2008):--sel(--ge(var(--_1cs_sp),2),-5,-1);else:--sel(--lt(var(--_1pc),0),var(--_1pc),calc(var(--_1pc) + 1)));
+--cri0:if(style(--_1pc:1007):var(--_1cs_sp);else:0);
+--cro0:if(style(--_1pc:1007):--lt(var(--_1cs_sp),1);else:0);
+--pc:if(style(--_1pc:1000):--sel(calc(--ge(var(--_1r9),3) + --ge(var(--mb0),765)),-3,1001);style(--_1pc:1005):--sel(var(--_1r21),1000,1006);style(--_1pc:1006):--sel(calc(--lt(var(--_1cs_sp),1) + --ge(var(--_1cs_sp),3)),-5,1007);style(--_1pc:1007):calc(--ge(var(--_1cs_sp),1)*-5 + --lt(var(--_1cs_sp),1)*--sel(--lt(var(--_1cs_sp),1),--read_cs(var(--_1cs_sp)),var(--_1pc)));style(--_1pc:2000):--sel(--ge(var(--_1cs_sp),1),-5,2001);style(--pcg1:1):--sel(--ge(var(--_1cs_sp),1),-5,1000);style(--_1pc:2002):--sel(--ge(var(--_1cs_sp),2),-5,2003);style(--_1pc:2003):--sel(--ge(var(--_1cs_sp),1),-5,2004);style(--_1pc:2005):--sel(--ge(var(--_1cs_sp),2),-5,2006);style(--_1pc:2006):--sel(--ge(var(--_1cs_sp),1),-5,2007);style(--_1pc:2008):--sel(--ge(var(--_1cs_sp),2),-5,-1);else:--sel(--lt(var(--_1pc),0),var(--_1pc),calc(var(--_1pc) + 1)));
 --wait_input:0;
---cs_sp:if(style(--_1pc:1009):--sel(--inrange(calc(var(--_1cs_sp) - 1),2),calc(var(--_1cs_sp) - 1),var(--_1cs_sp));style(--pcg1:1):--sel(--inrange(calc(var(--_1cs_sp) + 1),2),calc(var(--_1cs_sp) + 1),var(--_1cs_sp));else:var(--_1cs_sp));
---r4:if(style(--_1pc:1000):--sel(--lt(var(--_1r9),3),--mload(var(--mb0)),var(--_1r4));style(--_1pc:1005):calc(var(--_1r35)*var(--_1r27));style(--_1pc:1006):mod(calc(var(--_1r8) + 4),256);else:var(--_1r4));
---r5:if(style(--_1pc:1000):mod(calc(var(--_1r9) + round(down,calc((var(--_1r8) + 4)/256))),256);else:var(--_1r5));
---r6:if(style(--_1pc:1000):mod(calc(var(--_1r10) + round(down,calc((var(--_1r8) + var(--_1r9)*256 + 4)/65536))),256);else:var(--_1r6));
---r7:if(style(--_1pc:1000):mod(calc(var(--_1r11) + round(down,calc((var(--_1r8) + var(--_1r9)*256 + var(--_1r10)*65536 + 4)/16777216))),256);else:var(--_1r7));
---r8:if(style(--_1pc:1007):var(--_1r4);style((--_1pc:2001) or (--_1pc:2004)):0;style(--_1pc:2007):89;else:var(--_1r8));
---r9:if(style(--_1pc:1001):var(--_1r5);style(--pcg1:1):0;else:var(--_1r9));
---r10:if(style(--_1pc:1001):var(--_1r6);style(--pcg1:1):0;else:var(--_1r10));
---r11:if(style(--_1pc:1001):var(--_1r7);style(--pcg1:1):0;else:var(--_1r11));
+--cs_sp:if(style(--_1pc:1006):--sel(--inrange(var(--_1cs_sp),1,3),calc(var(--_1cs_sp) - 1),var(--_1cs_sp));style(--pcg1:1):--sel(--lt(var(--_1cs_sp),1),calc(var(--_1cs_sp) + 1),var(--_1cs_sp));else:var(--_1cs_sp));
+--r4:if(style(--_1pc:1001):calc(1 - abs(sign(calc(var(--_1r24) - var(--_1r16) - var(--_1r17)*256))));else:var(--_1r4));
+--r5:if(style(--_1pc:1000):mod(calc(var(--_1r12) - var(--_1r8)),256);else:var(--_1r5));
+--r6:if(style(--_1pc:1000):mod(calc(var(--_1r13) - var(--_1r9) - round(down,calc((var(--_1r8) - var(--_1r12) + 255)/256))),256);else:var(--_1r6));
+--r7:if(style(--_1pc:1001):--nez(var(--_1r6));else:var(--_1r7));
+--r8:if(style(--_1pc:1001):var(--_1r28);style((--_1pc:2001) or (--_1pc:2004)):0;style(--_1pc:2007):89;else:var(--_1r8));
+--r9:if(style(--_1pc:1001):var(--_1r29);style(--pcg1:1):0;else:var(--_1r9));
+--r10:if(style(--_1pc:1001):var(--_1r30);style(--pcg1:1):0;else:var(--_1r10));
+--r11:if(style(--_1pc:1001):var(--_1r31);style(--pcg1:1):0;else:var(--_1r11));
 --r12:if(style(--_1pc:2001):89;style((--_1pc:2004) or (--_1pc:2007)):29;else:var(--_1r12));
 --r13:if(style(--_1pc:2001):0;style((--_1pc:2004) or (--_1pc:2007)):2;else:var(--_1r13));
 --r16:if(style((--_1pc:2001) or (--_1pc:2007)):0;style(--_1pc:2004):34;else:var(--_1r16));
 --r17:if(style((--_1pc:2001) or (--_1pc:2007)):1;style(--_1pc:2004):0;else:var(--_1r17));
---r20:if(style(--_1pc:1008):max(0,sign(calc(calc(var(--_1r12) + calc(var(--_1r13)*256)) - calc(var(--_1r8) + calc(var(--_1r9)*256) + calc(var(--_1r10)*65536) + calc(var(--_1r11)*16777216)))));else:var(--_2r20,0));
---r21:if(style(--_1pc:1000):--sel(--lt(var(--mb0),767),--mload(calc(var(--mb0) + 1)),var(--_1r21));else:var(--_1r21));
---r22:if(style(--_1pc:1000):--sel(--lt(var(--mb0),766),--mload(calc(var(--mb0) + 2)),var(--_1r22));else:var(--_1r22));
---r23:if(style(--_1pc:1000):--sel(--lt(var(--mb0),765),--mload(calc(var(--mb0) + 3)),var(--_1r23));else:var(--_1r23));
---r24:if(style(--_1pc:1000):1;else:var(--_2r24,0));
---r25:if(style(--_1pc:1003):calc(min(1,var(--_1r30) + var(--_1r32)));else:var(--_1r25));
---r26:if(style(--_1pc:1003):calc(min(1,var(--_1r30) + var(--_1r34)));else:var(--_1r26));
---r27:if(style(--_1pc:1001):calc(1 - abs(sign(calc(var(--_1r23) - calc(var(--_1r16) + calc(var(--_1r17)*256))))));else:var(--_1r27));
---r28:if(style(--_1pc:1000):mod(calc(var(--_1r12) - var(--_1r8)),256);else:var(--_1r28));
---r29:if(style(--_1pc:1000):mod(calc(var(--_1r13) - var(--_1r9) - round(down,calc((var(--_1r8) - var(--_1r12) + 255)/256))),256);else:var(--_1r29));
---r30:if(style(--_1pc:1001):--nez(var(--_1r29));else:var(--_1r30));
---r31:if(style(--_1pc:1001):--lt(var(--_1r28),2);style(--_1pc:1002):--lt(var(--_1r28),4);else:var(--_1r31));
---r32:if(style((--_1pc:1002) or (--_1pc:1003)):--eqz(var(--_1r31));else:var(--_1r32));
---r33:if(style(--_1pc:1001):--lt(var(--_1r28),3);style(--_1pc:1004):calc(var(--_1r25)*var(--_1r36));else:var(--_1r33));
---r34:if(style(--_1pc:1002):--eqz(var(--_1r33));style(--_1pc:1004):calc(var(--_1r26)*var(--_1r37));else:var(--_1r34));
---r35:if(style(--_1pc:1004):calc(min(1,var(--_1r30) + var(--_1r32)));else:var(--_1r35));
---r36:if(style(--_1pc:1001):calc(1 - abs(sign(calc(var(--_1r21) - calc(var(--_1r16) + calc(var(--_1r17)*256))))));else:var(--_1r36));
---r37:if(style(--_1pc:1001):calc(1 - abs(sign(calc(var(--_1r22) - calc(var(--_1r16) + calc(var(--_1r17)*256))))));else:var(--_1r37));
---r38:if(style(--_1pc:1001):calc(1 - abs(sign(calc(var(--_1r4) - calc(var(--_1r16) + calc(var(--_1r17)*256))))));else:var(--_1r38));
---cs0:if(style(--cswdp0:0):var(--_1cs0);else:--csmerge(0,var(--_1cs0)));
---fb:if(style(--_1pc:1002):var(--_1fb) --cond_char(var(--_1r38),92) --i2char(var(--_1r4));style(--_1pc:1005):var(--_1fb) --cond_char(var(--_1r33),92) --cond_char(var(--_1r25),var(--_1r21)) --cond_char(var(--_1r34),92) --cond_char(var(--_1r26),var(--_1r22));style(--_1pc:1006):var(--_1fb) --cond_char(var(--_1r4),92) --cond_char(var(--_1r35),var(--_1r23));else:var(--_1fb));
+--r20:if(style(--_1pc:1000):--sel(--lt(var(--_1r9),3),--mload(var(--mb0)),var(--_1r20));else:var(--_1r20));
+--r21:if(style(--_1pc:1002):max(0,sign(calc(var(--_1r12) + var(--_1r13)*256 - var(--_1r8) - var(--_1r9)*256 - var(--_1r10)*65536 - var(--_1r11)*16777216)));else:var(--_1r21));
+--r22:if(style(--_1pc:1000):--sel(--lt(var(--mb0),767),--mload(calc(var(--mb0) + 1)),var(--_1r22));else:var(--_1r22));
+--r23:if(style(--_1pc:1000):--sel(--lt(var(--mb0),766),--mload(calc(var(--mb0) + 2)),var(--_1r23));else:var(--_1r23));
+--r24:if(style(--_1pc:1000):--sel(--lt(var(--mb0),765),--mload(calc(var(--mb0) + 3)),var(--_1r24));else:var(--_1r24));
+--r25:if(style(--_1pc:1000):1;else:var(--_2r25,0));
+--r26:if(style(--_1pc:1003):calc(min(1,var(--_1r7) + var(--_1r33)));else:var(--_1r26));
+--r27:if(style(--_1pc:1003):calc(min(1,var(--_1r7) + var(--_1r35)));else:var(--_1r27));
+--r28:if(style(--_1pc:1000):mod(calc(var(--_1r8) + 4),256);style(--_1pc:1004):calc(var(--_1r37)*var(--_1r4));else:var(--_1r28));
+--r29:if(style(--_1pc:1000):mod(calc(var(--_1r9) + round(down,calc((var(--_1r8) + 4)/256))),256);else:var(--_1r29));
+--r30:if(style(--_1pc:1000):mod(calc(var(--_1r10) + round(down,calc((var(--_1r8) + var(--_1r9)*256 + 4)/65536))),256);else:var(--_1r30));
+--r31:if(style(--_1pc:1000):mod(calc(var(--_1r11) + round(down,calc((var(--_1r8) + var(--_1r9)*256 + var(--_1r10)*65536 + 4)/16777216))),256);else:var(--_1r31));
+--r32:if(style(--_1pc:1001):--lt(var(--_1r5),2);else:var(--_1r32));
+--r33:if(style(--_1pc:1002):--eqz(var(--_1r32));else:var(--_1r33));
+--r34:if(style(--_1pc:1001):--lt(var(--_1r5),3);else:var(--_1r34));
+--r35:if(style(--_1pc:1002):--eqz(var(--_1r34));else:var(--_1r35));
+--r36:if(style(--_1pc:1001):calc(1 - abs(sign(calc(var(--_1r20) - var(--_1r16) - var(--_1r17)*256))));else:var(--_1r36));
+--r37:if(style(--_1pc:1003):calc(min(1,var(--_1r7) + var(--_1r41)));else:var(--_1r37));
+--r38:if(style(--_1pc:1001):calc(1 - abs(sign(calc(var(--_1r22) - var(--_1r16) - var(--_1r17)*256))));else:var(--_1r38));
+--r39:if(style(--_1pc:1001):calc(1 - abs(sign(calc(var(--_1r23) - var(--_1r16) - var(--_1r17)*256))));else:var(--_1r39));
+--r40:if(style(--_1pc:1001):--lt(var(--_1r5),4);else:var(--_1r40));
+--r41:if(style(--_1pc:1002):--eqz(var(--_1r40));else:var(--_1r41));
+--r42:if(style(--_1pc:1004):calc(var(--_1r26)*var(--_1r38));else:var(--_1r42));
+--r43:if(style(--_1pc:1004):calc(var(--_1r27)*var(--_1r39));else:var(--_1r43));
+--fb:if(style(--_1pc:1002):var(--_1fb) --cond_char(var(--_1r36),92) --i2char(var(--_1r20));style(--_1pc:1005):var(--_1fb) --cond_char(var(--_1r42),92) --cond_char(var(--_1r26),var(--_1r22)) --cond_char(var(--_1r43),92) --cond_char(var(--_1r27),var(--_1r23)) --cond_char(var(--_1r28),92) --cond_char(var(--_1r37),var(--_1r24));else:var(--_1fb));
 --ra:if(style(--_1pc:2008):"0x" --hex(round(down,calc((0)/16))) --hex(mod((0),16)) --hex(round(down,calc((0)/16))) --hex(mod((0),16)) --hex(round(down,calc((0)/16))) --hex(mod((0),16)) --hex(round(down,calc((0)/16))) --hex(mod((0),16));else:var(--_2ra,"0x00000000"));
 --pcg0:if(style((--_1pc:2000) or (--_1pc:2003) or (--_1pc:2006)):1;else:0);
 --pcg1:if(style((--_1pc:2001) or (--_1pc:2004) or (--_1pc:2007)):1;else:0);
@@ -186,13 +140,11 @@ animation-play-state:paused,paused;
 @function --ne(--a <number>,--b <number>) returns <integer> { result:abs(sign(calc(var(--a) - var(--b))));}
 @function --lt(--a <number>,--b <number>) returns <integer> { result:round(down,calc((1 - sign(calc(var(--a) - var(--b))))/2));}
 @function --ge(--a <number>,--b <number>) returns <integer> { result:round(up,calc((sign(calc(var(--a) - var(--b))) + 1)/2));}
-@function --inrange(--x <number>,--k <number>) returns <integer> { result:calc(--lt(-1,var(--x))*--lt(var(--x),var(--k)));}
-@function --addr16(--lo <number>,--hi <number>,--imm <number>) returns <integer> { result:round(down,calc(var(--imm) + var(--lo) + 256*var(--hi)));}
+@function --inrange(--x <number>,--lo <number>,--hi <number>) returns <integer> { result:calc(--lt(var(--x),var(--hi)) - --lt(var(--x),var(--lo)));}
 @function --mhalf(--byte <number>) returns <integer> { result:round(down,calc(var(--byte)/2));}
 @function --mpar(--byte <number>) returns <integer> { result:mod(var(--byte),2);}
 @function --mlo(--w <number>) returns <integer> { result:mod(var(--w),256);}
 @function --mhi(--w <number>) returns <integer> { result:mod(round(down,calc(var(--w)/256)),256);}
-@function --m16(--lo <number>,--hi <number>) returns <integer> { result:calc(var(--lo) + 256*var(--hi));}
 @function --mload(--byte <number>) returns <integer> { result:mod(round(down,calc(--read_m16(--mhalf(var(--byte)))/(1 + 255*mod(var(--byte),2)))),256);}
 @function --i2char(--i <integer>) returns <string> { result:if(style(--i:-1):"";style(--i:8):"";style(--i:9):"    ";style(--i:10):"\a ";style(--i:32):" ";style(--i:33):"!";style(--i:34):"\"";style(--i:35):"#";style(--i:36):"$";style(--i:37):"%";style(--i:38):"&";style(--i:39):"'";style(--i:40):"(";style(--i:41):")";style(--i:42):"*";style(--i:43):"+";style(--i:44):",";style(--i:45):"-";style(--i:46):".";style(--i:47):"/";style(--i:48):"0";style(--i:49):"1";style(--i:50):"2";style(--i:51):"3";style(--i:52):"4";style(--i:53):"5";style(--i:54):"6";style(--i:55):"7";style(--i:56):"8";style(--i:57):"9";style(--i:58):":";style(--i:59):";";style(--i:60):"<";style(--i:61):"=";style(--i:62):">";style(--i:64):"@";style(--i:65):"A";style(--i:66):"B";style(--i:67):"C";style(--i:68):"D";style(--i:69):"E";style(--i:70):"F";style(--i:71):"G";style(--i:72):"H";style(--i:73):"I";style(--i:74):"J";style(--i:75):"K";style(--i:76):"L";style(--i:77):"M";style(--i:78):"N";style(--i:79):"O";style(--i:80):"P";style(--i:81):"Q";style(--i:82):"R";style(--i:83):"S";style(--i:84):"T";style(--i:85):"U";style(--i:86):"V";style(--i:87):"W";style(--i:88):"X";style(--i:89):"Y";style(--i:90):"Z";style(--i:91):"[";style(--i:92):"\\";style(--i:93):"]";style(--i:94):"^";style(--i:95):"_";style(--i:96):"`";style(--i:97):"a";style(--i:98):"b";style(--i:99):"c";style(--i:100):"d";style(--i:101):"e";style(--i:102):"f";style(--i:103):"g";style(--i:104):"h";style(--i:105):"i";style(--i:106):"j";style(--i:107):"k";style(--i:108):"l";style(--i:109):"m";style(--i:110):"n";style(--i:111):"o";style(--i:112):"p";style(--i:113):"q";style(--i:114):"r";style(--i:115):"s";style(--i:116):"t";style(--i:117):"u";style(--i:118):"v";style(--i:119):"w";style(--i:120):"x";style(--i:121):"y";style(--i:122):"z";style(--i:123):"{";style(--i:124):"|";style(--i:125):"}";style(--i:126):"~";else:"?");}
 @function --cond_char(--c <integer>,--v <integer>) returns <string> { result:if(style(--c:0):"";else:--i2char(var(--v)));}
@@ -211,7 +163,7 @@ animation-play-state:paused,paused;
 @function --read_m16_11(--i <integer>) returns <integer> { result:0;}
 @function --read_m16(--i <integer>) returns <integer> { result:--read_m16_d(round(down,var(--i)/32),var(--i));}
 @function --read_m16_d(--c <integer>,--i <integer>) returns <integer> { result:if(style(--c:0):--read_m16_0(var(--i));style(--c:1):--read_m16_1(var(--i));style(--c:2):--read_m16_2(var(--i));style(--c:3):--read_m16_3(var(--i));style(--c:4):--read_m16_4(var(--i));style(--c:5):--read_m16_5(var(--i));style(--c:6):--read_m16_6(var(--i));style(--c:7):--read_m16_7(var(--i));style(--c:8):--read_m16_8(var(--i));style(--c:9):--read_m16_9(var(--i));style(--c:10):--read_m16_10(var(--i));style(--c:11):--read_m16_11(var(--i));else:0);}
-@function --read_cs(--i <integer>) returns <integer> { result:if(style(--i:0):var(--_1cs0);else:0);}
+@function --read_cs(--i <integer>) returns <integer> { result:if(style(--i:0):var(--_2cs0,0);else:0);}
 @function --csmerge(--idx <integer>,--prev <integer>) returns <integer> { result:calc(if(style(--cth0:var(--idx)):var(--cvl0);else:--mlo(var(--prev))) + if(style(--cth0:var(--idx)):var(--cvh0);else:--mhi(var(--prev)))*256);}
 @keyframes store {
 0%,100% {
@@ -219,7 +171,8 @@ animation-play-state:paused,paused;
 --_2r4:var(--_0r4);--_2r5:var(--_0r5);--_2r6:var(--_0r6);--_2r7:var(--_0r7);
 --_2r8:var(--_0r8);--_2r9:var(--_0r9);--_2r10:var(--_0r10);--_2r11:var(--_0r11);--_2r12:var(--_0r12);--_2r13:var(--_0r13);--_2r16:var(--_0r16);--_2r17:var(--_0r17);--_2r20:var(--_0r20);--_2r21:var(--_0r21);--_2r22:var(--_0r22);--_2r23:var(--_0r23);
 --_2r24:var(--_0r24);--_2r25:var(--_0r25);--_2r26:var(--_0r26);--_2r27:var(--_0r27);--_2r28:var(--_0r28);--_2r29:var(--_0r29);--_2r30:var(--_0r30);--_2r31:var(--_0r31);
---_2r32:var(--_0r32);--_2r33:var(--_0r33);--_2r34:var(--_0r34);--_2r35:var(--_0r35);--_2r36:var(--_0r36);--_2r37:var(--_0r37);--_2r38:var(--_0r38);
+--_2r32:var(--_0r32);--_2r33:var(--_0r33);--_2r34:var(--_0r34);--_2r35:var(--_0r35);--_2r36:var(--_0r36);--_2r37:var(--_0r37);--_2r38:var(--_0r38);--_2r39:var(--_0r39);
+--_2r40:var(--_0r40);--_2r41:var(--_0r41);--_2r42:var(--_0r42);--_2r43:var(--_0r43);
 --_2cs_sp:var(--_0cs_sp);
 --_2cs0:var(--_0cs0);
 --_2fb:var(--_0fb);
@@ -232,9 +185,10 @@ animation-play-state:paused,paused;
 --_0r4:var(--r4);--_0r5:var(--r5);--_0r6:var(--r6);--_0r7:var(--r7);
 --_0r8:var(--r8);--_0r9:var(--r9);--_0r10:var(--r10);--_0r11:var(--r11);--_0r12:var(--r12);--_0r13:var(--r13);--_0r16:var(--r16);--_0r17:var(--r17);--_0r20:var(--r20);--_0r21:var(--r21);--_0r22:var(--r22);--_0r23:var(--r23);
 --_0r24:var(--r24);--_0r25:var(--r25);--_0r26:var(--r26);--_0r27:var(--r27);--_0r28:var(--r28);--_0r29:var(--r29);--_0r30:var(--r30);--_0r31:var(--r31);
---_0r32:var(--r32);--_0r33:var(--r33);--_0r34:var(--r34);--_0r35:var(--r35);--_0r36:var(--r36);--_0r37:var(--r37);--_0r38:var(--r38);
+--_0r32:var(--r32);--_0r33:var(--r33);--_0r34:var(--r34);--_0r35:var(--r35);--_0r36:var(--r36);--_0r37:var(--r37);--_0r38:var(--r38);--_0r39:var(--r39);
+--_0r40:var(--r40);--_0r41:var(--r41);--_0r42:var(--r42);--_0r43:var(--r43);
 --_0cs_sp:var(--cs_sp);
---_0cs0:var(--cs0);
+--_0cs0:var(--cswdps0,--csmerge(0,var(--_2cs0,0))) var(--cswdpk0,var(--_2cs0,0));
 --_0fb:var(--fb);
 --_0ra:var(--ra);
 }
@@ -242,6 +196,7 @@ animation-play-state:paused,paused;
 .memvis { width:1024px;height:48px;}
 .memvis::before { content:"";position:absolute;left:-8px;top:-8px;width:8px;height:8px;background:transparent;pointer-events:none;z-index:2;}
 .memvis::after { z-index:1;}
+@container style(--clk:3) {
 .memvis { --mv-0:8px 8px rgb(40,40,40),16px 8px rgb(109,109,109),24px 8px rgb(111,111,111),32px 8px rgb(100,100,100),40px 8px rgb(117,117,117),48px 8px rgb(108,108,108),56px 8px rgb(101,101,101),64px 8px rgb(40,40,40);}
 .memvis { --mv-1:72px 8px rgb(105,105,105),80px 8px rgb(109,109,109),88px 8px rgb(112,112,112),96px 8px rgb(111,111,111),104px 8px rgb(114,114,114),112px 8px rgb(116,116,116),120px 8px rgb(32,32,32),128px 8px rgb(34,34,34);}
 .memvis { --mv-2:136px 8px rgb(101,101,101),144px 8px rgb(110,110,110),152px 8px rgb(118,118,118),160px 8px rgb(34,34,34),168px 8px rgb(32,32,32),176px 8px rgb(34,34,34),184px 8px rgb(112,112,112),192px 8px rgb(117,117,117);}
@@ -341,13 +296,16 @@ animation-play-state:paused,paused;
 .memvis::after { box-shadow:var(--mv-0),var(--mv-1),var(--mv-2),var(--mv-3),var(--mv-4),var(--mv-5),var(--mv-6),var(--mv-7),var(--mv-8),var(--mv-9),var(--mv-10),var(--mv-11),var(--mv-12),var(--mv-13),var(--mv-14),var(--mv-15),var(--mv-16),var(--mv-17),var(--mv-18),var(--mv-19),var(--mv-20),var(--mv-21),var(--mv-22),var(--mv-23),var(--mv-24),var(--mv-25),var(--mv-26),var(--mv-27),var(--mv-28),var(--mv-29),var(--mv-30),var(--mv-31),var(--mv-32),var(--mv-33),var(--mv-34),var(--mv-35),var(--mv-36),var(--mv-37),var(--mv-38),var(--mv-39),var(--mv-40),var(--mv-41),var(--mv-42),var(--mv-43),var(--mv-44),var(--mv-45),var(--mv-46),var(--mv-47),var(--mv-48),var(--mv-49),var(--mv-50),var(--mv-51),var(--mv-52),var(--mv-53),var(--mv-54),var(--mv-55),var(--mv-56),var(--mv-57),var(--mv-58),var(--mv-59),var(--mv-60),var(--mv-61),var(--mv-62),var(--mv-63),var(--mv-64),var(--mv-65),var(--mv-66),var(--mv-67),var(--mv-68),var(--mv-69),var(--mv-70),var(--mv-71),var(--mv-72),var(--mv-73),var(--mv-74),var(--mv-75),var(--mv-76),var(--mv-77),var(--mv-78),var(--mv-79),var(--mv-80),var(--mv-81),var(--mv-82),var(--mv-83),var(--mv-84),var(--mv-85),var(--mv-86),var(--mv-87),var(--mv-88),var(--mv-89),var(--mv-90),var(--mv-91),var(--mv-92),var(--mv-93),var(--mv-94),var(--mv-95),0 0 transparent;}
 .memvis { --mvh-0:calc((mod((var(--mri0)),128)*8px) + 8px) calc((round(down,calc((var(--mri0))/128))*8px) + 8px) rgba(48,170,84,calc(0.72*var(--mro0))),calc((mod((var(--mri1)),128)*8px) + 8px) calc((round(down,calc((var(--mri1))/128))*8px) + 8px) rgba(48,170,84,calc(0.72*var(--mro1))),calc((mod((var(--mri2)),128)*8px) + 8px) calc((round(down,calc((var(--mri2))/128))*8px) + 8px) rgba(48,170,84,calc(0.72*var(--mro2))),calc((mod((var(--mri3)),128)*8px) + 8px) calc((round(down,calc((var(--mri3))/128))*8px) + 8px) rgba(48,170,84,calc(0.72*var(--mro3)));}
 .memvis::before { box-shadow:var(--mvh-0),0 0 transparent;}
+}
 .csvis { width:1024px;height:8px;}
 .csvis::before { content:"";position:absolute;left:-8px;top:-8px;width:8px;height:8px;background:transparent;pointer-events:none;z-index:2;}
 .csvis::after { z-index:1;}
-.csvis { --csv-0:8px 8px rgb(--mlo(var(--cs0)),--mlo(var(--cs0)),--mlo(var(--cs0))),16px 8px rgb(--mhi(var(--cs0)),--mhi(var(--cs0)),--mhi(var(--cs0)));}
+@container style(--clk:3) {
+.csvis { --csv-0:8px 8px hsl(0 0% calc(--mlo(var(--_0cs0))*100%/255)),16px 8px hsl(0 0% calc(--mhi(var(--_0cs0))*100%/255));}
 .csvis::after { box-shadow:var(--csv-0),0 0 transparent;}
-.csvis { --csh-0:calc((mod((calc((var(--cri0)*2) + --eq1(if(style(--_1pc:1010):2;else:0)))),128)*8px) + 8px) calc((round(down,calc((calc((var(--cri0)*2) + --eq1(if(style(--_1pc:1010):2;else:0))))/128))*8px) + 8px) rgba(48,170,84,calc(0.72*var(--cro0))),calc((mod((calc((var(--csi0)*2) + --eq1(if(style(--pcg0:1):2;else:0)))),128)*8px) + 8px) calc((round(down,calc((calc((var(--csi0)*2) + --eq1(if(style(--pcg0:1):2;else:0))))/128))*8px) + 8px) rgba(38,112,255,calc(0.88*var(--cso0)));}
+.csvis { --csh-0:calc((mod((calc((var(--cri0)*2) + --eq1(if(style(--_1pc:1007):2;else:0)))),128)*8px) + 8px) calc((round(down,calc((calc((var(--cri0)*2) + --eq1(if(style(--_1pc:1007):2;else:0))))/128))*8px) + 8px) rgba(48,170,84,calc(0.72*var(--cro0))),calc((mod((calc((var(--csi0)*2) + --eq1(if(style(--pcg0:1):2;else:0)))),128)*8px) + 8px) calc((round(down,calc((calc((var(--csi0)*2) + --eq1(if(style(--pcg0:1):2;else:0))))/128))*8px) + 8px) rgba(38,112,255,calc(0.88*var(--cso0)));}
 .csvis::before { box-shadow:var(--csh-0),0 0 transparent;}
+}
 .screen::after { white-space:pre-wrap;word-break:break-all;content:if(style(--pc:-1):var(--fb,"") "\a[Program exited with code " var(--ra,"0x00000000") "]";style(--pc:-2):var(--fb,"") "\a[Trap: unreachable]";style(--pc:-3):var(--fb,"") "\a[Trap: invalid memory access]";style(--pc:-4):var(--fb,"") "\a[Trap: division by zero]";style(--pc:-5):var(--fb,"") "\a[Trap: callstack overflow]";style(--pc:-6):var(--fb,"") "\a[Trap: uncaught exception]";else:var(--fb,""));color:if(style(--pc:-2):#d00;style(--pc:-3):#d00;style(--pc:-4):#d00;style(--pc:-5):#d00;style(--pc:-6):#d00;else:#222);display:block;flex:0 0 auto;}
 .clk:has(.terminal) { @container style(--pc:-1) or style(--pc:-2) or style(--pc:-3) or style(--pc:-4) or style(--pc:-5) or style(--pc:-6) { .terminal { animation-play-state:paused,paused !important;} } }
 </style>
@@ -363,7 +321,6 @@ Please try an up-to-date Chromium-based browser.
 <div class="inds" aria-live="off">
     <div class="ind"><span class="k">PC</span><span id="ind-pc" class="v"></span></div>
     <div class="ind"><span class="k">SP</span><span id="ind-sp" class="v"></span></div>
-    <div class="ind"><span class="k">G0</span><span id="ind-g0" class="v"></span></div>
 </div>
 <div class="csvis-frame"><div class="csvis"></div></div>
 <div class="memvis-frame"><div class="memvis"></div></div>
@@ -380,15 +337,7 @@ Please try an up-to-date Chromium-based browser.
     const phasesPerInstruction = 4;
     const terminalPcs = new Set([-1, -2, -3, -4, -5, -6]);
     const followSlackPx = 4;
-    const minSpeedMultiplier = 0.01;
-    const maxSpeedMultiplier = 16;
-    const minSpeedLog = Math.log10(minSpeedMultiplier);
-    const maxSpeedLog = Math.log10(maxSpeedMultiplier);
     let followScreenBottom = true;
-    let speedMultiplier = 1;
-    let speedCarry = 0;
-    let pendingStepCount = 0;
-    let paused = false;
     let halted = false;
     let animationPending = false;
 
@@ -412,13 +361,6 @@ Please try an up-to-date Chromium-based browser.
         const parsed = Number.parseInt(style.getPropertyValue(name), 10);
         if (Number.isNaN(parsed)) return fallback;
         return parsed;
-    }
-
-    function formatSpeedLabel(value) {
-        if (value < 0.1) return `${value.toFixed(3)}x`;
-        if (value < 1) return `${value.toFixed(2)}x`;
-        const rounded = Math.round(value * 100) / 100;
-        return `${rounded.toFixed(rounded % 1 === 0 ? 0 : 2)}x`;
     }
 
     function readPc(style) {
@@ -462,16 +404,7 @@ Please try an up-to-date Chromium-based browser.
         animationPending = false;
         if (halted) return;
 
-        let instructionsThisFrame = 0;
-        if (pendingStepCount > 0) {
-            instructionsThisFrame = pendingStepCount;
-            pendingStepCount = 0;
-            paused = true;
-        } else if (!paused) {
-            speedCarry += speedMultiplier;
-            instructionsThisFrame = Math.floor(speedCarry);
-            speedCarry -= instructionsThisFrame;
-        }
+        let instructionsThisFrame = 1;
 
         let style = getComputedStyle(terminalEl);
         let pc = readPc(style);
@@ -488,25 +421,15 @@ Please try an up-to-date Chromium-based browser.
         if (!Number.isNaN(pc) && terminalPcs.has(pc)) {
             halted = true;
         }
-        if (halted) {
-            paused = true;
-        }
-        if (!halted && (!paused || pendingStepCount > 0)) {
+        if (!halted) {
             scheduleAnimation();
         }
-    }
-
-    function clampSpeed(value) {
-        if (!Number.isFinite(value)) return 1;
-        return Math.min(maxSpeedMultiplier, Math.max(minSpeedMultiplier, value));
     }
 
 
     clkEl.style.setProperty("--clk", "0", "important");
     scrollScreenToBottom();
-    if (!paused) {
-        scheduleAnimation();
-    }
+    scheduleAnimation();
 })();
 </script>
 </body>

@@ -707,6 +707,19 @@ fn rename_inst_kind(kind: &Inst8Kind, rename: &HashMap<Val8, Val8>) -> Inst8Kind
             lhs: rw(*lhs),
             rhs: rw(*rhs),
         },
+        Inst8Kind::DivRem32ConstByte {
+            lhs,
+            denom,
+            signed,
+            rem,
+            lane,
+        } => Inst8Kind::DivRem32ConstByte {
+            lhs: rw(*lhs),
+            denom: *denom,
+            signed: *signed,
+            rem: *rem,
+            lane: *lane,
+        },
         Inst8Kind::Cmp32 {
             op,
             lhs,
@@ -761,7 +774,7 @@ fn analyze_print_loop(bb: &BasicBlock8) -> Option<PrintLoopShape> {
                     enable: Some(enable),
                 });
             }
-            Inst8Kind::Getchar => return None,
+            Inst8Kind::Getchar { blocking: true } => return None,
             Inst8Kind::LoadMem {
                 base,
                 addr,

@@ -187,8 +187,31 @@ impl FuncBuilder {
     }
 
     pub(super) fn set_ret_from_byte(&mut self, src: Val8) {
-        self.copy_word(RET_LO, Word::narrow(src));
+        self.set_ret_from_word(Word::narrow(src));
+    }
+
+    pub(super) fn set_ret_from_word(&mut self, src: Word) {
+        self.copy_word(RET_LO, src);
         self.copy_word(RET_HI, Word::from_u32_imm(0));
+    }
+
+    /// Key read widened to i32. A non-blocking read yields -1 (all lanes
+    /// 0xff) when no key is held; keys are ASCII, so a 0xff low byte is
+    /// unambiguous.
+    pub(super) fn emit_getchar(&mut self, blocking: bool) -> Word {
+        let ch = self.alloc_reg();
+        self.emit(Inst8::with_dst(ch, Inst8Kind::Getchar { blocking }));
+        if blocking {
+            return Word::narrow(ch);
+        }
+        let none = self.alloc_reg();
+        self.emit(Inst8::with_dst(none, Inst8Kind::Eq(ch, Val8::imm(0xff))));
+        let hi = self.alloc_reg();
+        self.emit(Inst8::with_dst(
+            hi,
+            Inst8Kind::Sel(none, Val8::imm(0xff), Val8::imm(0)),
+        ));
+        Word::new(ch, hi, hi, hi)
     }
 
     pub(super) fn load_global_word(&mut self, global_idx: u32) -> Word {

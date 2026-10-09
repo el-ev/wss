@@ -33,7 +33,7 @@ fn fold_step(node: Node) -> Node {
 /// alone. Each child is fully simplified before we look at the parent.
 fn fold_children(node: Node) -> Node {
     match node {
-        Node::Int(_) | Node::Raw(_) | Node::Style { .. } => node,
+        Node::Int(_) | Node::Raw(_) | Node::Style { .. } | Node::Invalid => node,
         Node::Var { name, fallback } => Node::Var {
             name,
             fallback: fallback.map(|fb| Box::new(fold_step(*fb))),
@@ -238,6 +238,7 @@ fn fold_fn(name: &str, args: Vec<Node>) -> Node {
         ("--sel", [c, t, f]) => fold_sel(c.clone(), t.clone(), f.clone()),
         ("--lt", [a, b]) => fold_lt_ge(a.clone(), b.clone(), /*is_lt=*/ true),
         ("--ge", [a, b]) => fold_lt_ge(a.clone(), b.clone(), /*is_lt=*/ false),
+        ("--inrange", [x, lo, hi]) => fold_inrange(x.clone(), lo.clone(), hi.clone()),
         _ => Node::Fn {
             name: name.to_string(),
             args,
@@ -248,9 +249,8 @@ fn fold_fn(name: &str, args: Vec<Node>) -> Node {
 /// Custom-property names that the wss runtime guarantees to be
 /// non-negative by construction:
 ///   - `--_1cs_sp` — the callstack stack pointer. The increment /
-///     decrement gates use `--inrange(sp ± 1, 257)`, which is
-///     equivalent to `0 ≤ sp ± 1 < 257`, so the pointer can never
-///     dip below zero (and never exceed 256).
+///     decrement gates check `0 ≤ sp ± 1 < 257` (`--inrange`), so the
+///     pointer can never dip below zero (and never exceed 256).
 fn known_nonneg_var(node: &Node) -> bool {
     matches!(
         node,
@@ -289,6 +289,57 @@ fn fold_lt_ge(a: Node, b: Node, is_lt: bool) -> Node {
         name: name.to_string(),
         args: vec![a, b],
     }
+}
+
+/// `--inrange(x, lo, hi)` is `lo <= x < hi`. Literal terms of `x` move into
+/// the bounds, so they fold to constants.
+fn fold_inrange(x: Node, lo: Node, hi: Node) -> Node {
+    let (x, off) = split_int_offset(x);
+    let (Some(lo), Some(hi)) = (as_int(&lo), as_int(&hi)) else {
+        return Node::Fn {
+            name: "--inrange".to_string(),
+            args: vec![x, lo, hi],
+        };
+    };
+    let (lo, hi) = (lo - off, hi - off);
+    if hi <= lo {
+        return Node::Int(0);
+    }
+    if let Some(v) = as_int(&x) {
+        return Node::Int(i64::from(lo <= v && v < hi));
+    }
+    if known_nonneg_var(&x) && lo <= 0 {
+        return fold_lt_ge(x, Node::Int(hi), /*is_lt=*/ true);
+    }
+    Node::Fn {
+        name: "--inrange".to_string(),
+        args: vec![x, Node::Int(lo), Node::Int(hi)],
+    }
+}
+
+/// Splits `X + c` (any literal terms of a sum) into `(X, c)`.
+fn split_int_offset(node: Node) -> (Node, i64) {
+    let Node::Sum(terms) = peel_sum(node.clone()) else {
+        return (node, 0);
+    };
+    let mut off = 0;
+    let mut rest = Vec::with_capacity(terms.len());
+    for term in terms {
+        match term.node {
+            Node::Int(n) if term.sign == Sign::Pos => off += n,
+            Node::Int(n) => off -= n,
+            _ => rest.push(term),
+        }
+    }
+    if off == 0 {
+        return (node, 0);
+    }
+    let base = match rest.len() {
+        0 => Node::Int(0),
+        1 if rest[0].sign == Sign::Pos => rest.pop().unwrap().node,
+        _ => Node::Calc(Box::new(Node::Sum(rest))),
+    };
+    (base, off)
 }
 
 fn fold_eq1(arg: Node) -> Node {
@@ -419,19 +470,11 @@ fn fold_sel(c: Node, t: Node, f: Node) -> Node {
     // `--sel(<bool>, f, t)`, letting downstream folds catch the bool
     // form.
     if let Some(unwrapped) = peel_one_minus_bool(&c) {
-        return Node::Fn {
-            name: "--sel".to_string(),
-            args: vec![unwrapped, f, t],
-        };
+        return fold_sel(unwrapped, f, t);
     }
-    // `--sel(min(K, X), t, f)` with a positive literal `K` is just
-    // `--sel(X, t, f)` — `--sel` only tests `c == 0`, and `min(K, X)`
-    // is zero iff `X` is zero when `K > 0`.
-    if let Some(unwrapped) = peel_min_positive_clamp(&c) {
-        return Node::Fn {
-            name: "--sel".to_string(),
-            args: vec![unwrapped, t, f],
-        };
+    // `--sel` only tests `c == 0`, so a wrapper that keeps zero-ness can go.
+    if let Some(unwrapped) = peel_zero_preserving(&c) {
+        return fold_sel(unwrapped, t, f);
     }
     Node::Fn {
         name: "--sel".to_string(),
@@ -439,20 +482,21 @@ fn fold_sel(c: Node, t: Node, f: Node) -> Node {
     }
 }
 
-/// Returns `Some(X)` when `node` is `min(K, X)` or `min(X, K)` with a
-/// positive integer literal `K`. The clamp is truthiness-preserving:
-/// `min(K, X) == 0 ⟺ X == 0` when `K > 0`, so a surrounding `--sel`
-/// (which only compares against zero) sees the same answer either way.
-fn peel_min_positive_clamp(node: &Node) -> Option<Node> {
+/// Returns `Some(X)` when `node` is zero exactly when `X` is: `abs(X)`,
+/// `sign(X)`, or `min(K, X)` / `min(X, K)` with a positive literal `K`.
+/// A surrounding `--sel` (which only compares against zero) sees the same
+/// answer either way.
+fn peel_zero_preserving(node: &Node) -> Option<Node> {
     let Node::MathFn { name, args } = node else {
         return None;
     };
-    if name != "min" || args.len() != 2 {
-        return None;
-    }
-    match (as_int(&args[0]), as_int(&args[1])) {
-        (Some(k), None) if k > 0 => Some(args[1].clone()),
-        (None, Some(k)) if k > 0 => Some(args[0].clone()),
+    match (name.as_str(), args.as_slice()) {
+        ("abs" | "sign", [x]) => Some(x.clone()),
+        ("min", [a, b]) => match (as_int(a), as_int(b)) {
+            (Some(k), None) if k > 0 => Some(b.clone()),
+            (None, Some(k)) if k > 0 => Some(a.clone()),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -507,6 +551,10 @@ fn is_bool_node(node: &Node) -> bool {
             default: default.clone(),
         }),
         Node::Calc(inner) | Node::Paren(inner) => is_bool_node(inner),
+        // `abs(sign(x))` is 0 or 1 for any `x`.
+        Node::MathFn { name, args } if name == "abs" => {
+            matches!(args.as_slice(), [Node::MathFn { name, .. }] if name == "sign")
+        }
         _ => false,
     }
 }
@@ -592,7 +640,7 @@ fn fold_sum(terms: Vec<Term>) -> Node {
     // `0 - X + 1`.
     let mut flat: Vec<Term> = Vec::with_capacity(terms.len());
     for term in terms {
-        match term.node {
+        match peel_sum(term.node) {
             Node::Sum(inner) => {
                 for it in inner {
                     let combined_sign = combine(term.sign, it.sign);
@@ -605,10 +653,51 @@ fn fold_sum(terms: Vec<Term>) -> Node {
     // Collect identical positive terms — `X + X + X` becomes `X * 3`.
     // Also cancel matching pos/neg pairs (`X - X` → drop both).
     combine_like_terms(&mut flat);
+    if let Some(negated) = negate_bool_sum(&flat) {
+        return negated;
+    }
     match flat.len() {
         0 => Node::Int(0),
         1 if flat[0].sign == Sign::Pos => flat.into_iter().next().unwrap().node,
         _ => Node::Sum(flat),
+    }
+}
+
+/// `1 - --ge(a, b)` is `--lt(a, b)`, and likewise for the other comparison
+/// helpers with a complement.
+fn negate_bool_sum(flat: &[Term]) -> Option<Node> {
+    let [one, b] = flat else {
+        return None;
+    };
+    if one.sign != Sign::Pos || one.node != Node::Int(1) || b.sign != Sign::Neg {
+        return None;
+    }
+    let Node::Fn { name, args } = &b.node else {
+        return None;
+    };
+    let complement = match name.as_str() {
+        "--lt" => "--ge",
+        "--ge" => "--lt",
+        "--eq" => "--ne",
+        "--ne" => "--eq",
+        "--eqz" => "--nez",
+        "--nez" => "--eqz",
+        _ => return None,
+    };
+    Some(fold_fn(complement, args.clone()))
+}
+
+/// A sum under `(…)` or `calc(…)` is still a sum: a term's sign
+/// distributes over it, so its terms (and constants) can join the outer sum.
+/// A product there needs no wrapper either: it binds tighter than `+`/`-`.
+fn peel_sum(node: Node) -> Node {
+    match node {
+        Node::Paren(inner) | Node::Calc(inner)
+            if matches!(*inner, Node::Sum(_) | Node::Product(_)) =>
+        {
+            *inner
+        }
+        other => other,
     }
 }
 
@@ -672,23 +761,25 @@ fn push_sum_term(flat: &mut Vec<Term>, sign: Sign, node: Node) {
         Node::Product(factors) if factors.iter().any(|f| matches!(f, Node::Int(0))) => return,
         _ => {}
     }
-    // Try to merge an integer literal into the most recent literal
-    // term, accumulating constants without reshuffling order.
+    // Try to merge an integer literal into an earlier literal term,
+    // accumulating constants without reshuffling order.
     if let Node::Int(n) = &node
-        && let Some(last) = flat.last_mut()
-        && let Node::Int(prev) = last.node
+        && let Some((pos, prev)) = flat
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(i, t)| match t.node {
+                Node::Int(v) => Some((i, if t.sign == Sign::Pos { v } else { -v })),
+                _ => None,
+            })
     {
-        let prev_signed = if last.sign == Sign::Pos { prev } else { -prev };
-        let new_signed = if sign == Sign::Pos { *n } else { -*n };
-        let total = prev_signed + new_signed;
+        let total = prev + if sign == Sign::Pos { *n } else { -*n };
         if total == 0 {
-            flat.pop();
-        } else if total > 0 {
-            last.sign = Sign::Pos;
-            last.node = Node::Int(total);
+            flat.remove(pos);
         } else {
-            last.sign = Sign::Neg;
-            last.node = Node::Int(-total);
+            let lit = &mut flat[pos];
+            lit.sign = if total > 0 { Sign::Pos } else { Sign::Neg };
+            lit.node = Node::Int(total.abs());
         }
         return;
     }

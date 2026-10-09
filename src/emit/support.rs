@@ -56,32 +56,22 @@ impl<'a> Emitter<'a> {
             self.emit_byte_ctz_lookup(out);
         }
 
-        let mem_reads = self
-            .mem_names
-            .iter()
-            .enumerate()
-            .map(|(i, name)| (i, format!("var({})", Self::shadow_name(0, name))))
+        // Loads read memory as of the end of the previous cycle: the store
+        // snapshot, which is also the merge's `prev`. The scheduler relies
+        // on this when it lets a load share a cycle with a later store to
+        // the same byte (the load must see the old value). The execute
+        // snapshot (`--_0m*`) would not do: it is captured from the cells
+        // in the same recalc that merges this cycle's stores, so a load
+        // would see them. Increments read the same stage, which also keeps
+        // their merge free of a dependency cycle.
+        let mem_reads = (0..self.mem_names.len())
+            .map(|i| (i, self.mem_prev_expr(i)))
             .collect::<Vec<_>>();
         Self::emit_chunked_read_function(out, "--read_m16", &mem_reads);
-        if self.uses_mem_inc {
-            // Increments merge in the cycle they execute, so they must read
-            // the same stage as the merge's `prev` (`--_1m*`): reading the
-            // execute snapshot (`--_0m*`) would form a dependency cycle.
-            let prev_reads = self
-                .mem_names
-                .iter()
-                .enumerate()
-                .map(|(i, name)| (i, format!("var({})", Self::shadow_name(1, name))))
-                .collect::<Vec<_>>();
-            Self::emit_chunked_read_function(out, "--read_m16p", &prev_reads);
-        }
 
         if self.uses_callstack() {
-            let cs_reads = self
-                .cs_names
-                .iter()
-                .enumerate()
-                .map(|(i, name)| (i, format!("var({})", Self::shadow_name(1, name))))
+            let cs_reads = (0..self.cs_names.len())
+                .map(|i| (i, self.cs_prev_expr(i)))
                 .collect::<Vec<_>>();
             Self::emit_chunked_read_function(out, "--read_cs", &cs_reads);
         }
@@ -199,6 +189,42 @@ impl<'a> Emitter<'a> {
     pub(super) fn shadow_name(stage: u8, base: &str) -> String {
         let tail = base.strip_prefix("--").unwrap_or(base);
         format!("--_{}{}", stage, tail)
+    }
+
+    /// Memory cell `i` as of the last store: the store snapshot, or the
+    /// initial value before the first store. Read in place rather than via
+    /// a `--_1m*` alias: one declaration fewer per cell on every recalc.
+    pub(super) fn mem_prev_expr(&self, i: usize) -> String {
+        format!(
+            "var({}, {})",
+            Self::shadow_name(2, &self.mem_names[i]),
+            self.mem_init[i]
+        )
+    }
+
+    pub(super) fn memory_layout_json(&self) -> String {
+        let cells = self
+            .mem_names
+            .iter()
+            .zip(&self.mem_init)
+            .enumerate()
+            .map(|(i, (name, init))| {
+                format!(
+                    "{{\"key\":\"{}\",\"addr\":{},\"exec\":\"{}\",\"prev\":\"{}\",\"init\":{}}}",
+                    name,
+                    2 * i,
+                    Self::shadow_name(0, name),
+                    Self::shadow_name(2, name),
+                    init
+                )
+            })
+            .collect::<Vec<_>>();
+        format!("[{}]", cells.join(","))
+    }
+
+    /// Callstack cell `i` as of the last store, like [`Self::mem_prev_expr`].
+    pub(super) fn cs_prev_expr(&self, i: usize) -> String {
+        format!("var({}, 0)", Self::shadow_name(2, &self.cs_names[i]))
     }
 
     /// Emits `style(--i: A) or style(--i: B): V; style(--i: C): W; ...`,
@@ -344,6 +370,13 @@ impl<'a> Emitter<'a> {
         format!("{} {} rgba({}, {})", x, y, rgba, alpha_expr)
     }
 
+    /// The gray pixel for byte expression `byte`. Lightness takes the byte
+    /// once, where `rgb(b, b, b)` would evaluate it three times: the pixels
+    /// are most of a recalc's work, every cycle.
+    fn vis_gray(byte: &str) -> String {
+        format!("hsl(0 0% calc({} * 100% / 255))", byte)
+    }
+
     pub(super) fn emit_memory_visualizer(&self, out: &mut String) {
         let mem_cols = VIS_COLS;
         let mem_rows = (self.memory_end as usize).div_ceil(mem_cols).max(1);
@@ -355,47 +388,81 @@ impl<'a> Emitter<'a> {
         );
         out.push_str(".memvis::before { content: \"\"; position: absolute; left: -8px; top: -8px; width: 8px; height: 8px; background: transparent; pointer-events: none; z-index: 2; }\n");
         out.push_str(".memvis::after { z-index: 1; }\n");
-        let mem_entries = (0..(self.memory_end as usize))
-            .map(|i| {
-                let x = (i % mem_cols) * 8 + 8;
-                let y = (i / mem_cols) * 8 + 8;
-                let name = &self.mem_names[i / 2];
-                let byte = if i % 2 == 0 {
-                    format!("--mlo(var({}))", name)
-                } else {
-                    format!("--mhi(var({}))", name)
-                };
-                format!("{}px {}px rgb({}, {}, {})", x, y, byte, byte, byte)
-            })
-            .collect::<Vec<_>>();
-        Self::emit_chunked_shadow(out, ".memvis", "::after", "mv", &mem_entries);
+        // Memory never changes without stores: literal pixels, not a
+        // `calc()` evaluated on every recalc.
+        let mem_entries = Self::vis_cell_entries(self.memory_end as usize, &self.mem_names, |i| {
+            (self.max_mem_store_slots == 0).then(|| (self.mem_init[i / 2] >> (8 * (i % 2))) & 0xff)
+        });
+        self.with_vis_gate(out, |out| {
+            Self::emit_chunked_shadow(out, ".memvis", "::after", "mv", &mem_entries);
 
-        let mut hl_entries = Vec::with_capacity(
-            self.max_mem_read_slots
-                .saturating_add(self.max_mem_store_slots * 2),
-        );
-        hl_entries.extend((0..self.max_mem_read_slots).map(|s| {
-            Self::vis_slot_shadow_entry(
-                &format!("var(--mri{})", s),
-                mem_cols,
-                "48, 170, 84",
-                &format!("calc(0.72 * var(--mro{}))", s),
-            )
-        }));
-        hl_entries.extend((0..self.max_mem_store_slots).flat_map(|s| {
-            ["", "b"].into_iter().map(move |suffix| {
+            let mut hl_entries = Vec::with_capacity(
+                self.max_mem_read_slots
+                    .saturating_add(self.max_mem_store_slots * 2),
+            );
+            hl_entries.extend((0..self.max_mem_read_slots).map(|s| {
                 Self::vis_slot_shadow_entry(
-                    &format!(
-                        "calc((var(--msc{}{}) * 2) + var(--msp{}{}))",
-                        s, suffix, s, suffix
-                    ),
+                    &format!("var(--mri{})", s),
                     mem_cols,
-                    "38, 112, 255",
-                    &format!("calc(0.88 * var(--mso{}{}))", s, suffix),
+                    "48, 170, 84",
+                    &format!("calc(0.72 * var(--mro{}))", s),
                 )
+            }));
+            hl_entries.extend((0..self.max_mem_store_slots).flat_map(|s| {
+                ["", "b"].into_iter().map(move |suffix| {
+                    Self::vis_slot_shadow_entry(
+                        &format!(
+                            "calc((var(--msc{}{}) * 2) + var(--msp{}{}))",
+                            s, suffix, s, suffix
+                        ),
+                        mem_cols,
+                        "38, 112, 255",
+                        &format!("calc(0.88 * var(--mso{}{}))", s, suffix),
+                    )
+                })
+            }));
+            Self::emit_chunked_shadow(out, ".memvis", "::before", "mvh", &hl_entries);
+        });
+    }
+
+    /// One gray pixel per byte of the two-byte `names` cells, read from the
+    /// execute snapshot (the cells have no live declaration), or a literal
+    /// pixel where `literal` gives the byte.
+    fn vis_cell_entries(
+        bytes: usize,
+        names: &[String],
+        literal: impl Fn(usize) -> Option<u16>,
+    ) -> Vec<String> {
+        (0..bytes)
+            .map(|i| {
+                let x = (i % VIS_COLS) * 8 + 8;
+                let y = (i / VIS_COLS) * 8 + 8;
+                if let Some(v) = literal(i) {
+                    return format!("{}px {}px rgb({}, {}, {})", x, y, v, v, v);
+                }
+                let name = Self::shadow_name(0, &names[i / 2]);
+                let half = if i % 2 == 0 { "--mlo" } else { "--mhi" };
+                let byte = format!("{}(var({}))", half, name);
+                format!("{}px {}px {}", x, y, Self::vis_gray(&byte))
             })
-        }));
-        Self::emit_chunked_shadow(out, ".memvis", "::before", "mvh", &hl_entries);
+            .collect()
+    }
+
+    /// With the JS clock, the page is painted only after an instruction's
+    /// last phase (`--clk: 3`), yet every phase restyles everything below
+    /// `.clk`. Gating the visualizers' pixels on that phase computes them
+    /// once per instruction instead of four times. Not for the CSS clock,
+    /// which paints every phase, nor the debugger, which starts paused at
+    /// `--clk: 0`.
+    fn with_vis_gate(&self, out: &mut String, body: impl FnOnce(&mut String)) {
+        let gate = self.js_clock && !self.js_clock_debugger;
+        if gate {
+            out.push_str("@container style(--clk: 3) {\n");
+        }
+        body(out);
+        if gate {
+            out.push_str("}\n");
+        }
     }
 
     pub(super) fn emit_callstack_visualizer(&self, out: &mut String) {
@@ -411,42 +478,35 @@ impl<'a> Emitter<'a> {
         out.push_str(".csvis::before { content: \"\"; position: absolute; left: -8px; top: -8px; width: 8px; height: 8px; background: transparent; pointer-events: none; z-index: 2; }\n");
         out.push_str(".csvis::after { z-index: 1; }\n");
 
-        let cs_entries = (0..cs_bytes)
-            .map(|i| {
-                let x = (i % cs_cols) * 8 + 8;
-                let y = (i / cs_cols) * 8 + 8;
-                let name = &self.cs_names[i / 2];
-                let byte = if i % 2 == 0 {
-                    format!("--mlo(var({}))", name)
-                } else {
-                    format!("--mhi(var({}))", name)
-                };
-                format!("{}px {}px rgb({}, {}, {})", x, y, byte, byte, byte)
-            })
-            .collect::<Vec<_>>();
-        Self::emit_chunked_shadow(out, ".csvis", "::after", "csv", &cs_entries);
+        // Never written without stores: every cell stays 0.
+        let cs_entries = Self::vis_cell_entries(cs_bytes, &self.cs_names, |_| {
+            (self.max_cs_store_slots == 0).then_some(0)
+        });
+        self.with_vis_gate(out, |out| {
+            Self::emit_chunked_shadow(out, ".csvis", "::after", "csv", &cs_entries);
 
-        let mut hl_entries = Vec::with_capacity(
-            self.max_cs_read_slots
-                .saturating_add(self.max_cs_store_slots),
-        );
-        hl_entries.extend((0..self.max_cs_read_slots).map(|s| {
-            Self::vis_slot_shadow_entry(
-                &format!("calc((var(--cri{}) * 2) + --eq1(var(--crp{})))", s, s),
-                cs_cols,
-                "48, 170, 84",
-                &format!("calc(0.72 * var(--cro{}))", s),
-            )
-        }));
-        hl_entries.extend((0..self.max_cs_store_slots).map(|s| {
-            Self::vis_slot_shadow_entry(
-                &format!("calc((var(--csi{}) * 2) + --eq1(var(--csp{})))", s, s),
-                cs_cols,
-                "38, 112, 255",
-                &format!("calc(0.88 * var(--cso{}))", s),
-            )
-        }));
-        Self::emit_chunked_shadow(out, ".csvis", "::before", "csh", &hl_entries);
+            let mut hl_entries = Vec::with_capacity(
+                self.max_cs_read_slots
+                    .saturating_add(self.max_cs_store_slots),
+            );
+            hl_entries.extend((0..self.max_cs_read_slots).map(|s| {
+                Self::vis_slot_shadow_entry(
+                    &format!("calc((var(--cri{}) * 2) + --eq1(var(--crp{})))", s, s),
+                    cs_cols,
+                    "48, 170, 84",
+                    &format!("calc(0.72 * var(--cro{}))", s),
+                )
+            }));
+            hl_entries.extend((0..self.max_cs_store_slots).map(|s| {
+                Self::vis_slot_shadow_entry(
+                    &format!("calc((var(--csi{}) * 2) + --eq1(var(--csp{})))", s, s),
+                    cs_cols,
+                    "38, 112, 255",
+                    &format!("calc(0.88 * var(--cso{}))", s),
+                )
+            }));
+            Self::emit_chunked_shadow(out, ".csvis", "::before", "csh", &hl_entries);
+        });
     }
 
     pub(super) fn pair_mem_stores(stores: Vec<MemStoreByte>) -> Vec<MemStorePair> {
@@ -482,6 +542,17 @@ impl<'a> Emitter<'a> {
         slots: &[String],
         pages: usize,
     ) {
+        for page in 0..pages {
+            let flag = format!("--{}{}", flag_prefix, page);
+            let _ = writeln!(
+                out,
+                " {}: if(style({}: 0):); {}: if(not style({}: 0):);",
+                Self::page_skip_merge_name(flag_prefix, page),
+                flag,
+                Self::page_skip_prev_name(flag_prefix, page),
+                flag
+            );
+        }
         if slots.is_empty() {
             for page in 0..pages {
                 let _ = writeln!(out, " --{}{}: 0;", flag_prefix, page);
@@ -510,6 +581,62 @@ impl<'a> Emitter<'a> {
                 flag_prefix, page, gate, conds
             );
         }
+    }
+
+    /// The next value of memory cell `i`: its previous value, merged with
+    /// this cycle's stores when its page is dirty.
+    pub(super) fn mem_cell_expr(&self, i: usize) -> String {
+        let prev = self.mem_prev_expr(i);
+        if self.max_mem_store_slots == 0 {
+            return prev;
+        }
+        let merged = format!("--mmerge16({}, {}, {})", 2 * i, 2 * i + 1, prev);
+        Self::page_select_expr("mwdp", i / MEM_DIRTY_PAGE_CELLS, &prev, &merged)
+    }
+
+    /// The next value of callstack cell `i`, like [`Self::mem_cell_expr`].
+    pub(super) fn cs_cell_expr(&self, i: usize) -> String {
+        let prev = self.cs_prev_expr(i);
+        if self.max_cs_store_slots == 0 {
+            return prev;
+        }
+        // cswdpN != 0 implies some csoN is 1 at this PC, which implies
+        // csw_active = 1; so the outer check is redundant. Test against 0
+        // (no store this cycle) so the dirty-page sum can be emitted
+        // without a `min(1, …)` clamp.
+        let merged = format!("--csmerge({}, {})", i, prev);
+        Self::page_select_expr("cswdp", i / CALLSTACK_DIRTY_PAGE_CELLS, &prev, &merged)
+    }
+
+    /// Unregistered selector that is empty while page `page` is clean and
+    /// guaranteed-invalid while it is dirty.
+    pub(super) fn page_skip_merge_name(flag_prefix: &str, page: usize) -> String {
+        format!("--{}s{}", flag_prefix, page)
+    }
+
+    /// The complement of [`Self::page_skip_merge_name`]: empty while dirty.
+    pub(super) fn page_skip_prev_name(flag_prefix: &str, page: usize) -> String {
+        format!("--{}k{}", flag_prefix, page)
+    }
+
+    /// `prev` while page `page` is clean, else `merged`, as two `var()`
+    /// fallbacks of which exactly one is substituted. Cheaper per cell than
+    /// `if(style(--flag: 0): prev; else: merged)`: Blink re-parses an `if()`
+    /// condition on every evaluation, while a `var()` hit just skips its
+    /// fallback.
+    pub(super) fn page_select_expr(
+        flag_prefix: &str,
+        page: usize,
+        prev: &str,
+        merged: &str,
+    ) -> String {
+        format!(
+            "var({}, {}) var({}, {})",
+            Self::page_skip_merge_name(flag_prefix, page),
+            merged,
+            Self::page_skip_prev_name(flag_prefix, page),
+            prev
+        )
     }
 
     /// Byte-wise merge of a memory cell against the active store slots: each
@@ -601,7 +728,7 @@ impl<'a> Emitter<'a> {
             );
             let _ = writeln!(
                 out,
-                " --mir{j}: if(style(--mik: -1): 0; else: --read_m16p(calc(var(--mik) + {j})));"
+                " --mir{j}: if(style(--mik: -1): 0; else: --read_m16(calc(var(--mik) + {j})));"
             );
         }
         let window = "(var(--mir0) + 65536 * var(--mir1) + 4294967296 * var(--mir2))";
@@ -1150,9 +1277,13 @@ impl<'a> Emitter<'a> {
             out,
             8,
             "   ",
-            self.mem_names
-                .iter()
-                .map(|name| format!(" {}: var({});", Self::shadow_name(0, name), name)),
+            self.mem_names.iter().enumerate().map(|(i, name)| {
+                format!(
+                    " {}: {};",
+                    Self::shadow_name(0, name),
+                    self.mem_cell_expr(i)
+                )
+            }),
         );
         if self.uses_callstack() {
             let _ = writeln!(out, "    --_0cs_sp: var(--cs_sp);");
@@ -1160,9 +1291,9 @@ impl<'a> Emitter<'a> {
                 out,
                 8,
                 "   ",
-                self.cs_names
-                    .iter()
-                    .map(|name| format!(" {}: var({});", Self::shadow_name(0, name), name)),
+                self.cs_names.iter().enumerate().map(|(i, name)| {
+                    format!(" {}: {};", Self::shadow_name(0, name), self.cs_cell_expr(i))
+                }),
             );
         }
         if self.uses_exceptions {

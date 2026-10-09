@@ -1,6 +1,7 @@
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STD;
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
@@ -26,26 +27,36 @@ pub(super) fn parse_probe_result(dom_text: &str) -> std::result::Result<ProbeRes
         .map_err(|err| RunError::error(format!("failed to parse probe JSON payload: {}", err)))
 }
 
-pub(super) fn infer_materialized_memory_keys(html: &str) -> Vec<String> {
-    let re = Regex::new(r"@property\s+(--m[0-9a-f]+)\s*\{").expect("memory key regex must compile");
-    let mut keys = Vec::new();
-    let mut seen = HashSet::new();
-    for caps in re.captures_iter(html) {
-        if let Some(m) = caps.get(1) {
-            let key = m.as_str().to_ascii_lowercase();
-            if seen.insert(key.clone()) {
-                keys.push(key);
-            }
-        }
-    }
-    keys
+/// One two-byte memory cell, as `wss --memory-layout` writes it.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub(super) struct MemoryCell {
+    pub(super) key: String,
+    pub(super) addr: usize,
+    exec: String,
+    prev: String,
+    init: u16,
+}
+
+/// The memory layout written next to the HTML, or none when the build did
+/// not write one (memory checks are then skipped).
+pub(super) fn read_memory_layout(path: &Path) -> std::result::Result<Vec<MemoryCell>, RunError> {
+    let Ok(text) = fs::read_to_string(path) else {
+        return Ok(Vec::new());
+    };
+    serde_json::from_str(&text).map_err(|err| {
+        RunError::error(format!(
+            "failed to parse memory layout '{}': {}",
+            path.display(),
+            err
+        ))
+    })
 }
 
 pub(super) fn inject_probe_html(
     html: &str,
     html_path: &Path,
     out_path: &Path,
-    memory_keys: &[String],
+    memory_cells: &[MemoryCell],
     max_frames: u64,
     input_bytes: &[u8],
 ) -> std::result::Result<(), RunError> {
@@ -58,7 +69,7 @@ pub(super) fn inject_probe_html(
     })?;
 
     let probe_script = make_probe_script(
-        memory_keys,
+        memory_cells,
         max_frames,
         input_bytes,
         &infer_getchar_pcs(html),
@@ -80,7 +91,7 @@ pub(super) fn inject_probe_html(
 }
 
 fn make_probe_script(
-    memory_keys: &[String],
+    memory_cells: &[MemoryCell],
     max_frames: u64,
     input_bytes: &[u8],
     getchar_pcs: &[i64],
@@ -88,8 +99,8 @@ fn make_probe_script(
     PROBE_TEMPLATE
         .replace("__WSS_MAX_FRAMES__", &max_frames.to_string())
         .replace(
-            "__WSS_MEMORY_KEYS__",
-            &serde_json::to_string(memory_keys).expect("memory keys JSON encoding must work"),
+            "__WSS_MEMORY_CELLS__",
+            &serde_json::to_string(memory_cells).expect("memory layout JSON encoding must work"),
         )
         .replace(
             "__WSS_INPUT_BYTES__",

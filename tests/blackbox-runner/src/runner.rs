@@ -19,7 +19,7 @@ use wasmtime::{Caller, Engine, ExternType, Func, Linker, Module, Store, Val};
 
 mod probe;
 
-use probe::{infer_materialized_memory_keys, inject_probe_html, parse_probe_result};
+use probe::{MemoryCell, inject_probe_html, parse_probe_result, read_memory_layout};
 
 const DEFAULT_CHROME: &str = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const TERMINAL_PC_SET_MARKER: &str = "id=\"wss-test-result\"";
@@ -179,6 +179,7 @@ struct CaseArtifacts {
     dom_path: PathBuf,
     memory_dump_path: PathBuf,
     memory_meta_path: PathBuf,
+    memory_layout_path: PathBuf,
 }
 
 #[derive(Clone, Copy)]
@@ -996,12 +997,12 @@ fn run_case(
         ))
     })?;
 
-    let materialized_memory_keys = infer_materialized_memory_keys(&html);
+    let memory_cells = read_memory_layout(&artifacts.memory_layout_path)?;
     inject_probe_html(
         &html,
         &artifacts.html_path,
         &artifacts.probe_path,
-        &materialized_memory_keys,
+        &memory_cells,
         case_config.max_frames,
         &case_config.input_bytes,
     )?;
@@ -1014,7 +1015,7 @@ fn run_case(
         failures.extend(compare_dump_with_materialized_runtime(
             test_case,
             &artifacts,
-            &materialized_memory_keys,
+            &memory_cells,
             &probe_result,
         ));
     }
@@ -1228,13 +1229,13 @@ fn validate_case(test_case: &TestCase, result: &ProbeResult) -> Vec<String> {
 fn compare_dump_with_materialized_runtime(
     _test_case: &TestCase,
     artifacts: &CaseArtifacts,
-    materialized_memory_keys: &[String],
+    memory_cells: &[MemoryCell],
     result: &ProbeResult,
 ) -> Vec<String> {
     if result.timeout.unwrap_or(false) || result.ok == Some(false) {
         return Vec::new();
     }
-    if materialized_memory_keys.is_empty() {
+    if memory_cells.is_empty() {
         return Vec::new();
     }
     if !artifacts.memory_dump_path.exists() {
@@ -1249,13 +1250,8 @@ fn compare_dump_with_materialized_runtime(
     let mut mismatches = Vec::new();
     let mut missing_cells = Vec::new();
 
-    for key in materialized_memory_keys {
-        let Some(hex_addr) = key.strip_prefix("--m") else {
-            continue;
-        };
-        let Ok(addr) = usize::from_str_radix(hex_addr, 16) else {
-            continue;
-        };
+    for cell in memory_cells {
+        let (key, addr) = (&cell.key, cell.addr);
 
         let runtime_cell = result.memory.get(key).and_then(|value| match value {
             Value::Number(n) => n.as_i64(),
@@ -1358,6 +1354,9 @@ fn get_case_artifacts(test_case: &TestCase, env_cfg: &EnvConfig) -> CaseArtifact
         memory_meta_path: env_cfg
             .out_dir
             .join(format!("{}.memory.json", test_case.id)),
+        memory_layout_path: env_cfg
+            .out_dir
+            .join(format!("{}.layout.json", test_case.id)),
     }
 }
 
@@ -1462,12 +1461,9 @@ fn transpile_case_to_html(
     case_config: &CaseConfig,
     env_cfg: &EnvConfig,
 ) -> std::result::Result<(), RunError> {
-    let args = build_wss_args(
-        &artifacts.wasm_path,
-        &artifacts.html_path,
-        case_config,
-        &env_cfg.root,
-    );
+    // A layout left by an earlier run must not outlive a build that skips it.
+    let _ = fs::remove_file(&artifacts.memory_layout_path);
+    let args = build_wss_args(artifacts, case_config, &env_cfg.root);
     run_checked(
         &env_cfg.wss_bin,
         &args,
@@ -1561,7 +1557,9 @@ fn dump_case_memory(
                 });
 
                 let ret = match import_name.as_str() {
-                    "getchar" => caller.data_mut().input_queue.pop_front().unwrap_or(-1),
+                    "getchar" | "try_getchar" => {
+                        caller.data_mut().input_queue.pop_front().unwrap_or(-1)
+                    }
                     "putchar" => {
                         let value = first_arg.unwrap_or(0);
                         caller
@@ -1710,16 +1708,11 @@ fn build_clang_args(
     args
 }
 
-fn build_wss_args(
-    wasm_path: &Path,
-    html_path: &Path,
-    settings: &CaseConfig,
-    root: &Path,
-) -> Vec<String> {
+fn build_wss_args(artifacts: &CaseArtifacts, settings: &CaseConfig, root: &Path) -> Vec<String> {
     let mut args = vec![
-        path_arg_from_root(wasm_path, root),
+        path_arg_from_root(&artifacts.wasm_path, root),
         "-o".to_string(),
-        path_arg_from_root(html_path, root),
+        path_arg_from_root(&artifacts.html_path, root),
         "--memory-bytes".to_string(),
         settings.memory_bytes.to_string(),
         "--stack-slots".to_string(),
@@ -1734,11 +1727,17 @@ fn build_wss_args(
         args.push("--js-coprocessor".to_string());
     }
     args.push("--no-visualizers".to_string());
-    if let Ok(extra) = env::var("WSS_EXTRA_ARGS") {
-        for tok in extra.split_whitespace() {
-            args.push(tok.to_string());
-        }
+    let extra = env::var("WSS_EXTRA_ARGS").unwrap_or_default();
+    // Minified variable names no longer match the layout, which `wss`
+    // therefore refuses to write: memory checks are skipped.
+    if !extra
+        .split_whitespace()
+        .any(|tok| tok.starts_with("--minify-vars"))
+    {
+        args.push("--memory-layout".to_string());
+        args.push(path_arg_from_root(&artifacts.memory_layout_path, root));
     }
+    args.extend(extra.split_whitespace().map(str::to_string));
     args
 }
 

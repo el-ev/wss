@@ -250,6 +250,7 @@ keep_pairs! {
         (FN_MLOAD, "FN_MLOAD"),
         (INDS_CSS, "INDS_CSS"),
         (SP_IND_CSS, "SP_INDICATOR_CSS"),
+        (G0_IND_CSS, "G0_INDICATOR_CSS"),
         (MEM_VIS_CSS, "MEM_VISUALIZER_CSS"),
         (CS_VIS_CSS, "CS_VISUALIZER_CSS"),
         (KB_CSS, "KB_CSS"),
@@ -264,6 +265,7 @@ keep_pairs! {
     html: [
         (INDS_HTML, "INDS_HTML"),
         (SP_IND_HTML, "SP_INDICATOR_HTML"),
+        (G0_IND_HTML, "G0_INDICATOR_HTML"),
         (MEM_VIS_HTML, "MEM_VISUALIZER_HTML"),
         (CS_VIS_HTML, "CS_VISUALIZER_HTML"),
         (KB_HTML, "KB_HTML"),
@@ -294,6 +296,7 @@ bitflags! {
         const CS_VISUALIZER = 1 << 18;
         const FN_GE = 1 << 19;
         const FN_INRANGE = 1 << 20;
+        const G0_INDICATOR = 1 << 22;
     }
 }
 
@@ -405,8 +408,24 @@ struct Emitter<'a> {
 }
 
 pub fn emit_program(program: &Ir8Program, config: EmitConfig) -> anyhow::Result<String> {
-    let emitter = Emitter::new(program, config)?;
+    emit_html(&Emitter::new(program, config)?, program)
+}
 
+/// [`emit_program`], plus the memory layout as JSON: one
+/// `{"key", "addr", "exec", "prev", "init"}` per two-byte cell. A cell's
+/// current value is its execute snapshot `exec`; where that is not declared
+/// (nothing reads it), the store snapshot `prev`; before the first store,
+/// `init` (see [`Emitter::mem_prev_expr`]).
+pub fn emit_program_with_memory_layout(
+    program: &Ir8Program,
+    config: EmitConfig,
+) -> anyhow::Result<(String, String)> {
+    let emitter = Emitter::new(program, config)?;
+    let html = emit_html(&emitter, program)?;
+    Ok((html, emitter.memory_layout_json()))
+}
+
+fn emit_html(emitter: &Emitter, program: &Ir8Program) -> anyhow::Result<String> {
     let mut props_css = String::new();
     let mut logic_css = String::new();
     let mut support_css = String::new();
@@ -457,7 +476,7 @@ pub fn emit_program(program: &Ir8Program, config: EmitConfig) -> anyhow::Result<
         String::from("{}")
     };
     let html = render(&html, DEBUGGER_CYCLES_PLACEHOLDER, &debugger_cycles)?;
-    let html = emitter.apply_template_features(html)?;
+    let html = emitter.apply_template_features(html, &[&logic_css, &support_css])?;
     Ok(map_style_bodies(&html, compact_css_run))
 }
 
@@ -699,6 +718,7 @@ impl<'a> Emitter<'a> {
         let features = Self::compute_template_features(
             &usage,
             uses_callstack,
+            !program.global_init.is_empty(),
             config.visualizers(),
             max_mem_store_slots,
             max_mem_read_slots,
@@ -946,7 +966,7 @@ impl<'a> Emitter<'a> {
         for cycle in &program.cycles {
             for op in &cycle.ops {
                 match &op.kind {
-                    Inst8Kind::Getchar => {
+                    Inst8Kind::Getchar { .. } => {
                         usage.uses_getchar = true;
                         usage.uses_ne = true;
                     }
@@ -983,6 +1003,7 @@ impl<'a> Emitter<'a> {
     fn compute_template_features(
         usage: &UsageScan,
         uses_callstack: bool,
+        has_globals: bool,
         visualizers: bool,
         max_mem_store_slots: usize,
         max_mem_read_slots: usize,
@@ -1030,6 +1051,9 @@ impl<'a> Emitter<'a> {
         }
         if usage.uses_ge {
             features |= TemplateFeatures::FN_GE;
+        }
+        if has_globals {
+            features |= TemplateFeatures::G0_INDICATOR;
         }
         if uses_callstack {
             features |= TemplateFeatures::SP_INDICATOR;
@@ -1107,7 +1131,33 @@ impl<'a> Emitter<'a> {
         out
     }
 
-    fn apply_template_features(&self, mut html: String) -> anyhow::Result<String> {
+    /// Comparison helpers called by the generated CSS. The usage scan
+    /// predicts most of them from the IR, but CSS folding can introduce
+    /// one (e.g. `1 - --ge(a, b)` → `--lt(a, b)`).
+    fn helpers_called(css: &[&str]) -> TemplateFeatures {
+        const HELPERS: [(&str, TemplateFeatures); 6] = [
+            ("--eqz(", TemplateFeatures::FN_EQZ),
+            ("--nez(", TemplateFeatures::FN_NEZ),
+            ("--eq(", TemplateFeatures::FN_EQ),
+            ("--ne(", TemplateFeatures::FN_NE),
+            ("--lt(", TemplateFeatures::FN_LT),
+            ("--ge(", TemplateFeatures::FN_GE),
+        ];
+        let calls = |text: &str, call: &str| {
+            text.match_indices(call).any(|(i, _)| {
+                !text[..i]
+                    .bytes()
+                    .next_back()
+                    .is_some_and(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+            })
+        };
+        HELPERS
+            .into_iter()
+            .filter(|(call, _)| css.iter().any(|text| calls(text, call)))
+            .fold(TemplateFeatures::empty(), |acc, (_, flag)| acc | flag)
+    }
+
+    fn apply_template_features(&self, mut html: String, css: &[&str]) -> anyhow::Result<String> {
         macro_rules! section {
             ($keep:expr, $stem:ident) => {
                 paste! {
@@ -1120,7 +1170,7 @@ impl<'a> Emitter<'a> {
                 }
             };
         }
-        let f = &self.features;
+        let f = &(self.features | Self::helpers_called(css));
         section!(f.contains(TemplateFeatures::PROP_FB), PROP_FB);
         section!(f.contains(TemplateFeatures::PROP_RA), PROP_RA);
         section!(f.contains(TemplateFeatures::PROP_KB), PROP_KB);
@@ -1147,6 +1197,14 @@ impl<'a> Emitter<'a> {
         section!(
             self.indicators && f.contains(TemplateFeatures::SP_INDICATOR),
             SP_IND_HTML
+        );
+        section!(
+            self.indicators && f.contains(TemplateFeatures::G0_INDICATOR),
+            G0_IND_CSS
+        );
+        section!(
+            self.indicators && f.contains(TemplateFeatures::G0_INDICATOR),
+            G0_IND_HTML
         );
         section!(f.contains(TemplateFeatures::MEM_VISUALIZER), MEM_VIS_CSS);
         section!(f.contains(TemplateFeatures::MEM_VISUALIZER), MEM_VIS_HTML);

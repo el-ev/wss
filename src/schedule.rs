@@ -61,7 +61,7 @@ impl InstProfile {
     fn from_inst(inst: &Inst8) -> Self {
         let kind = &inst.kind;
         Self {
-            is_getchar: matches!(kind, Inst8Kind::Getchar),
+            is_getchar: matches!(kind, Inst8Kind::Getchar { blocking: true }),
             is_store_mem: matches!(kind, Inst8Kind::StoreMem { .. }),
             complexity: inst_complexity(kind),
         }
@@ -143,7 +143,7 @@ pub fn schedule(ir8: &mut Ir8Program) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn schedule_block_ops(insts: &[Inst8]) -> Vec<Vec<Inst8>> {
+pub(crate) fn schedule_block_ops(insts: &[Inst8]) -> Vec<Vec<Inst8>> {
     if insts.is_empty() {
         return Vec::new();
     }
@@ -223,6 +223,7 @@ fn inst_complexity(kind: &Inst8Kind) -> usize {
     match kind {
         Inst8Kind::MulLo(_, _) | Inst8Kind::MulHi(_, _) | Inst8Kind::Mul32Byte { .. } => 3,
         Inst8Kind::Cmp32 { .. } => 2,
+        Inst8Kind::DivRem32ConstByte { .. } => 3,
         Inst8Kind::LoadMem { .. } | Inst8Kind::StoreMem { .. } => 3,
         Inst8Kind::MemInc32 { .. } => 6,
         Inst8Kind::GlobalGetByte { .. } | Inst8Kind::GlobalSetByte { .. } => 2,
@@ -232,7 +233,7 @@ fn inst_complexity(kind: &Inst8Kind) -> usize {
         | Inst8Kind::CsLoadPc { .. }
         | Inst8Kind::CsAlloc(_)
         | Inst8Kind::CsFree(_) => 2,
-        Inst8Kind::Getchar | Inst8Kind::Putchar(_) | Inst8Kind::PutcharIf { .. } => 2,
+        Inst8Kind::Getchar { .. } | Inst8Kind::Putchar(_) | Inst8Kind::PutcharIf { .. } => 2,
         Inst8Kind::RandomByte { .. } => 1,
         Inst8Kind::ExcFlagSet { .. }
         | Inst8Kind::ExcFlagGet
@@ -480,7 +481,7 @@ fn cs_access(kind: &Inst8Kind) -> Option<CsAccess> {
 fn is_io_op(kind: &Inst8Kind) -> bool {
     matches!(
         kind,
-        Inst8Kind::Getchar | Inst8Kind::Putchar(_) | Inst8Kind::PutcharIf { .. }
+        Inst8Kind::Getchar { .. } | Inst8Kind::Putchar(_) | Inst8Kind::PutcharIf { .. }
     )
 }
 

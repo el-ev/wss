@@ -1,7 +1,7 @@
 use crate::constants::{
     DEFAULT_CALLSTACK_SLOTS_CAP, DEFAULT_MAX_PHYS_REGS, DEFAULT_MEMORY_BYTES_CAP,
 };
-use crate::emit::{EmitConfig, emit_program};
+use crate::emit::{EmitConfig, emit_program, emit_program_with_memory_layout};
 use crate::lower8::{Lower8Config, lower8_module, lower8_module_with_config};
 use crate::module::decode_module_info;
 use crate::print::{print_ir8_program, print_module_ast, print_module_ir, print_program};
@@ -212,6 +212,9 @@ struct Cli {
     /// Skip embedding the invoking compile command as an HTML comment at the top of the artifact.
     #[arg(long = "no-embed-compile-command", action = ArgAction::SetTrue)]
     no_embed_compile_command: bool,
+    /// Also write the memory cell layout as JSON (for test harnesses).
+    #[arg(long = "memory-layout", conflicts_with = "minify_vars")]
+    memory_layout: Option<PathBuf>,
     /// Disable memory and callstack visualizers in the emitted runtime.
     #[arg(long = "no-visualizers", action = ArgAction::SetTrue)]
     no_visualizers: bool,
@@ -345,7 +348,14 @@ fn main() -> Result<()> {
         print!("{}", print_program(&ir8));
     }
 
-    let html = emit_program(&ir8, emit_config)?;
+    let html = if let Some(path) = &args.memory_layout {
+        let (html, layout) = emit_program_with_memory_layout(&ir8, emit_config)?;
+        std::fs::write(path, layout)
+            .with_context(|| format!("failed to write memory layout '{}'", path.display()))?;
+        html
+    } else {
+        emit_program(&ir8, emit_config)?
+    };
     let mut page = page::Page::from_html(&html);
     if let Some(seed) = take("split-pc", args.split_pc, 0x5912_5912) {
         dirty::minify::split_pc_branches(&mut page, seed);

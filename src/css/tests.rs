@@ -164,8 +164,8 @@ fn idempotent_real_world_samples() {
     idempotent("if(style(--_1pc: 5) or style(--_1pc: 6): 1; else: 0)");
     idempotent("min(1, calc(var(--a) * var(--b)))");
     idempotent("--mload(calc(var(--mb0) + 512))");
-    idempotent("--inrange(var(--_1cs_sp), 64)");
-    idempotent("--inrange(calc(var(--_1cs_sp) + 1), 257)");
+    idempotent("--inrange(var(--x), 0, 64)");
+    idempotent("--inrange(var(--x), -1, 256)");
 }
 
 #[test]
@@ -249,16 +249,19 @@ fn fold_sel_bool_result_collapses_to_cond() {
     // `--sel(<bool>, 1, 0)` ≡ `<bool>`.
     let r = fold_str("--sel(--eq(var(--a), 2), 1, 0)");
     assert_eq!(r, "--eq(var(--a), 2)");
-    // `--sel(<bool>, 0, 1)` ≡ `calc(1 - <bool>)`.
+    // `--sel(<bool>, 0, 1)` ≡ `calc(1 - <bool>)`, or the complement.
+    let r = fold_str("--sel(--eq1(var(--a)), 0, 1)");
+    assert_eq!(r, "calc(1 - --eq1(var(--a)))");
     let r = fold_str("--sel(--eq(var(--a), 2), 0, 1)");
-    assert_eq!(r, "calc(1 - --eq(var(--a), 2))");
+    assert_eq!(r, "--ne(var(--a), 2)");
 }
 
 #[test]
 fn fold_sel_one_minus_bool_swaps_branches() {
-    // `--sel(calc(1 - <bool>), t, f)` ≡ `--sel(<bool>, f, t)`.
-    let r = fold_str("--sel(calc(1 - --eq(var(--a), 2)), var(--x), var(--y))");
-    assert_eq!(r, "--sel(--eq(var(--a), 2), var(--y), var(--x))");
+    // `--sel(calc(1 - <bool>), t, f)` ≡ `--sel(<bool>, f, t)` for a bool
+    // without a complement helper.
+    let r = fold_str("--sel(calc(1 - --eq1(var(--a))), var(--x), var(--y))");
+    assert_eq!(r, "--sel(--eq1(var(--a)), var(--y), var(--x))");
 }
 
 #[test]
@@ -472,4 +475,84 @@ fn fold_idempotent_at_fixpoint() {
     let n2 = fold(n1.clone());
     assert_eq!(n1, n2);
     assert_eq!(n1.to_css(), "calc(var(--a) + 1)");
+}
+
+#[test]
+fn if_without_else_stays_guaranteed_invalid() {
+    // A missing `else` is the guaranteed-invalid value, not an empty one:
+    // folding must not collapse the empty arm into the default.
+    let n = super::fold(parse("if(style(--f: 0): )"));
+    assert_eq!(n.to_css(), "if(style(--f: 0): )");
+    let n = super::fold(parse("if(style(--f: 0): ; else: )"));
+    assert_eq!(n.to_css(), "");
+    idempotent("if(style(--f: 0): 1)");
+}
+
+#[test]
+fn fold_sum_flattens_parenthesized_sums() {
+    assert_eq!(fold_str("calc((var(--a) + 8) + 1)"), "calc(var(--a) + 9)");
+    assert_eq!(fold_str("calc(1 - (var(--a) + 8))"), "calc(-7 - var(--a))");
+    assert_eq!(
+        fold_str("calc(--inrange(calc(var(--a) + 8), 0, 17) * ((var(--a) + 8) + 1) - 1)"),
+        "calc(--inrange(var(--a), -8, 9) * (var(--a) + 9) - 1)"
+    );
+}
+
+#[test]
+fn fold_one_minus_comparison_is_complement() {
+    assert_eq!(
+        fold_str("calc((1 - --ge(var(--a), 4)) * --sel(var(--c), -3, 3000))"),
+        "calc(--lt(var(--a), 4) * --sel(var(--c), -3, 3000))"
+    );
+    assert_eq!(fold_str("calc(1 - --lt(var(--a), 4))"), "--ge(var(--a), 4)");
+    assert_eq!(fold_str("calc(1 - --eqz(var(--a)))"), "--nez(var(--a))");
+    assert_eq!(
+        fold_str("calc(1 - --eq1(var(--a)))"),
+        "calc(1 - --eq1(var(--a)))"
+    );
+}
+
+#[test]
+fn fold_inrange_moves_offsets_into_bounds() {
+    // `lo <= x + c < hi` is `lo - c <= x < hi - c`.
+    assert_eq!(
+        fold_str("--inrange(calc(var(--a) + 1), 0, 20)"),
+        "--inrange(var(--a), -1, 19)"
+    );
+    assert_eq!(
+        fold_str("--inrange(calc(var(--a) - 2 + var(--b)), 0, 20)"),
+        "--inrange(calc(var(--a) + var(--b)), 2, 22)"
+    );
+    // Constant argument, and an empty range.
+    assert_eq!(fold_str("--inrange(5, 0, 20)"), "1");
+    assert_eq!(fold_str("--inrange(20, 0, 20)"), "0");
+    assert_eq!(fold_str("--inrange(var(--a), 3, 3)"), "0");
+    // The stack pointer is never negative: a lower bound <= 0 always holds.
+    assert_eq!(
+        fold_str("--inrange(calc(var(--_1cs_sp) + 1), 0, 20)"),
+        "--lt(var(--_1cs_sp), 19)"
+    );
+    assert_eq!(
+        fold_str("--inrange(calc(var(--_1cs_sp) - 1), 0, 20)"),
+        "--inrange(var(--_1cs_sp), 1, 21)"
+    );
+}
+
+#[test]
+fn fold_sel_strips_zero_preserving_condition_wrappers() {
+    // `--sel` only tests the condition against zero; `abs`/`sign` keep it.
+    assert_eq!(
+        fold_str("--sel(abs(sign(calc(var(--a) - 66))), 1, 2)"),
+        "--sel(calc(var(--a) - 66), 1, 2)"
+    );
+    // `1 - abs(sign(d))` is the bool `d == 0`: swap the branches, then strip.
+    assert_eq!(
+        fold_str("--sel(calc(1 - abs(sign(calc(var(--a) + calc(var(--b) * 256) - 66)))), 2104, 2101)"),
+        "--sel(calc(var(--a) + var(--b) * 256 - 66), 2101, 2104)"
+    );
+    // Not as a value: the register needs the 0/1 result.
+    assert_eq!(
+        fold_str("calc(1 - abs(sign(calc(var(--a) - 2))))"),
+        "calc(1 - abs(sign(calc(var(--a) - 2))))"
+    );
 }

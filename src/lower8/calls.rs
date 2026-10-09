@@ -1,11 +1,10 @@
 use super::*;
+use crate::module::HostFn;
 
 #[derive(Clone, Copy)]
 enum IndirectTargetKind {
     Direct(u32),
-    Putchar,
-    Getchar,
-    Random,
+    Host(HostFn),
 }
 
 pub(super) struct CallIndirectInst<'a> {
@@ -159,7 +158,7 @@ fn emit_indirect_target_case(
                 }
             }
         }
-        IndirectTargetKind::Putchar => {
+        IndirectTargetKind::Host(HostFn::Putchar) => {
             let arg = arg_words
                 .first()
                 .with_context(|| format!("{} putchar call missing argument", emit_ctx.op_name))?;
@@ -168,13 +167,12 @@ fn emit_indirect_target_case(
             b.set_ret_from_byte(arg.b0);
             finish_indirect_case(b, emit_ctx)?;
         }
-        IndirectTargetKind::Getchar => {
-            let ch = b.alloc_reg();
-            b.emit(Inst8::with_dst(ch, Inst8Kind::Getchar));
-            b.set_ret_from_byte(ch);
+        IndirectTargetKind::Host(getchar @ (HostFn::Getchar | HostFn::TryGetchar)) => {
+            let word = b.emit_getchar(getchar == HostFn::Getchar);
+            b.set_ret_from_word(word);
             finish_indirect_case(b, emit_ctx)?;
         }
-        IndirectTargetKind::Random => {
+        IndirectTargetKind::Host(HostFn::Rand) => {
             let bytes: [Val8; 4] = std::array::from_fn(|lane| {
                 let byte = b.alloc_reg();
                 b.emit(Inst8::with_dst(
@@ -187,8 +185,7 @@ fn emit_indirect_target_case(
             for (dst_lane, src) in dst.bytes().into_iter().zip(bytes) {
                 b.emit(Inst8::with_dst(dst_lane, Inst8Kind::Copy(src)));
             }
-            b.copy_word(crate::ir8::RET_LO, dst);
-            b.copy_word(crate::ir8::RET_HI, crate::ir8::Word::from_u32_imm(0));
+            b.set_ret_from_word(dst);
             finish_indirect_case(b, emit_ctx)?;
         }
     }
@@ -426,14 +423,8 @@ fn resolve_indirect_target(
         return None;
     }
 
-    if Some(func_index) == module.putchar_import() {
-        return Some(IndirectTargetKind::Putchar);
-    }
-    if Some(func_index) == module.getchar_import() {
-        return Some(IndirectTargetKind::Getchar);
-    }
-    if Some(func_index) == module.rand_import() {
-        return Some(IndirectTargetKind::Random);
+    if let Some(host_fn) = module.host_fn(func_index) {
+        return Some(IndirectTargetKind::Host(host_fn));
     }
     if module.body_at(func_index).is_some() {
         return Some(IndirectTargetKind::Direct(func_index));

@@ -10,7 +10,7 @@ pub(super) fn inst_uses(inst: &Inst) -> Vec<IrNode> {
         | Inst::GlobalGet(_)
         | Inst::MemorySize
         | Inst::TableSize(_)
-        | Inst::Getchar
+        | Inst::Getchar { .. }
         | Inst::Random
         | Inst::Drop
         | Inst::ExcSet { .. }

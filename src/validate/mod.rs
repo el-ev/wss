@@ -1,7 +1,7 @@
 use anyhow::{Context, bail};
 use wasmparser::{BlockType, Operator, Parser, Payload::*, RefType, ValType};
 
-use crate::module::{FuncType, ModuleInfo};
+use crate::module::{FuncType, HostFn, ModuleInfo};
 
 mod operators;
 
@@ -53,30 +53,24 @@ fn validate_tables(module: &ModuleInfo) -> anyhow::Result<()> {
 }
 
 fn validate_imports_exports(module: &ModuleInfo) -> anyhow::Result<()> {
-    if module.num_imported_funcs() > 3 {
+    if module.num_imported_funcs() > HostFn::ALL.len() {
+        let names = HostFn::ALL.map(HostFn::name).join(", ");
         bail!(
-            "expected at most 3 imported functions (getchar, putchar, rand), got {}",
+            "expected at most {} imported functions ({}), got {}",
+            HostFn::ALL.len(),
+            names,
             module.num_imported_funcs()
         );
     }
-    if let Some(idx) = module.putchar_import() {
+    for (idx, host_fn) in module.host_imports() {
         let f = func_signature(module, idx)?;
-        // TODO(i64): imported runtime ABI is currently fixed to i32 signatures.
-        if f.params() != [ValType::I32] || f.results() != [ValType::I32] {
-            bail!("putchar must have signature (i32) -> i32");
-        }
-    }
-    if let Some(idx) = module.getchar_import() {
-        let f = func_signature(module, idx)?;
-        // TODO(i64): imported runtime ABI is currently fixed to i32 signatures.
-        if !f.params().is_empty() || f.results() != [ValType::I32] {
-            bail!("getchar must have signature () -> i32");
-        }
-    }
-    if let Some(idx) = module.rand_import() {
-        let f = func_signature(module, idx)?;
-        if !f.params().is_empty() || f.results() != [ValType::I32] {
-            bail!("rand must have signature () -> i32");
+        if f.params() != host_fn.params() || f.results() != [ValType::I32] {
+            let params = host_fn.params().iter().map(|_| "i32").collect::<Vec<_>>();
+            bail!(
+                "{} must have signature ({}) -> i32",
+                host_fn.name(),
+                params.join(", ")
+            );
         }
     }
     let entry_idx = module
@@ -171,7 +165,7 @@ fn validate_code_section(wasm_bytes: &[u8], module: &ModuleInfo) -> anyhow::Resu
 #[cfg(test)]
 mod tests {
     use super::validate;
-    use crate::module::decode_module_info;
+    use crate::module::{HostFn, decode_module_info};
 
     #[test]
     fn validate_rejects_rand_with_wrong_signature() {
@@ -185,7 +179,7 @@ mod tests {
         ];
 
         let module = decode_module_info(&wasm_bytes).expect("module should decode");
-        assert_eq!(module.rand_import(), Some(0));
+        assert_eq!(module.host_fn(0), Some(HostFn::Rand));
         let err = validate(&module, &wasm_bytes).expect_err("wrong rand signature should fail");
         assert!(
             format!("{err:#}").contains("rand must have signature"),

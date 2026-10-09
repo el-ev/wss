@@ -5,7 +5,7 @@ use wasmparser::ValType;
 
 use crate::ast::{Node, RelOp};
 use crate::ir::{BasicBlock, BlockId, Inst, IrNode, Terminator};
-use crate::module::{AstModule, IrFuncBody, IrModule};
+use crate::module::{AstModule, HostFn, IrFuncBody, IrModule};
 
 pub fn lower_module(module: AstModule) -> anyhow::Result<IrModule> {
     let functions_ir = module
@@ -217,7 +217,7 @@ fn remap_inst_refs(inst: &mut Inst, remap: &HashMap<IrNode, IrNode>) -> anyhow::
         | Inst::GlobalGet(_)
         | Inst::MemorySize
         | Inst::TableSize(_)
-        | Inst::Getchar
+        | Inst::Getchar { .. }
         | Inst::Random
         | Inst::Drop
         | Inst::ExcSet { .. }
@@ -467,12 +467,14 @@ fn lower_node(node: &Node, ctx: &mut LowerCtx, ref_map: &[IrNode]) -> anyhow::Re
             });
         }
         Node::Call(func, args) => {
-            if Some(*func) == ctx.module.putchar_import() {
-                ctx.builder.push(Inst::Putchar(ref_map[args[0].index()]));
-            } else if Some(*func) == ctx.module.getchar_import() {
-                ctx.builder.push(Inst::Getchar);
-            } else if Some(*func) == ctx.module.rand_import() {
-                ctx.builder.push(Inst::Random);
+            let host_inst = ctx.module.host_fn(*func).map(|host_fn| match host_fn {
+                HostFn::Putchar => Inst::Putchar(ref_map[args[0].index()]),
+                HostFn::Getchar => Inst::Getchar { blocking: true },
+                HostFn::TryGetchar => Inst::Getchar { blocking: false },
+                HostFn::Rand => Inst::Random,
+            });
+            if let Some(inst) = host_inst {
+                ctx.builder.push(inst);
             } else {
                 let call_ref = ctx.builder.push(Inst::Call {
                     func: *func,

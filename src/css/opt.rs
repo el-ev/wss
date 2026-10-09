@@ -211,7 +211,7 @@ impl Analyzer<'_> {
                 }
                 acc
             }
-            Node::Raw(_) | Node::Style { .. } | Node::Or(_) => TOP,
+            Node::Raw(_) | Node::Style { .. } | Node::Or(_) | Node::Invalid => TOP,
         }
     }
 
@@ -253,6 +253,7 @@ impl Analyzer<'_> {
                 let (lo, hi) = match strategy {
                     "down" => (x.lo.floor(), x.hi.floor()),
                     "up" => (x.lo.ceil(), x.hi.ceil()),
+                    "to-zero" => (x.lo.trunc(), x.hi.trunc()),
                     _ => (x.lo.round(), x.hi.round()),
                 };
                 Range::new(lo, hi, true)

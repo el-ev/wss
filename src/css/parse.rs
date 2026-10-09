@@ -225,7 +225,7 @@ fn balanced_body<'a>() -> impl Parser<'a, &'a str, String, Err<'a>> + Clone {
 fn parse_if_body(body: &str) -> Node {
     let parts = split_top_level(body, b';');
     let mut arms: Vec<Arm> = Vec::new();
-    let mut default = Node::Raw(String::new());
+    let mut default = Node::Invalid;
     for arm in parts {
         let arm = arm.trim();
         if arm.is_empty() {

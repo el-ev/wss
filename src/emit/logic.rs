@@ -1,5 +1,10 @@
 use super::*;
 
+/// A key is held (`--kb` is registered with `initial-value: -1`).
+const KB_READY: &str = "--ne(var(--kb), -1)";
+/// The held key's byte.
+const KB_BYTE: &str = "mod(var(--kb), 256)";
+
 #[derive(Clone, Copy)]
 pub(super) enum BitwiseOp {
     And,
@@ -108,6 +113,22 @@ impl<'a> Emitter<'a> {
                             reg_now.insert(
                                 dst.expect_vreg(),
                                 Self::mul32_byte_expr(&reg_now, *lhs, *rhs, *lane),
+                            );
+                        }
+                    }
+                    Inst8Kind::DivRem32ConstByte {
+                        lhs,
+                        denom,
+                        signed,
+                        rem,
+                        lane,
+                    } => {
+                        if let Some(dst) = op.dst {
+                            reg_now.insert(
+                                dst.expect_vreg(),
+                                Self::divrem32_const_byte_expr(
+                                    &reg_now, *lhs, *denom, *signed, *rem, *lane,
+                                ),
                             );
                         }
                     }
@@ -429,7 +450,7 @@ impl<'a> Emitter<'a> {
                         let ok = format!("calc({} * {})", ok_first, ok_last);
                         mem_inc = Some((first, ok, *delta));
                     }
-                    Inst8Kind::Getchar => {
+                    Inst8Kind::Getchar { blocking: true } => {
                         if let Some(dst) = op.dst {
                             has_getchar = true;
                             // `--kb` is registered as `@property --kb`
@@ -437,14 +458,24 @@ impl<'a> Emitter<'a> {
                             // so `var(--kb)` is always defined; the
                             // earlier `var(--kb, -1)` fallback never
                             // fired.
-                            getchar_ready = "--ne(var(--kb), -1)".to_string();
+                            getchar_ready = KB_READY.to_string();
                             reg_now.insert(
                                 dst.expect_vreg(),
                                 Self::sel_expr(
                                     &getchar_ready,
-                                    "mod(var(--kb), 256)",
+                                    KB_BYTE,
                                     &format!("var(--_1r{})", dst.expect_vreg()),
                                 ),
+                            );
+                        }
+                    }
+                    Inst8Kind::Getchar { blocking: false } => {
+                        if let Some(dst) = op.dst {
+                            // Same read as Getchar, but 0xff instead of a
+                            // stall when no key is held.
+                            reg_now.insert(
+                                dst.expect_vreg(),
+                                Self::sel_expr(KB_READY, KB_BYTE, "255"),
                             );
                         }
                     }
@@ -834,24 +865,6 @@ impl<'a> Emitter<'a> {
             }
             let _ = writeln!(out, "{}", g_shadow_line);
         }
-        let mut mem_shadow_line = String::new();
-        for (i, (name, &init)) in self.mem_names.iter().zip(&self.mem_init).enumerate() {
-            let s = Self::shadow_name(2, name);
-            let _ = write!(
-                mem_shadow_line,
-                " {}: var({}, {});",
-                Self::shadow_name(1, name),
-                s,
-                init
-            );
-            if (i + 1) % 8 == 0 {
-                let _ = writeln!(out, "{}", mem_shadow_line);
-                mem_shadow_line.clear();
-            }
-        }
-        if !mem_shadow_line.is_empty() {
-            let _ = writeln!(out, "{}", mem_shadow_line);
-        }
         if self.uses_exc_payload {
             for lane in 0..4u8 {
                 let _ = writeln!(
@@ -869,22 +882,6 @@ impl<'a> Emitter<'a> {
         }
         if self.uses_callstack() {
             let _ = writeln!(out, " --_1cs_sp: var(--_2cs_sp, 0);");
-            let mut cs_shadow_line = String::new();
-            for (i, name) in self.cs_names.iter().enumerate() {
-                let _ = write!(
-                    cs_shadow_line,
-                    " {}: var({}, 0);",
-                    Self::shadow_name(1, name),
-                    Self::shadow_name(2, name)
-                );
-                if (i + 1) % 8 == 0 {
-                    let _ = writeln!(out, "{}", cs_shadow_line);
-                    cs_shadow_line.clear();
-                }
-            }
-            if !cs_shadow_line.is_empty() {
-                let _ = writeln!(out, "{}", cs_shadow_line);
-            }
         }
         let _ = writeln!(out, " --_1fb: var(--_2fb, \"\");");
         let _ = writeln!(out, " --_1ra: var(--_2ra, \"0x00000000\");");
@@ -1041,56 +1038,6 @@ impl<'a> Emitter<'a> {
                 g_line.push_str(&Self::if_or_fallback_decl(&global_lane, arms, &fallback));
             }
             let _ = writeln!(out, "{}", g_line);
-        }
-
-        let mut mem_line = String::new();
-        for (i, name) in self.mem_names.iter().enumerate() {
-            let prev = format!("var({})", Self::shadow_name(1, name));
-            let merged = if self.max_mem_store_slots == 0 {
-                prev.clone()
-            } else {
-                format!("--mmerge16({}, {}, {})", 2 * i, 2 * i + 1, prev)
-            };
-            let page = i / MEM_DIRTY_PAGE_CELLS;
-            let expr = if self.max_mem_store_slots == 0 {
-                prev.clone()
-            } else {
-                format!("if(style(--mwdp{}: 0): {}; else: {})", page, prev, merged)
-            };
-            let _ = write!(mem_line, " {}: {};", name, expr);
-            if (i + 1) % 8 == 0 {
-                let _ = writeln!(out, "{}", mem_line);
-                mem_line.clear();
-            }
-        }
-        if !mem_line.is_empty() {
-            let _ = writeln!(out, "{}", mem_line);
-        }
-
-        if self.uses_callstack() {
-            let mut cs_line = String::new();
-            for (i, name) in self.cs_names.iter().enumerate() {
-                let prev = format!("var({})", Self::shadow_name(1, name));
-                let expr = if self.max_cs_store_slots == 0 {
-                    prev.clone()
-                } else {
-                    let merged = format!("--csmerge({}, {})", i, prev);
-                    let page = i / CALLSTACK_DIRTY_PAGE_CELLS;
-                    // cswdpN != 0 implies some csoN is 1 at this PC, which
-                    // implies csw_active = 1; so the outer check is redundant.
-                    // Test against 0 (no store this cycle) so the dirty-page
-                    // sum can be emitted without a `min(1, …)` clamp.
-                    format!("if(style(--cswdp{}: 0): {}; else: {})", page, prev, merged)
-                };
-                let _ = write!(cs_line, " {}: {};", name, expr);
-                if (i + 1) % 8 == 0 {
-                    let _ = writeln!(out, "{}", cs_line);
-                    cs_line.clear();
-                }
-            }
-            if !cs_line.is_empty() {
-                let _ = writeln!(out, "{}", cs_line);
-            }
         }
 
         Self::emit_if_or_fallback(out, "--fb", &fb_arms, "var(--_1fb)");
@@ -1524,15 +1471,14 @@ impl<'a> Emitter<'a> {
         format!("--ge({}, {})", l, r)
     }
 
-    /// Emit `--inrange(idx, k)`, folding literal offsets.
+    /// Emit `0 <= idx < k` as `--inrange(base, -off, k - off)`, with a
+    /// literal offset of `idx` moved into the bounds. Kept as a call (not
+    /// inlined): CSS evaluates the argument once into a local, while the
+    /// definition reads it twice.
     pub(super) fn inrange_expr(idx: &str, k: i64) -> String {
-        // Strip a trivial `+ 0` wrapper but keep the `--inrange` function
-        // call; CSS evaluates the calc argument once into a local, while
-        // inlining the definition would re-read the base in every --lt.
-        if let Some((base, 0)) = Self::try_split_calc_offset(idx) {
-            return format!("--inrange({}, {})", base, k);
-        }
-        format!("--inrange({}, {})", idx, k)
+        let (base, off) =
+            Self::try_split_calc_offset(idx).unwrap_or_else(|| (idx.to_string(), 0));
+        format!("--inrange({}, {}, {})", base, -off, k - off)
     }
 
     pub(super) fn paren_if_needed(expr: &str) -> String {
@@ -2103,6 +2049,66 @@ impl<'a> Emitter<'a> {
                 let low = Self::fold_mod(&total, 4_294_967_296);
                 format!("round(down, calc({} / 16777216))", p(&low))
             }
+        }
+    }
+
+    /// Byte `lane` of a word divided by a constant (see
+    /// [`Inst8Kind::DivRem32ConstByte`]). The integer result is formed first,
+    /// in one `calc()` over the exact word value: a quotient below 2^32 is at
+    /// least 2^-33 (relative) away from the next integer, far above the
+    /// `double` rounding error, so `round()` of the division is exact.
+    pub(super) fn divrem32_const_byte_expr(
+        now: &HashMap<u16, String>,
+        lhs: Word,
+        denom: u32,
+        signed: bool,
+        rem: bool,
+        lane: u8,
+    ) -> String {
+        let n = Self::word_value_expr(now, lhs, signed);
+        let p = |x: &str| Self::paren_if_needed(x);
+        // Upper bound on the unsigned result, to drop a redundant final `mod`.
+        let max = crate::ir8::divrem32_const_max(denom, signed, rem);
+        let value = if signed {
+            // `trunc(n / d) = trunc(-n / |d|)`; `rem` takes the dividend's sign.
+            let d = (denom as i32).unsigned_abs();
+            if rem {
+                format!("rem({}, {})", n, d)
+            } else {
+                let num = if (denom as i32) < 0 {
+                    format!("(0 - {})", p(&n))
+                } else {
+                    p(&n)
+                };
+                format!("round(to-zero, calc({} / {}))", num, d)
+            }
+        } else if rem {
+            format!("mod({}, {})", n, denom)
+        } else {
+            // The division by `256^lane` folds into the divisor: lanes whose
+            // scaled divisor exceeds `u32::MAX` are zero and were folded away
+            // at lowering, so the same exactness bound holds.
+            let scaled = u64::from(denom) << (8 * u32::from(lane));
+            let value = format!("round(down, calc({} / {}))", p(&n), scaled);
+            return Self::fold_mod_if(value, (max >> (8 * u32::from(lane))) > 255);
+        };
+        let shifted = if lane == 0 {
+            value
+        } else {
+            format!(
+                "round(down, calc({} / {}))",
+                p(&value),
+                1u64 << (8 * u32::from(lane))
+            )
+        };
+        Self::fold_mod_if(shifted, (max >> (8 * u32::from(lane))) > 255 || signed)
+    }
+
+    fn fold_mod_if(value: String, wrap: bool) -> String {
+        if wrap {
+            Self::fold_mod(&value, 256)
+        } else {
+            value
         }
     }
 
@@ -2806,16 +2812,16 @@ impl<'a> Emitter<'a> {
     }
 
     /// The loaded byte for an in-bounds load of fixed byte address `at`: a
-    /// direct read of the cell (the same `--_0m*` stage `--read_m16` reads).
+    /// direct read of the cell, at the same stage `--read_m16` reads.
     fn const_load_expr(&self, at: u32) -> Option<String> {
-        if at >= self.memory_end {
+        if at >= self.memory_end || at as usize / 2 >= self.mem_names.len() {
             return None;
         }
-        let cell = Self::shadow_name(0, self.mem_names.get(at as usize / 2)?);
+        let cell = self.mem_prev_expr(at as usize / 2);
         Some(if at.is_multiple_of(2) {
-            format!("mod(var({}), 256)", cell)
+            format!("mod({}, 256)", cell)
         } else {
-            format!("round(down, var({}) / 256)", cell)
+            format!("round(down, {} / 256)", cell)
         })
     }
 

@@ -399,7 +399,7 @@ use std::collections::HashMap;
 fn visit_value(node: &Node, visit: &mut impl FnMut(&Node)) {
     visit(node);
     match node {
-        Node::Int(_) | Node::Raw(_) | Node::Style { .. } => {}
+        Node::Int(_) | Node::Raw(_) | Node::Style { .. } | Node::Invalid => {}
         Node::Var { fallback, .. } => {
             if let Some(fb) = fallback {
                 visit_value(fb, visit);
@@ -443,7 +443,7 @@ fn visit_value(node: &Node, visit: &mut impl FnMut(&Node)) {
 pub(super) fn visit_value_mut(node: &mut Node, visit: &mut impl FnMut(&mut Node)) {
     visit(node);
     match node {
-        Node::Int(_) | Node::Raw(_) | Node::Style { .. } => {}
+        Node::Int(_) | Node::Raw(_) | Node::Style { .. } | Node::Invalid => {}
         Node::Var { fallback, .. } => {
             if let Some(fb) = fallback {
                 visit_value_mut(fb, visit);
@@ -738,7 +738,12 @@ fn collect_in_rule(
     candidates: &mut HashMap<String, Node>,
 ) {
     let head_trim = rule.head.trim_start();
-    if head_trim.starts_with("@function") || head_trim.starts_with("@property") {
+    // Keyframe values are latched snapshots: inlining one into its reader
+    // would read the live value instead.
+    if head_trim.starts_with("@function")
+        || head_trim.starts_with("@property")
+        || head_trim.starts_with("@keyframes")
+    {
         return;
     }
     match &rule.body {
@@ -780,7 +785,7 @@ fn consider_candidate(
 fn value_references_any(node: &Node, names: &std::collections::HashSet<String>) -> bool {
     match node {
         Node::Var { name, .. } => names.contains(name.strip_prefix("--").unwrap_or(name)),
-        Node::Int(_) | Node::Raw(_) | Node::Style { .. } => false,
+        Node::Int(_) | Node::Raw(_) | Node::Style { .. } | Node::Invalid => false,
         Node::Calc(inner) | Node::Paren(inner) => value_references_any(inner, names),
         Node::MathFn { args, .. } | Node::Fn { args, .. } => {
             args.iter().any(|a| value_references_any(a, names))
@@ -883,7 +888,7 @@ fn substitute_in_node(
                 substitute_in_node(c, candidates, substituted);
             }
         }
-        Node::Int(_) | Node::Raw(_) | Node::Style { .. } => {}
+        Node::Int(_) | Node::Raw(_) | Node::Style { .. } | Node::Invalid => {}
     }
 }
 
@@ -1396,6 +1401,14 @@ mod tests {
         assert_eq!(inlined, 0, "var-alias must be preserved");
         let printed = print_doc(&doc);
         assert!(printed.contains("--r7: var(--_1r7);"));
+    }
+
+    #[test]
+    fn inline_single_use_skips_keyframe_decls() {
+        let input = "@keyframes execute { 0%,100% { --_0x: calc(var(--y) + 1); } } @keyframes store { 0%,100% { --_2x: var(--_0x); } }";
+        let mut doc = parse_doc(input);
+        let inlined = inline_single_use(&mut doc, &HashMap::new());
+        assert_eq!(inlined, 0, "{}", print_doc(&doc));
     }
 
     #[test]

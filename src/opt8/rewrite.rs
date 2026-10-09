@@ -111,9 +111,9 @@ pub(super) fn rw_word(subst: &HashMap<Val8, Val8>, w: Word) -> Word {
 
 pub(super) fn rewrite_inst(mut inst: Inst8, subst: &HashMap<Val8, Val8>) -> Inst8 {
     inst.kind = match inst.kind {
-        Inst8Kind::GlobalGetByte { .. } | Inst8Kind::Getchar | Inst8Kind::RandomByte { .. } => {
-            inst.kind
-        }
+        Inst8Kind::GlobalGetByte { .. }
+        | Inst8Kind::Getchar { .. }
+        | Inst8Kind::RandomByte { .. } => inst.kind,
         Inst8Kind::Copy(s) => Inst8Kind::Copy(rw(subst, s)),
         Inst8Kind::Add32Byte { lhs, rhs, lane } => Inst8Kind::Add32Byte {
             lhs: rw_word(subst, lhs),
@@ -128,6 +128,19 @@ pub(super) fn rewrite_inst(mut inst: Inst8, subst: &HashMap<Val8, Val8>) -> Inst
         Inst8Kind::Mul32Byte { lhs, rhs, lane } => Inst8Kind::Mul32Byte {
             lhs: rw_word(subst, lhs),
             rhs: rw_word(subst, rhs),
+            lane,
+        },
+        Inst8Kind::DivRem32ConstByte {
+            lhs,
+            denom,
+            signed,
+            rem,
+            lane,
+        } => Inst8Kind::DivRem32ConstByte {
+            lhs: rw_word(subst, lhs),
+            denom,
+            signed,
+            rem,
             lane,
         },
         Inst8Kind::Sub32Borrow { lhs, rhs } => Inst8Kind::Sub32Borrow {
@@ -250,7 +263,7 @@ pub(super) fn has_side_effect(kind: &Inst8Kind) -> bool {
         kind,
         Inst8Kind::Putchar(_)
             | Inst8Kind::PutcharIf { .. }
-            | Inst8Kind::Getchar
+            | Inst8Kind::Getchar { .. }
             | Inst8Kind::StoreMem { .. }
             | Inst8Kind::MemInc32 { .. }
             | Inst8Kind::GlobalSetByte { .. }
@@ -273,7 +286,9 @@ pub(super) fn inst_uses(kind: &Inst8Kind, live: &mut HashSet<Val8>) {
     };
 
     match kind {
-        Inst8Kind::Getchar | Inst8Kind::RandomByte { .. } | Inst8Kind::GlobalGetByte { .. } => {}
+        Inst8Kind::Getchar { .. }
+        | Inst8Kind::RandomByte { .. }
+        | Inst8Kind::GlobalGetByte { .. } => {}
 
         Inst8Kind::Copy(s) | Inst8Kind::BoolNot(s) | Inst8Kind::Putchar(s) => {
             add_use(live, *s);
@@ -289,6 +304,11 @@ pub(super) fn inst_uses(kind: &Inst8Kind, live: &mut HashSet<Val8>) {
                 add_use(live, reg);
             }
             for reg in rhs.uses_through_lane(*lane) {
+                add_use(live, reg);
+            }
+        }
+        Inst8Kind::DivRem32ConstByte { lhs, .. } => {
+            for reg in lhs.uses_through_lane(3) {
                 add_use(live, reg);
             }
         }

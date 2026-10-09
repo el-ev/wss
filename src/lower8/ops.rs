@@ -259,7 +259,15 @@ fn lower_numeric_inst(
                 let rhs_word = b.get_word(*rhs);
                 let dst = match *op {
                     BinOp::DivU | BinOp::RemU | BinOp::DivS | BinOp::RemS => {
-                        if ctx.div_builtins.is_none() {
+                        let lowered_const = rhs_word.imm_prefix(3).and_then(|denom| match *op {
+                            BinOp::DivU => lower_divrem_const_u32(b, false, lhs_word, denom),
+                            BinOp::RemU => lower_divrem_const_u32(b, true, lhs_word, denom),
+                            BinOp::DivS => lower_divrem_const_s32(b, false, lhs_word, denom),
+                            _ => lower_divrem_const_s32(b, true, lhs_word, denom),
+                        });
+                        if let Some(v) = lowered_const {
+                            v
+                        } else if ctx.div_builtins.is_none() {
                             let builtin = if *op == BinOp::DivU {
                                 BuiltinId::DivU32
                             } else if *op == BinOp::RemU {
@@ -270,30 +278,6 @@ fn lower_numeric_inst(
                                 BuiltinId::RemS32
                             };
                             lower_builtin_call(b, builtin, vec![lhs_word, rhs_word])
-                        } else if let Some(denom_const) = rhs_word.imm_prefix(3) {
-                            let lowered = match *op {
-                                BinOp::DivU | BinOp::RemU => {
-                                    lower_divrem_const_u32(b, *op, lhs_word, denom_const)
-                                }
-                                BinOp::DivS | BinOp::RemS => {
-                                    lower_divrem_const_s32(b, *op, lhs_word, denom_const)
-                                }
-                                _ => None,
-                            };
-                            if let Some(v) = lowered {
-                                v
-                            } else {
-                                lower_divrem_call_via_function(
-                                    b,
-                                    *op,
-                                    lhs_word,
-                                    rhs_word,
-                                    live_after,
-                                    live_locals_after,
-                                    ctx.allocs,
-                                    ctx.div_builtins,
-                                )?
-                            }
                         } else {
                             lower_divrem_call_via_function(
                                 b,
@@ -632,10 +616,9 @@ fn lower_call_io_inst(
             b.emit(Inst8::no_dst(Inst8Kind::Putchar(val.b0)));
             b.set_word(iref, Word::narrow(val.b0));
         }
-        Inst::Getchar => {
-            let ch = b.alloc_reg();
-            b.emit(Inst8::with_dst(ch, Inst8Kind::Getchar));
-            b.set_word(iref, Word::narrow(ch));
+        Inst::Getchar { blocking } => {
+            let word = b.emit_getchar(*blocking);
+            b.set_word(iref, word);
         }
         Inst::Random => {
             let dst = b.alloc_word();

@@ -4,6 +4,7 @@ extern int putchar(int c);
 static volatile int pegs[3][4];
 static volatile int heights[3];
 
+__attribute__((noinline))
 static void print_str(const char *s) {
   while (*s) {
     putchar(*s);

@@ -13,6 +13,55 @@ mod helpers;
 use const_expr::{parse_const_expr, parse_ref_const_expr};
 use helpers::{build_table_info, clone_func_type, is_entry_export_name};
 
+/// A function the runtime provides, imported by name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HostFn {
+    Getchar,
+    TryGetchar,
+    Putchar,
+    Rand,
+}
+
+impl HostFn {
+    pub(crate) const ALL: [HostFn; 4] = [
+        HostFn::Getchar,
+        HostFn::TryGetchar,
+        HostFn::Putchar,
+        HostFn::Rand,
+    ];
+
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            HostFn::Getchar => "getchar",
+            HostFn::TryGetchar => "try_getchar",
+            HostFn::Putchar => "putchar",
+            HostFn::Rand => "rand",
+        }
+    }
+
+    /// The import behind a blocking or non-blocking key read.
+    pub(crate) fn getchar(blocking: bool) -> Self {
+        if blocking {
+            HostFn::Getchar
+        } else {
+            HostFn::TryGetchar
+        }
+    }
+
+    fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|f| f.name() == name)
+    }
+
+    /// Parameter types; every host function returns one i32.
+    // TODO(i64): imported runtime ABI is currently fixed to i32 signatures.
+    pub(crate) fn params(self) -> &'static [ValType] {
+        match self {
+            HostFn::Putchar => &[ValType::I32],
+            HostFn::Getchar | HostFn::TryGetchar | HostFn::Rand => &[],
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ConstInit {
     I32(i32),
@@ -82,9 +131,8 @@ pub(crate) struct ModuleInfo {
     num_pages: u64,
     preloaded_data: Vec<(usize, Vec<u8>)>,
     num_imported_funcs: usize,
-    putchar_import: Option<u32>,
-    getchar_import: Option<u32>,
-    rand_import: Option<u32>,
+    /// The host function behind each imported function index, if any.
+    host_imports: Vec<Option<HostFn>>,
     entry_export: Option<u32>,
 }
 
@@ -186,20 +234,26 @@ impl ModuleInfo {
         self.num_imported_funcs = num_imported_funcs;
     }
 
-    pub(crate) fn putchar_import(&self) -> Option<u32> {
-        self.putchar_import
+    pub(crate) fn host_fn(&self, func_index: u32) -> Option<HostFn> {
+        self.host_imports
+            .get(func_index as usize)
+            .copied()
+            .flatten()
     }
 
-    pub(crate) fn set_putchar_import(&mut self, putchar_import: Option<u32>) {
-        self.putchar_import = putchar_import;
+    pub(crate) fn host_imports(&self) -> impl Iterator<Item = (u32, HostFn)> + '_ {
+        self.host_imports
+            .iter()
+            .enumerate()
+            .filter_map(|(i, f)| Some((i as u32, (*f)?)))
     }
 
-    pub(crate) fn getchar_import(&self) -> Option<u32> {
-        self.getchar_import
-    }
-
-    pub(crate) fn rand_import(&self) -> Option<u32> {
-        self.rand_import
+    pub(crate) fn set_host_import(&mut self, func_index: u32, host_fn: HostFn) {
+        let i = func_index as usize;
+        if self.host_imports.len() <= i {
+            self.host_imports.resize(i + 1, None);
+        }
+        self.host_imports[i] = Some(host_fn);
     }
 
     pub(crate) fn entry_export(&self) -> Option<u32> {
@@ -283,14 +337,8 @@ pub(crate) fn decode_module_info(wasm_bytes: &[u8]) -> anyhow::Result<ModuleInfo
                         TypeRef::Func(type_index) => {
                             let ty = clone_func_type(&module, type_index)?;
                             module.functions.push(ty);
-                            if import.name == "putchar" {
-                                module.set_putchar_import(Some(num_imports as u32));
-                            }
-                            if import.name == "getchar" {
-                                module.getchar_import = Some(num_imports as u32);
-                            }
-                            if import.name == "rand" {
-                                module.rand_import = Some(num_imports as u32);
+                            if let Some(host_fn) = HostFn::from_name(import.name) {
+                                module.set_host_import(num_imports as u32, host_fn);
                             }
                             num_imports += 1;
                         }
@@ -580,9 +628,7 @@ impl AstModule {
         pub(crate) fn func_type_at(&self, func_index: u32) -> Option<&FuncType>;
         pub(crate) fn globals(&self) -> &[GlobalInfo];
         pub(crate) fn num_imported_funcs(&self) -> usize;
-        pub(crate) fn putchar_import(&self) -> Option<u32>;
-        pub(crate) fn getchar_import(&self) -> Option<u32>;
-        pub(crate) fn rand_import(&self) -> Option<u32>;
+        pub(crate) fn host_fn(&self, func_index: u32) -> Option<HostFn>;
         pub(crate) fn entry_export(&self) -> Option<u32>;
     }
 }
@@ -639,9 +685,7 @@ impl IrModule {
         pub(crate) fn table_at(&self, table_index: u32) -> Option<&TableInfo>;
         pub(crate) fn num_pages(&self) -> u64;
         pub(crate) fn preloaded_data(&self) -> &[(usize, Vec<u8>)];
-        pub(crate) fn putchar_import(&self) -> Option<u32>;
-        pub(crate) fn getchar_import(&self) -> Option<u32>;
-        pub(crate) fn rand_import(&self) -> Option<u32>;
+        pub(crate) fn host_fn(&self, func_index: u32) -> Option<HostFn>;
         pub(crate) fn entry_export(&self) -> Option<u32>;
     }
 }
@@ -660,8 +704,8 @@ impl IrModule {
         self.info.set_num_imported_funcs(num_imported_funcs);
     }
 
-    pub(crate) fn set_putchar_import(&mut self, putchar_import: Option<u32>) {
-        self.info.set_putchar_import(putchar_import);
+    pub(crate) fn set_host_import(&mut self, func_index: u32, host_fn: HostFn) {
+        self.info.set_host_import(func_index, host_fn);
     }
 
     pub(crate) fn types_mut(&mut self) -> &mut Vec<FuncType> {

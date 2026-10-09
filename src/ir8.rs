@@ -259,6 +259,27 @@ impl BuiltinId {
     }
 }
 
+/// Reference semantics of [`Inst8Kind::DivRem32ConstByte`]. `denom` is
+/// nonzero, and a signed `i32::MIN / -1` (a wasm trap) is never formed.
+pub fn divrem32_const_byte(lhs: u32, denom: u32, signed: bool, rem: bool, lane: u8) -> u8 {
+    let out = match (signed, rem) {
+        (false, false) => lhs / denom,
+        (false, true) => lhs % denom,
+        (true, false) => (lhs as i32).wrapping_div(denom as i32) as u32,
+        (true, true) => (lhs as i32).wrapping_rem(denom as i32) as u32,
+    };
+    (out >> (8 * u32::from(lane))) as u8
+}
+
+/// Upper bound on the unsigned bit pattern of a constant div/rem result.
+pub fn divrem32_const_max(denom: u32, signed: bool, rem: bool) -> u32 {
+    match (signed, rem) {
+        (true, _) => u32::MAX,
+        (false, true) => denom - 1,
+        (false, false) => u32::MAX / denom,
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Cmp32Op {
     Eq,
@@ -351,7 +372,9 @@ impl Inst8 {
 
     pub fn uses(&self) -> Vec<Val8> {
         match &self.kind {
-            Inst8Kind::Getchar | Inst8Kind::RandomByte { .. } | Inst8Kind::GlobalGetByte { .. } => {
+            Inst8Kind::Getchar { .. }
+            | Inst8Kind::RandomByte { .. }
+            | Inst8Kind::GlobalGetByte { .. } => {
                 vec![]
             }
             Inst8Kind::Copy(s) | Inst8Kind::BoolNot(s) | Inst8Kind::Putchar(s) => {
@@ -372,6 +395,7 @@ impl Inst8 {
                 out.extend(rhs.uses_through_lane(*lane));
                 out
             }
+            Inst8Kind::DivRem32ConstByte { lhs, .. } => lhs.uses_through_lane(3),
             Inst8Kind::Cmp32 { lhs, rhs, .. } => {
                 let mut out = lhs.uses_through_lane(3);
                 out.extend(rhs.uses_through_lane(3));
@@ -464,6 +488,17 @@ pub enum Inst8Kind {
         rhs: Word,
         lane: u8,
     },
+    /// Byte `lane` of `lhs / denom` (or `lhs % denom` when `rem`) for a
+    /// constant nonzero `denom`, with wasm `div`/`rem` semantics (`signed`
+    /// truncates toward zero). One exact expression over the word value
+    /// instead of a call into the unrolled division helper.
+    DivRem32ConstByte {
+        lhs: Word,
+        denom: u32,
+        signed: bool,
+        rem: bool,
+        lane: u8,
+    },
     Add32Byte {
         lhs: Word,
         rhs: Word,
@@ -528,7 +563,11 @@ pub enum Inst8Kind {
         delta: u32,
     },
 
-    Getchar,
+    /// Key read: the held key's byte. When none is held, a blocking read
+    /// stalls the cycle; a non-blocking one yields 0xff.
+    Getchar {
+        blocking: bool,
+    },
     Putchar(Val8),
     /// Append `val` to the framebuffer only when `enable` is non-zero.
     /// Created by opt8 when speculatively hoisting a one-putchar arm of a
@@ -790,12 +829,14 @@ pub struct BasicBlock8 {
     pub terminator: Terminator8,
 }
 
+#[derive(Clone)]
 pub struct Cycle {
     pub pc: Pc,
     pub ops: Vec<Inst8>,
     pub terminator: Terminator8,
 }
 
+#[derive(Clone)]
 pub struct Ir8Program {
     pub entry_func: u32,
     pub num_vregs: u16,

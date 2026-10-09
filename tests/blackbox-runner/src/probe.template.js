@@ -2,7 +2,7 @@
 (() => {
   const terminalPcs = new Set([-1, -2, -3, -4, -5, -6]);
   const maxFrames = __WSS_MAX_FRAMES__;
-  const memoryKeys = __WSS_MEMORY_KEYS__;
+  const memoryCells = __WSS_MEMORY_CELLS__;
   const inputQueue = __WSS_INPUT_BYTES__;
   const getcharPcs = new Set(__WSS_GETCHAR_PCS__);
   const noInputValue = -1;
@@ -138,11 +138,18 @@
 
   function collectMemory(style) {
     const out = {};
-    for (const key of memoryKeys) {
-      const raw = style.getPropertyValue(key).trim();
-      if (!raw) continue;
+    // The layout `wss --memory-layout` writes: a cell is its execute
+    // snapshot, else its store snapshot, else (before any snapshot is
+    // taken) its initial value.
+    for (const cell of memoryCells) {
+      const raw = style.getPropertyValue(cell.exec).trim() ||
+        style.getPropertyValue(cell.prev).trim();
+      if (!raw) {
+        out[cell.key] = cell.init;
+        continue;
+      }
       const parsed = Number.parseInt(raw, 10);
-      out[key] = Number.isNaN(parsed) ? raw : parsed;
+      out[cell.key] = Number.isNaN(parsed) ? raw : parsed;
     }
     return out;
   }
@@ -268,6 +275,15 @@
     clkEl.style.setProperty("--kb", String(noInputValue), "important");
     frames += 1;
     state = readState();
+  }
+
+  // A program that is terminal on load (frames = 0) has taken no snapshot,
+  // so its first cycle's stores exist only inside the cell expressions:
+  // tick once more to take one. From a terminal state that re-runs an
+  // idempotent cycle, so only the snapshots change.
+  if (clkEl && terminalEl && state.ok && memoryCells.length > 0 && frames === 0) {
+    tickInstruction(clkEl, terminalEl, clockRef, rngState);
+    state.memory = collectMemory(getComputedStyle(terminalEl));
   }
 
   const freezeStyle = document.createElement("style");

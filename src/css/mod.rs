@@ -49,6 +49,9 @@ pub enum Node {
     },
     Or(Vec<Node>),
     Raw(String),
+    /// The guaranteed-invalid value: the default of an `if()` without an
+    /// `else` arm. Distinct from an empty value (`else:`).
+    Invalid,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -125,7 +125,11 @@ pub enum Inst {
         args: Vec<IrNode>,
     },
     Putchar(IrNode),
-    Getchar,
+    /// The pressed key. When none is held, a blocking read waits; a
+    /// non-blocking one yields -1.
+    Getchar {
+        blocking: bool,
+    },
     /// Read one 32-bit sample from the animation-driven `rand` device.
     Random,
     Drop,
