@@ -97,6 +97,7 @@ body { margin: 0; background: #f5f5f5; font-family: ui-monospace, SFMono-Regular
 /*__WSS_KEEP_SP_INDICATOR_CSS_START__*/
 #ind-sp::before { counter-reset: ind-sp var(--cs_sp); content: counter(ind-sp); }
 /*__WSS_KEEP_SP_INDICATOR_CSS_END__*/
+/*__WSS_KEEP_G0_INDICATOR_CSS_START__*/
 #ind-g0::before {
 content: "0x"
 --hex(round(down, calc(var(--g0_3) / 16))) --hex(mod(var(--g0_3), 16))
@@ -104,6 +105,7 @@ content: "0x"
 --hex(round(down, calc(var(--g0_1) / 16))) --hex(mod(var(--g0_1), 16))
 --hex(round(down, calc(var(--g0_0) / 16))) --hex(mod(var(--g0_0), 16));
 }
+/*__WSS_KEEP_G0_INDICATOR_CSS_END__*/
 /*__WSS_KEEP_INDS_CSS_END__*/
 
 @function --support-test() returns <integer> { result: calc(1 + 1); }
@@ -278,7 +280,9 @@ Please try an up-to-date Chromium-based browser.
     <!--__WSS_KEEP_SP_INDICATOR_HTML_START__-->
     <div class="ind"><span class="k">SP</span><span id="ind-sp" class="v"></span></div>
     <!--__WSS_KEEP_SP_INDICATOR_HTML_END__-->
+    <!--__WSS_KEEP_G0_INDICATOR_HTML_START__-->
     <div class="ind"><span class="k">G0</span><span id="ind-g0" class="v"></span></div>
+    <!--__WSS_KEEP_G0_INDICATOR_HTML_END__-->
 </div>
 <!--__WSS_KEEP_INDS_HTML_END__-->
 <!--__WSS_KEEP_CS_VISUALIZER_HTML_START__-->

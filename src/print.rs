@@ -709,6 +709,22 @@ fn print_inst8(out: &mut String, inst: &crate::ir8::Inst8) {
         Inst8Kind::Sub32Byte { lhs, rhs, lane } => {
             write!(out, "sub32.b{} {} {}", lane, fmt_word(*lhs), fmt_word(*rhs)).unwrap()
         }
+        Inst8Kind::DivRem32ConstByte {
+            lhs,
+            denom,
+            signed,
+            rem,
+            lane,
+        } => write!(
+            out,
+            "{}32{}.b{} {} {}",
+            if *rem { "rem" } else { "div" },
+            if *signed { "_s" } else { "_u" },
+            lane,
+            fmt_word(*lhs),
+            denom
+        )
+        .unwrap(),
         Inst8Kind::Cmp32 {
             op,
             lhs,
@@ -957,6 +973,7 @@ impl CssNode {
 #[allow(dead_code)]
 fn write_css_expr(node: &CssNode, math_ctx: bool, out: &mut String) {
     match node {
+        CssNode::Invalid => {}
         CssNode::Int(n) => {
             write!(out, "{}", n).unwrap();
         }
@@ -1045,11 +1062,13 @@ fn write_css_expr(node: &CssNode, math_ctx: bool, out: &mut String) {
                 }
                 write_css_arm(arm, out);
             }
-            if !arms.is_empty() {
-                out.push_str("; ");
+            if **default != CssNode::Invalid {
+                if !arms.is_empty() {
+                    out.push_str("; ");
+                }
+                out.push_str("else: ");
+                write_css_expr(default, false, out);
             }
-            out.push_str("else: ");
-            write_css_expr(default, false, out);
             out.push(')');
         }
         CssNode::Style { prop, value } => {
@@ -1190,6 +1209,9 @@ fn write_css_arm(arm: &CssArm, out: &mut String) {
 fn write_css_dump(node: &CssNode, indent: usize, out: &mut String) {
     let pad: String = " ".repeat(indent);
     match node {
+        CssNode::Invalid => {
+            writeln!(out, "{}Invalid", pad).unwrap();
+        }
         CssNode::Int(n) => {
             writeln!(out, "{}Int({})", pad, n).unwrap();
         }

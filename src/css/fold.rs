@@ -33,7 +33,7 @@ fn fold_step(node: Node) -> Node {
 /// alone. Each child is fully simplified before we look at the parent.
 fn fold_children(node: Node) -> Node {
     match node {
-        Node::Int(_) | Node::Raw(_) | Node::Style { .. } => node,
+        Node::Int(_) | Node::Raw(_) | Node::Style { .. } | Node::Invalid => node,
         Node::Var { name, fallback } => Node::Var {
             name,
             fallback: fallback.map(|fb| Box::new(fold_step(*fb))),

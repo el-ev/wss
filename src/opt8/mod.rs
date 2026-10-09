@@ -707,6 +707,19 @@ fn rename_inst_kind(kind: &Inst8Kind, rename: &HashMap<Val8, Val8>) -> Inst8Kind
             lhs: rw(*lhs),
             rhs: rw(*rhs),
         },
+        Inst8Kind::DivRem32ConstByte {
+            lhs,
+            denom,
+            signed,
+            rem,
+            lane,
+        } => Inst8Kind::DivRem32ConstByte {
+            lhs: rw(*lhs),
+            denom: *denom,
+            signed: *signed,
+            rem: *rem,
+            lane: *lane,
+        },
         Inst8Kind::Cmp32 {
             op,
             lhs,

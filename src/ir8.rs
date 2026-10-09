@@ -259,6 +259,18 @@ impl BuiltinId {
     }
 }
 
+/// Reference semantics of [`Inst8Kind::DivRem32ConstByte`]. `denom` is
+/// nonzero, and a signed `i32::MIN / -1` (a wasm trap) is never formed.
+pub fn divrem32_const_byte(lhs: u32, denom: u32, signed: bool, rem: bool, lane: u8) -> u8 {
+    let out = match (signed, rem) {
+        (false, false) => lhs / denom,
+        (false, true) => lhs % denom,
+        (true, false) => (lhs as i32).wrapping_div(denom as i32) as u32,
+        (true, true) => (lhs as i32).wrapping_rem(denom as i32) as u32,
+    };
+    (out >> (8 * u32::from(lane))) as u8
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Cmp32Op {
     Eq,
@@ -372,6 +384,7 @@ impl Inst8 {
                 out.extend(rhs.uses_through_lane(*lane));
                 out
             }
+            Inst8Kind::DivRem32ConstByte { lhs, .. } => lhs.uses_through_lane(3),
             Inst8Kind::Cmp32 { lhs, rhs, .. } => {
                 let mut out = lhs.uses_through_lane(3);
                 out.extend(rhs.uses_through_lane(3));
@@ -462,6 +475,17 @@ pub enum Inst8Kind {
     Mul32Byte {
         lhs: Word,
         rhs: Word,
+        lane: u8,
+    },
+    /// Byte `lane` of `lhs / denom` (or `lhs % denom` when `rem`) for a
+    /// constant nonzero `denom`, with wasm `div`/`rem` semantics (`signed`
+    /// truncates toward zero). One exact expression over the word value
+    /// instead of a call into the unrolled division helper.
+    DivRem32ConstByte {
+        lhs: Word,
+        denom: u32,
+        signed: bool,
+        rem: bool,
         lane: u8,
     },
     Add32Byte {

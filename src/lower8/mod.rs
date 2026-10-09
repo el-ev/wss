@@ -720,9 +720,37 @@ fn lower_divrem_const_u32(
         return Some(lower_shr_u_const_u32(b, numer, denom_u32.trailing_zeros()));
     }
 
-    // For non-trivial constants we prefer the shared helper to avoid
-    // large inlined unrolled division sequences.
-    None
+    // Lanes above the largest possible result are known zero.
+    let max = if is_rem { denom_u32 - 1 } else { u32::MAX / denom_u32 };
+    Some(lower_divrem_const_bytes(b, numer, denom_u32, false, is_rem, max))
+}
+
+/// One [`Inst8Kind::DivRem32ConstByte`] per result lane, with lanes above
+/// `max_unsigned` (an upper bound on the unsigned result) folded to zero.
+fn lower_divrem_const_bytes(
+    b: &mut FuncBuilder,
+    numer: Word,
+    denom: u32,
+    signed: bool,
+    rem: bool,
+    max_unsigned: u32,
+) -> Word {
+    let dst = b.alloc_word();
+    for (lane, dst_lane) in dst.bytes().into_iter().enumerate() {
+        let kind = if max_unsigned >> (8 * lane) == 0 {
+            Inst8Kind::Copy(Val8::imm(0))
+        } else {
+            Inst8Kind::DivRem32ConstByte {
+                lhs: numer,
+                denom,
+                signed,
+                rem,
+                lane: lane as u8,
+            }
+        };
+        b.emit(Inst8::with_dst(dst_lane, kind));
+    }
+    dst
 }
 
 fn lower_divrem_const_s32(
@@ -752,7 +780,14 @@ fn lower_divrem_const_s32(
         });
     }
 
-    None
+    Some(lower_divrem_const_bytes(
+        b,
+        numer,
+        denom_u32,
+        true,
+        is_rem,
+        u32::MAX,
+    ))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1542,7 +1577,7 @@ mod tests {
             id: bid(0),
             insts: vec![
                 Inst::I32Const(100), // 0
-                Inst::I32Const(7),   // 1
+                Inst::Getchar,       // 1
                 Inst::Binary {
                     op: BinOp::DivU,
                     ty: ValType::I32,
@@ -1603,7 +1638,7 @@ mod tests {
                     || callee_entry == CallTarget::Pc(Pc::new(3 * PC_STRIDE))
                     || callee_entry == CallTarget::Pc(Pc::new(4 * PC_STRIDE))
             )),
-            "expected non-trivial div/rem constants to call shared helper functions"
+            "expected variable div/rem to call shared helper functions"
         );
         assert!(
             program.func_blocks.iter().skip(1).any(|blocks| blocks
@@ -1668,7 +1703,7 @@ mod tests {
             id: bid(0),
             insts: vec![
                 Inst::Getchar,
-                Inst::I32Const(7),
+                Inst::Getchar,
                 Inst::Binary {
                     op: BinOp::DivU,
                     ty: ValType::I32,
@@ -1723,11 +1758,11 @@ mod tests {
     }
 
     #[test]
-    fn lower8_const_nontrivial_divrem_uses_shared_helpers() {
+    fn lower8_const_nontrivial_divrem_lowers_inline() {
         let module = mk_single_main_module(BasicBlock {
             id: bid(0),
             insts: vec![
-                Inst::I32Const(123456789),
+                Inst::Getchar,
                 Inst::I32Const(10),
                 Inst::Binary {
                     op: BinOp::DivU,
@@ -1736,7 +1771,7 @@ mod tests {
                     rhs: r(1),
                 },
                 Inst::Binary {
-                    op: BinOp::RemU,
+                    op: BinOp::RemS,
                     ty: ValType::I32,
                     lhs: r(0),
                     rhs: r(1),
@@ -1751,41 +1786,92 @@ mod tests {
             terminator: Terminator::Return(Some(r(4))),
         });
 
-        let program = lower8_module(&module, 65536).expect("lower8_module should succeed");
-        let main_blocks = &program.func_blocks[0];
-        assert_eq!(
-            program.func_blocks.len(),
-            5,
-            "helper function-id slots are preserved for div/rem helpers"
-        );
-        let div_u_entry = Pc::new(PC_STRIDE);
-        let rem_u_entry = Pc::new(2 * PC_STRIDE);
-
-        assert!(
-            main_blocks.iter().any(|bb| {
-                matches!(
-                    bb.terminator,
-                    Terminator8::CallSetup { callee_entry, .. }
-                        if callee_entry == CallTarget::Pc(div_u_entry)
-                            || callee_entry == CallTarget::Pc(rem_u_entry)
-                )
-            }),
-            "non-trivial constant div/rem should call shared div/rem helper functions"
-        );
-        assert!(
-            !main_blocks
+        for js_coprocessor in [false, true] {
+            let program =
+                lower8_module_with_config(&module, 65536, Lower8Config { js_coprocessor })
+                    .expect("lower8_module_with_config should succeed");
+            let main_blocks = &program.func_blocks[0];
+            assert!(
+                !main_blocks
+                    .iter()
+                    .any(|bb| matches!(bb.terminator, Terminator8::CallSetup { .. })),
+                "constant div/rem should not call a helper or builtin"
+            );
+            assert!(
+                program.func_blocks[1..].iter().all(|blocks| blocks.is_empty()),
+                "no div/rem helper should be emitted"
+            );
+            let kinds: Vec<_> = main_blocks
                 .iter()
-                .any(|bb| { matches!(bb.terminator, Terminator8::Trap(TrapCode::DivisionByZero)) }),
-            "divide-by-zero trap should be inside shared helper, not caller block"
-        );
-        assert!(
-            !program.func_blocks[1].is_empty() && !program.func_blocks[2].is_empty(),
-            "div_u/rem_u helpers should be emitted when referenced"
-        );
-        assert!(
-            program.func_blocks[3].is_empty() && program.func_blocks[4].is_empty(),
-            "unused signed helpers should not emit blocks"
-        );
+                .flat_map(|bb| &bb.insts)
+                .filter_map(|inst| match inst.kind {
+                    Inst8Kind::DivRem32ConstByte {
+                        denom,
+                        signed,
+                        rem,
+                        lane,
+                        ..
+                    } => Some((denom, signed, rem, lane)),
+                    _ => None,
+                })
+                .collect();
+            // u32::MAX / 10 fits in 29 bits, so all four quotient lanes are
+            // live; the signed remainder needs every lane for its sign.
+            for lane in 0..4 {
+                assert!(kinds.contains(&(10, false, false, lane)));
+                assert!(kinds.contains(&(10, true, true, lane)));
+            }
+        }
+    }
+
+    #[test]
+    fn lower8_const_divrem_folds_known_zero_lanes() {
+        let module = mk_single_main_module(BasicBlock {
+            id: bid(0),
+            insts: vec![
+                Inst::Getchar,
+                Inst::I32Const(0x0100_0001),
+                Inst::Binary {
+                    op: BinOp::DivU,
+                    ty: ValType::I32,
+                    lhs: r(0),
+                    rhs: r(1),
+                },
+            ],
+            terminator: Terminator::Return(Some(r(2))),
+        });
+        let program = lower8_module(&module, 65536).expect("lower8_module should succeed");
+        let lanes: Vec<u8> = program.func_blocks[0]
+            .iter()
+            .flat_map(|bb| &bb.insts)
+            .filter_map(|inst| match inst.kind {
+                Inst8Kind::DivRem32ConstByte { lane, .. } => Some(lane),
+                _ => None,
+            })
+            .collect();
+        // The quotient is at most 255: only lane 0 is computed.
+        assert_eq!(lanes, vec![0]);
+    }
+
+    #[test]
+    fn divrem32_const_byte_matches_wasm_semantics() {
+        use crate::ir8::divrem32_const_byte;
+        let check = |a: u32, d: u32| {
+            let lanes = |signed, rem| {
+                u32::from_le_bytes(std::array::from_fn(|l| {
+                    divrem32_const_byte(a, d, signed, rem, l as u8)
+                }))
+            };
+            assert_eq!(lanes(false, false), a / d);
+            assert_eq!(lanes(false, true), a % d);
+            assert_eq!(lanes(true, false), ((a as i32) / (d as i32)) as u32);
+            assert_eq!(lanes(true, true), ((a as i32) % (d as i32)) as u32);
+        };
+        for a in [0, 1, 9, 10, 255, 256, 0x7fff_ffff, 0x8000_0000, u32::MAX] {
+            for d in [3, 7, 10, 624, 0xffff_fff6, 0x8000_0000] {
+                check(a, d);
+            }
+        }
     }
 
     #[test]

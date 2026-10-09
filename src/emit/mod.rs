@@ -250,6 +250,7 @@ keep_pairs! {
         (FN_MLOAD, "FN_MLOAD"),
         (INDS_CSS, "INDS_CSS"),
         (SP_IND_CSS, "SP_INDICATOR_CSS"),
+        (G0_IND_CSS, "G0_INDICATOR_CSS"),
         (MEM_VIS_CSS, "MEM_VISUALIZER_CSS"),
         (CS_VIS_CSS, "CS_VISUALIZER_CSS"),
         (KB_CSS, "KB_CSS"),
@@ -264,6 +265,7 @@ keep_pairs! {
     html: [
         (INDS_HTML, "INDS_HTML"),
         (SP_IND_HTML, "SP_INDICATOR_HTML"),
+        (G0_IND_HTML, "G0_INDICATOR_HTML"),
         (MEM_VIS_HTML, "MEM_VISUALIZER_HTML"),
         (CS_VIS_HTML, "CS_VISUALIZER_HTML"),
         (KB_HTML, "KB_HTML"),
@@ -294,6 +296,7 @@ bitflags! {
         const CS_VISUALIZER = 1 << 18;
         const FN_GE = 1 << 19;
         const FN_INRANGE = 1 << 20;
+        const G0_INDICATOR = 1 << 22;
     }
 }
 
@@ -699,6 +702,7 @@ impl<'a> Emitter<'a> {
         let features = Self::compute_template_features(
             &usage,
             uses_callstack,
+            !program.global_init.is_empty(),
             config.visualizers(),
             max_mem_store_slots,
             max_mem_read_slots,
@@ -983,6 +987,7 @@ impl<'a> Emitter<'a> {
     fn compute_template_features(
         usage: &UsageScan,
         uses_callstack: bool,
+        has_globals: bool,
         visualizers: bool,
         max_mem_store_slots: usize,
         max_mem_read_slots: usize,
@@ -1030,6 +1035,9 @@ impl<'a> Emitter<'a> {
         }
         if usage.uses_ge {
             features |= TemplateFeatures::FN_GE;
+        }
+        if has_globals {
+            features |= TemplateFeatures::G0_INDICATOR;
         }
         if uses_callstack {
             features |= TemplateFeatures::SP_INDICATOR;
@@ -1147,6 +1155,14 @@ impl<'a> Emitter<'a> {
         section!(
             self.indicators && f.contains(TemplateFeatures::SP_INDICATOR),
             SP_IND_HTML
+        );
+        section!(
+            self.indicators && f.contains(TemplateFeatures::G0_INDICATOR),
+            G0_IND_CSS
+        );
+        section!(
+            self.indicators && f.contains(TemplateFeatures::G0_INDICATOR),
+            G0_IND_HTML
         );
         section!(f.contains(TemplateFeatures::MEM_VISUALIZER), MEM_VIS_CSS);
         section!(f.contains(TemplateFeatures::MEM_VISUALIZER), MEM_VIS_HTML);

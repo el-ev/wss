@@ -65,13 +65,11 @@ impl<'a> Emitter<'a> {
         Self::emit_chunked_read_function(out, "--read_m16", &mem_reads);
         if self.uses_mem_inc {
             // Increments merge in the cycle they execute, so they must read
-            // the same stage as the merge's `prev` (`--_1m*`): reading the
-            // execute snapshot (`--_0m*`) would form a dependency cycle.
-            let prev_reads = self
-                .mem_names
-                .iter()
-                .enumerate()
-                .map(|(i, name)| (i, format!("var({})", Self::shadow_name(1, name))))
+            // the same stage as the merge's `prev` (the store snapshot):
+            // reading the execute snapshot (`--_0m*`) would form a
+            // dependency cycle.
+            let prev_reads = (0..self.mem_names.len())
+                .map(|i| (i, self.mem_prev_expr(i)))
                 .collect::<Vec<_>>();
             Self::emit_chunked_read_function(out, "--read_m16p", &prev_reads);
         }
@@ -199,6 +197,17 @@ impl<'a> Emitter<'a> {
     pub(super) fn shadow_name(stage: u8, base: &str) -> String {
         let tail = base.strip_prefix("--").unwrap_or(base);
         format!("--_{}{}", stage, tail)
+    }
+
+    /// Memory cell `i` as of the last store: the store snapshot, or the
+    /// initial value before the first store. Read in place rather than via
+    /// a `--_1m*` alias: one declaration fewer per cell on every recalc.
+    pub(super) fn mem_prev_expr(&self, i: usize) -> String {
+        format!(
+            "var({}, {})",
+            Self::shadow_name(2, &self.mem_names[i]),
+            self.mem_init[i]
+        )
     }
 
     /// Emits `style(--i: A) or style(--i: B): V; style(--i: C): W; ...`,
@@ -482,6 +491,17 @@ impl<'a> Emitter<'a> {
         slots: &[String],
         pages: usize,
     ) {
+        for page in 0..pages {
+            let flag = format!("--{}{}", flag_prefix, page);
+            let _ = writeln!(
+                out,
+                " {}: if(style({}: 0):); {}: if(not style({}: 0):);",
+                Self::page_skip_merge_name(flag_prefix, page),
+                flag,
+                Self::page_skip_prev_name(flag_prefix, page),
+                flag
+            );
+        }
         if slots.is_empty() {
             for page in 0..pages {
                 let _ = writeln!(out, " --{}{}: 0;", flag_prefix, page);
@@ -510,6 +530,37 @@ impl<'a> Emitter<'a> {
                 flag_prefix, page, gate, conds
             );
         }
+    }
+
+    /// Unregistered selector that is empty while page `page` is clean and
+    /// guaranteed-invalid while it is dirty.
+    pub(super) fn page_skip_merge_name(flag_prefix: &str, page: usize) -> String {
+        format!("--{}s{}", flag_prefix, page)
+    }
+
+    /// The complement of [`Self::page_skip_merge_name`]: empty while dirty.
+    pub(super) fn page_skip_prev_name(flag_prefix: &str, page: usize) -> String {
+        format!("--{}k{}", flag_prefix, page)
+    }
+
+    /// `prev` while page `page` is clean, else `merged`, as two `var()`
+    /// fallbacks of which exactly one is substituted. Cheaper per cell than
+    /// `if(style(--flag: 0): prev; else: merged)`: Blink re-parses an `if()`
+    /// condition on every evaluation, while a `var()` hit just skips its
+    /// fallback.
+    pub(super) fn page_select_expr(
+        flag_prefix: &str,
+        page: usize,
+        prev: &str,
+        merged: &str,
+    ) -> String {
+        format!(
+            "var({}, {}) var({}, {})",
+            Self::page_skip_merge_name(flag_prefix, page),
+            merged,
+            Self::page_skip_prev_name(flag_prefix, page),
+            prev
+        )
     }
 
     /// Byte-wise merge of a memory cell against the active store slots: each

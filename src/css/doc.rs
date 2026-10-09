@@ -399,7 +399,7 @@ use std::collections::HashMap;
 fn visit_value(node: &Node, visit: &mut impl FnMut(&Node)) {
     visit(node);
     match node {
-        Node::Int(_) | Node::Raw(_) | Node::Style { .. } => {}
+        Node::Int(_) | Node::Raw(_) | Node::Style { .. } | Node::Invalid => {}
         Node::Var { fallback, .. } => {
             if let Some(fb) = fallback {
                 visit_value(fb, visit);
@@ -443,7 +443,7 @@ fn visit_value(node: &Node, visit: &mut impl FnMut(&Node)) {
 pub(super) fn visit_value_mut(node: &mut Node, visit: &mut impl FnMut(&mut Node)) {
     visit(node);
     match node {
-        Node::Int(_) | Node::Raw(_) | Node::Style { .. } => {}
+        Node::Int(_) | Node::Raw(_) | Node::Style { .. } | Node::Invalid => {}
         Node::Var { fallback, .. } => {
             if let Some(fb) = fallback {
                 visit_value_mut(fb, visit);
@@ -780,7 +780,7 @@ fn consider_candidate(
 fn value_references_any(node: &Node, names: &std::collections::HashSet<String>) -> bool {
     match node {
         Node::Var { name, .. } => names.contains(name.strip_prefix("--").unwrap_or(name)),
-        Node::Int(_) | Node::Raw(_) | Node::Style { .. } => false,
+        Node::Int(_) | Node::Raw(_) | Node::Style { .. } | Node::Invalid => false,
         Node::Calc(inner) | Node::Paren(inner) => value_references_any(inner, names),
         Node::MathFn { args, .. } | Node::Fn { args, .. } => {
             args.iter().any(|a| value_references_any(a, names))
@@ -883,7 +883,7 @@ fn substitute_in_node(
                 substitute_in_node(c, candidates, substituted);
             }
         }
-        Node::Int(_) | Node::Raw(_) | Node::Style { .. } => {}
+        Node::Int(_) | Node::Raw(_) | Node::Style { .. } | Node::Invalid => {}
     }
 }
 

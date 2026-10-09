@@ -491,6 +491,9 @@ fn emit_html_callstack_visualizer_tracks_read_and_write_slots() {
     assert!(html.contains("--csh-0"));
     assert!(html.contains("#ind-sp::before"));
     assert!(html.contains("id=\"ind-sp\""));
+    // No globals: the G0 indicator would read undefined `--g0_*` lanes.
+    assert!(!html.contains("#ind-g0::before"));
+    assert!(!html.contains("id=\"ind-g0\""));
     assert!(
         html.contains("@function --csmerge(--idx <integer>, --prev <integer>) returns <integer>")
     );
@@ -499,8 +502,10 @@ fn emit_html_callstack_visualizer_tracks_read_and_write_slots() {
     assert!(!html.contains("--csmerge_slot("));
     assert!(!html.contains("--csw_active:"));
     assert!(html.contains("@property --cswdp0 { syntax: \"<integer>\";"));
+    assert!(html.contains("--cswdps0: if(style(--cswdp0: 0): );"));
+    assert!(html.contains("--cswdpk0: if(not style(--cswdp0: 0): );"));
     assert!(html.contains(&format!(
-        "{}: if(style(--cswdp0: 0): var({}); else: --csmerge(0, var({})));",
+        "{}: var(--cswdps0, --csmerge(0, var({}))) var(--cswdpk0, var({}));",
         cs0_name, cs0_shadow, cs0_shadow
     )));
 }
@@ -848,6 +853,8 @@ fn emit_html_globals_emit_all_lanes_on_single_line_per_global() {
         global_init: vec![0x1122_3344],
     };
     let html = emit_program(&program).expect("emit should succeed");
+    assert!(html.contains("#ind-g0::before"));
+    assert!(html.contains("id=\"ind-g0\""));
 
     let g0_lane0 = Emitter::global_lane_name(0, 0);
     let g0_lane1 = Emitter::global_lane_name(0, 1);
@@ -1042,7 +1049,7 @@ fn emit_html_memory_store_merge_expr_flattens_slot_conditions() {
         0,
         Emitter::cell_offset_hex_width((MEMORY_BYTES_CAP as usize).div_ceil(2)),
     );
-    let m0_shadow = Emitter::shadow_name(1, &m0_name);
+    let m0_prev = format!("var({}, 0)", Emitter::shadow_name(2, &m0_name));
     assert!(!html.contains("@function --mmerge_byte("));
     // The merge dispatches on each slot's written byte address instead of
     // multiplying out per-slot equality tests.
@@ -1058,10 +1065,14 @@ fn emit_html_memory_store_merge_expr_flattens_slot_conditions() {
     assert!(html.contains("--mwdp0: if(style(--mwdp_any: 0): 0; else: if("));
     assert!(html.contains("@property --mwdp0 { syntax: \"<integer>\";"));
     assert!(!html.contains("--mw_active:"));
+    assert!(html.contains("--mwdps0: if(style(--mwdp0: 0): );"));
+    assert!(html.contains("--mwdpk0: if(not style(--mwdp0: 0): );"));
     assert!(html.contains(&format!(
-        "{}: if(style(--mwdp0: 0): var({}); else: --mmerge16(0, 1, var({})));",
-        m0_name, m0_shadow, m0_shadow
+        "{}: var(--mwdps0, --mmerge16(0, 1, {})) var(--mwdpk0, {});",
+        m0_name, m0_prev, m0_prev
     )));
+    // No `--_1m*` alias layer: cells read the store snapshot directly.
+    assert!(!html.contains(&Emitter::shadow_name(1, &m0_name)));
 }
 
 #[test]

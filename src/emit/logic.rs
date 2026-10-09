@@ -111,6 +111,22 @@ impl<'a> Emitter<'a> {
                             );
                         }
                     }
+                    Inst8Kind::DivRem32ConstByte {
+                        lhs,
+                        denom,
+                        signed,
+                        rem,
+                        lane,
+                    } => {
+                        if let Some(dst) = op.dst {
+                            reg_now.insert(
+                                dst.expect_vreg(),
+                                Self::divrem32_const_byte_expr(
+                                    &reg_now, *lhs, *denom, *signed, *rem, *lane,
+                                ),
+                            );
+                        }
+                    }
                     Inst8Kind::Add32Byte { lhs, rhs, lane } => {
                         if let Some(dst) = op.dst {
                             reg_now.insert(
@@ -834,24 +850,6 @@ impl<'a> Emitter<'a> {
             }
             let _ = writeln!(out, "{}", g_shadow_line);
         }
-        let mut mem_shadow_line = String::new();
-        for (i, (name, &init)) in self.mem_names.iter().zip(&self.mem_init).enumerate() {
-            let s = Self::shadow_name(2, name);
-            let _ = write!(
-                mem_shadow_line,
-                " {}: var({}, {});",
-                Self::shadow_name(1, name),
-                s,
-                init
-            );
-            if (i + 1) % 8 == 0 {
-                let _ = writeln!(out, "{}", mem_shadow_line);
-                mem_shadow_line.clear();
-            }
-        }
-        if !mem_shadow_line.is_empty() {
-            let _ = writeln!(out, "{}", mem_shadow_line);
-        }
         if self.uses_exc_payload {
             for lane in 0..4u8 {
                 let _ = writeln!(
@@ -1045,7 +1043,7 @@ impl<'a> Emitter<'a> {
 
         let mut mem_line = String::new();
         for (i, name) in self.mem_names.iter().enumerate() {
-            let prev = format!("var({})", Self::shadow_name(1, name));
+            let prev = self.mem_prev_expr(i);
             let merged = if self.max_mem_store_slots == 0 {
                 prev.clone()
             } else {
@@ -1055,7 +1053,7 @@ impl<'a> Emitter<'a> {
             let expr = if self.max_mem_store_slots == 0 {
                 prev.clone()
             } else {
-                format!("if(style(--mwdp{}: 0): {}; else: {})", page, prev, merged)
+                Self::page_select_expr("mwdp", page, &prev, &merged)
             };
             let _ = write!(mem_line, " {}: {};", name, expr);
             if (i + 1) % 8 == 0 {
@@ -1080,7 +1078,7 @@ impl<'a> Emitter<'a> {
                     // implies csw_active = 1; so the outer check is redundant.
                     // Test against 0 (no store this cycle) so the dirty-page
                     // sum can be emitted without a `min(1, …)` clamp.
-                    format!("if(style(--cswdp{}: 0): {}; else: {})", page, prev, merged)
+                    Self::page_select_expr("cswdp", page, &prev, &merged)
                 };
                 let _ = write!(cs_line, " {}: {};", name, expr);
                 if (i + 1) % 8 == 0 {
@@ -2104,6 +2102,59 @@ impl<'a> Emitter<'a> {
                 format!("round(down, calc({} / 16777216))", p(&low))
             }
         }
+    }
+
+    /// Byte `lane` of a word divided by a constant (see
+    /// [`Inst8Kind::DivRem32ConstByte`]). The integer result is formed first,
+    /// in one `calc()` over the exact word value: a quotient below 2^32 is at
+    /// least 2^-33 (relative) away from the next integer, far above the
+    /// `double` rounding error, so `round()` of the division is exact.
+    pub(super) fn divrem32_const_byte_expr(
+        now: &HashMap<u16, String>,
+        lhs: Word,
+        denom: u32,
+        signed: bool,
+        rem: bool,
+        lane: u8,
+    ) -> String {
+        let n = Self::word_value_expr(now, lhs, signed);
+        let p = |x: &str| Self::paren_if_needed(x);
+        // Upper bound on the unsigned result, to drop a redundant final `mod`.
+        let (value, max) = if signed {
+            // `trunc(n / d) = trunc(-n / |d|)`; `rem` takes the dividend's sign.
+            let d = (denom as i32).unsigned_abs();
+            let value = if rem {
+                format!("rem({}, {})", n, d)
+            } else if (denom as i32) < 0 {
+                format!("round(to-zero, calc((0 - {}) / {}))", p(&n), d)
+            } else {
+                format!("round(to-zero, calc({} / {}))", p(&n), d)
+            };
+            (value, u64::from(u32::MAX))
+        } else if rem {
+            (format!("mod({}, {})", n, denom), u64::from(denom - 1))
+        } else {
+            // The division by `256^lane` folds into the divisor: lanes whose
+            // scaled divisor exceeds `u32::MAX` are zero and were folded away
+            // at lowering, so the same exactness bound holds.
+            let scaled = u64::from(denom) << (8 * u32::from(lane));
+            let value = format!("round(down, calc({} / {}))", p(&n), scaled);
+            return Self::fold_mod_if(value, (u64::from(u32::MAX) / scaled) > 255);
+        };
+        let shifted = if lane == 0 {
+            value
+        } else {
+            format!(
+                "round(down, calc({} / {}))",
+                p(&value),
+                1u64 << (8 * u32::from(lane))
+            )
+        };
+        Self::fold_mod_if(shifted, (max >> (8 * u32::from(lane))) > 255 || signed)
+    }
+
+    fn fold_mod_if(value: String, wrap: bool) -> String {
+        if wrap { Self::fold_mod(&value, 256) } else { value }
     }
 
     pub(super) fn add32_byte_expr(

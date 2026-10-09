@@ -869,6 +869,29 @@
     }
   },
   {
+    "id": "divrem_const_i32",
+    "source": "tests/cases/divrem_const_i32.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0x30303586",
+      "rendered_includes": [
+        "0x30303586"
+      ]
+    }
+  },
+  {
+    "id": "divrem_const_i32_coprocessor",
+    "source": "tests/cases/divrem_const_i32.c",
+    "js_coprocessor": true,
+    "expect": {
+      "pc": -1,
+      "ra": "0x30303586",
+      "rendered_includes": [
+        "0x30303586"
+      ]
+    }
+  },
+  {
     "id": "division_large_unsigned",
     "source": "tests/cases/division_large_unsigned.c",
     "tags": [

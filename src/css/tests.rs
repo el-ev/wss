@@ -473,3 +473,14 @@ fn fold_idempotent_at_fixpoint() {
     assert_eq!(n1, n2);
     assert_eq!(n1.to_css(), "calc(var(--a) + 1)");
 }
+
+#[test]
+fn if_without_else_stays_guaranteed_invalid() {
+    // A missing `else` is the guaranteed-invalid value, not an empty one:
+    // folding must not collapse the empty arm into the default.
+    let n = super::fold(parse("if(style(--f: 0): )"));
+    assert_eq!(n.to_css(), "if(style(--f: 0): )");
+    let n = super::fold(parse("if(style(--f: 0): ; else: )"));
+    assert_eq!(n.to_css(), "");
+    idempotent("if(style(--f: 0): 1)");
+}
