@@ -39,7 +39,7 @@ int _start() {
 }
 ```
 
-Use any WebAssembly-capable compiler. Export `_start` as the entry point and (optionally) import `putchar`, `getchar`, and `rand` for console I/O and randomness.
+Use any WebAssembly-capable compiler. Export `_start` as the entry point and (optionally) import `putchar`, `getchar`, and `rand` for console I/O and randomness. For interactive programs, `int try_getchar(void)` is a non-blocking `getchar`: it returns the held key, or `-1` if none is held.
 
 ```sh
 clang \

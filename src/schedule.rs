@@ -143,7 +143,7 @@ pub fn schedule(ir8: &mut Ir8Program) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn schedule_block_ops(insts: &[Inst8]) -> Vec<Vec<Inst8>> {
+pub(crate) fn schedule_block_ops(insts: &[Inst8]) -> Vec<Vec<Inst8>> {
     if insts.is_empty() {
         return Vec::new();
     }
@@ -233,7 +233,10 @@ fn inst_complexity(kind: &Inst8Kind) -> usize {
         | Inst8Kind::CsLoadPc { .. }
         | Inst8Kind::CsAlloc(_)
         | Inst8Kind::CsFree(_) => 2,
-        Inst8Kind::Getchar | Inst8Kind::Putchar(_) | Inst8Kind::PutcharIf { .. } => 2,
+        Inst8Kind::Getchar
+        | Inst8Kind::TryGetchar
+        | Inst8Kind::Putchar(_)
+        | Inst8Kind::PutcharIf { .. } => 2,
         Inst8Kind::RandomByte { .. } => 1,
         Inst8Kind::ExcFlagSet { .. }
         | Inst8Kind::ExcFlagGet
@@ -481,7 +484,10 @@ fn cs_access(kind: &Inst8Kind) -> Option<CsAccess> {
 fn is_io_op(kind: &Inst8Kind) -> bool {
     matches!(
         kind,
-        Inst8Kind::Getchar | Inst8Kind::Putchar(_) | Inst8Kind::PutcharIf { .. }
+        Inst8Kind::Getchar
+            | Inst8Kind::TryGetchar
+            | Inst8Kind::Putchar(_)
+            | Inst8Kind::PutcharIf { .. }
     )
 }
 

@@ -434,6 +434,71 @@ Please try an up-to-date Chromium-based browser.
     }
     /*__WSS_KEEP_DEBUGGER_RNG_END__*/
 
+    const KB_SHIFT_MAP = {
+        96: 126, 49: 33, 50: 64, 51: 35, 52: 36, 53: 37, 54: 94, 55: 38,
+        56: 42, 57: 40, 48: 41, 45: 95, 61: 43, 91: 123, 93: 125, 92: 124,
+        59: 58, 39: 34, 44: 60, 46: 62, 47: 63,
+    };
+    function decodeVirtualKey(dataKey, shifted) {
+        if (!shifted) return dataKey;
+        if (dataKey >= 97 && dataKey <= 122) return dataKey - 32;
+        return KB_SHIFT_MAP[dataKey] != null ? KB_SHIFT_MAP[dataKey] : dataKey;
+    }
+
+    // A click on an on-screen key is held until the program has read the
+    // keyboard (an instruction at a `--kb_read` PC has run) and at least
+    // `minPressTicks` instructions have passed, then `--kb` goes back to the
+    // CSS keyboard, which reports a key only while it is held. At a few
+    // instructions per second a quick click can otherwise begin and end
+    // between two frames, or between two of a program's polls, and be lost;
+    // holding it much longer would turn one click into several presses.
+    const minPressTicks = 8;
+    const maxPressTicks = 1024; // a press nothing reads is dropped
+    let pressKey = -1;
+    let pressAge = -1;
+    let pressRead = false;
+    let pressOverride = false;
+    {
+        const kbEl = document.querySelector(".kb");
+        const shiftToggle = document.getElementById("shift-toggle");
+        if (kbEl) {
+            kbEl.addEventListener("pointerdown", (event) => {
+                // Stepping in the debugger has its own sticky key.
+                if (paused || !(event.target instanceof Element)) return;
+                const keyEl = event.target.closest(".key[data-key]");
+                if (!keyEl) return;
+                const dataKey = Number.parseInt(keyEl.getAttribute("data-key"), 10);
+                if (!Number.isFinite(dataKey)) return;
+                pressKey = decodeVirtualKey(dataKey, !!(shiftToggle && shiftToggle.checked));
+                pressAge = 0;
+                pressRead = false;
+            });
+        }
+    }
+
+    // Before each instruction: hold a recent click until it has been read.
+    function applyPressLatch() {
+        const holding =
+            pressAge >= 0 &&
+            pressAge < maxPressTicks &&
+            !(pressRead && pressAge >= minPressTicks);
+        if (holding) {
+            clkEl.style.setProperty("--kb", String(pressKey), "important");
+            pressOverride = true;
+            const reads = getComputedStyle(terminalEl).getPropertyValue("--kb_read").trim();
+            if (reads === "1" || reads === "") {
+                pressRead = true;
+            }
+            pressAge += 1;
+        } else {
+            pressAge = -1;
+            if (pressOverride) {
+                clkEl.style.removeProperty("--kb");
+                pressOverride = false;
+            }
+        }
+    }
+
     /*__WSS_KEEP_JS_CLOCK_DEBUGGER_RUNTIME_START__*/
     function setStickyKey(code) {
         debugStickyKey = code;
@@ -448,17 +513,6 @@ Please try an up-to-date Chromium-based browser.
                     ? "none"
                     : `${code} (${code >= 0x20 && code < 0x7f ? `'${String.fromCharCode(code)}'` : "ctrl"})`;
         }
-    }
-
-    const KB_SHIFT_MAP = {
-        96: 126, 49: 33, 50: 64, 51: 35, 52: 36, 53: 37, 54: 94, 55: 38,
-        56: 42, 57: 40, 48: 41, 45: 95, 61: 43, 91: 123, 93: 125, 92: 124,
-        59: 58, 39: 34, 44: 60, 46: 62, 47: 63,
-    };
-    function decodeVirtualKey(dataKey, shifted) {
-        if (!shifted) return dataKey;
-        if (dataKey >= 97 && dataKey <= 122) return dataKey - 32;
-        return KB_SHIFT_MAP[dataKey] != null ? KB_SHIFT_MAP[dataKey] : dataKey;
     }
 
     function annotateRegs(line, style) {
@@ -617,6 +671,7 @@ Please try an up-to-date Chromium-based browser.
     /*__WSS_KEEP_JS_COPROCESSOR_RUNTIME_END__*/
 
     function tickSingleInstruction() {
+        applyPressLatch();
         for (let i = 0; i < phasesPerInstruction; i++) {
             const phase = clock;
             clkEl.style.setProperty("--clk", String(phase), "important");

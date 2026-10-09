@@ -363,7 +363,10 @@ impl Inst8 {
 
     pub fn uses(&self) -> Vec<Val8> {
         match &self.kind {
-            Inst8Kind::Getchar | Inst8Kind::RandomByte { .. } | Inst8Kind::GlobalGetByte { .. } => {
+            Inst8Kind::Getchar
+            | Inst8Kind::TryGetchar
+            | Inst8Kind::RandomByte { .. }
+            | Inst8Kind::GlobalGetByte { .. } => {
                 vec![]
             }
             Inst8Kind::Copy(s) | Inst8Kind::BoolNot(s) | Inst8Kind::Putchar(s) => {
@@ -552,7 +555,10 @@ pub enum Inst8Kind {
         delta: u32,
     },
 
+    /// Blocking key read: stalls the cycle until a key is held.
     Getchar,
+    /// Non-blocking key read: the held key's byte, or 0xff when none.
+    TryGetchar,
     Putchar(Val8),
     /// Append `val` to the framebuffer only when `enable` is non-zero.
     /// Created by opt8 when speculatively hoisting a one-putchar arm of a
@@ -814,12 +820,14 @@ pub struct BasicBlock8 {
     pub terminator: Terminator8,
 }
 
+#[derive(Clone)]
 pub struct Cycle {
     pub pc: Pc,
     pub ops: Vec<Inst8>,
     pub terminator: Terminator8,
 }
 
+#[derive(Clone)]
 pub struct Ir8Program {
     pub entry_func: u32,
     pub num_vregs: u16,

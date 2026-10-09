@@ -218,6 +218,7 @@ fn remap_inst_refs(inst: &mut Inst, remap: &HashMap<IrNode, IrNode>) -> anyhow::
         | Inst::MemorySize
         | Inst::TableSize(_)
         | Inst::Getchar
+        | Inst::TryGetchar
         | Inst::Random
         | Inst::Drop
         | Inst::ExcSet { .. }
@@ -471,6 +472,8 @@ fn lower_node(node: &Node, ctx: &mut LowerCtx, ref_map: &[IrNode]) -> anyhow::Re
                 ctx.builder.push(Inst::Putchar(ref_map[args[0].index()]));
             } else if Some(*func) == ctx.module.getchar_import() {
                 ctx.builder.push(Inst::Getchar);
+            } else if Some(*func) == ctx.module.try_getchar_import() {
+                ctx.builder.push(Inst::TryGetchar);
             } else if Some(*func) == ctx.module.rand_import() {
                 ctx.builder.push(Inst::Random);
             } else {

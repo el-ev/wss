@@ -53,9 +53,9 @@ fn validate_tables(module: &ModuleInfo) -> anyhow::Result<()> {
 }
 
 fn validate_imports_exports(module: &ModuleInfo) -> anyhow::Result<()> {
-    if module.num_imported_funcs() > 3 {
+    if module.num_imported_funcs() > 4 {
         bail!(
-            "expected at most 3 imported functions (getchar, putchar, rand), got {}",
+            "expected at most 4 imported functions (getchar, try_getchar, putchar, rand), got {}",
             module.num_imported_funcs()
         );
     }
@@ -71,6 +71,12 @@ fn validate_imports_exports(module: &ModuleInfo) -> anyhow::Result<()> {
         // TODO(i64): imported runtime ABI is currently fixed to i32 signatures.
         if !f.params().is_empty() || f.results() != [ValType::I32] {
             bail!("getchar must have signature () -> i32");
+        }
+    }
+    if let Some(idx) = module.try_getchar_import() {
+        let f = func_signature(module, idx)?;
+        if !f.params().is_empty() || f.results() != [ValType::I32] {
+            bail!("try_getchar must have signature () -> i32");
         }
     }
     if let Some(idx) = module.rand_import() {

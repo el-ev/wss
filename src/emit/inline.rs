@@ -126,7 +126,7 @@ fn merge_refs(a: &HashMap<String, usize>, b: &HashMap<String, usize>) -> HashMap
 /// `style(...)` from CSS but ARE read by the JS coprocessor / debugger
 /// runtime in base.html. They MUST survive DCE.
 const JS_READ_PROPERTIES: &[&str] = &[
-    "_1pc", "pc", "cop_op", "cop_a0", "cop_a1", "cop_a2", "cop_a3", "cop_b0", "cop_b1", "cop_b2",
+    "_1pc", "pc", "kb_read", "cop_op", "cop_a0", "cop_a1", "cop_a2", "cop_a3", "cop_b0", "cop_b1", "cop_b2",
     "cop_b3",
 ];
 

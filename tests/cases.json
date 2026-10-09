@@ -307,6 +307,33 @@
     }
   },
   {
+    "id": "try_getchar_none",
+    "source": "tests/cases/try_getchar_none.c",
+    "expect": {
+      "pc": -1,
+      "ra": "0xffffffff",
+      "rendered_includes": [
+        "-",
+        "Program exited with code",
+        "0xffffffff"
+      ]
+    }
+  },
+  {
+    "id": "try_getchar_drain",
+    "source": "tests/cases/try_getchar_drain.c",
+    "console_input": "hi!",
+    "expect": {
+      "pc": -1,
+      "ra": "0x00000368",
+      "rendered_includes": [
+        "hi!",
+        "Program exited with code",
+        "0x00000368"
+      ]
+    }
+  },
+  {
     "id": "arithmetic_basic",
     "source": "tests/cases/arithmetic_basic.c",
     "expect": {

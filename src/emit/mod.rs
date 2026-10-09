@@ -950,7 +950,7 @@ impl<'a> Emitter<'a> {
         for cycle in &program.cycles {
             for op in &cycle.ops {
                 match &op.kind {
-                    Inst8Kind::Getchar => {
+                    Inst8Kind::Getchar | Inst8Kind::TryGetchar => {
                         usage.uses_getchar = true;
                         usage.uses_ne = true;
                     }

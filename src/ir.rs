@@ -126,6 +126,8 @@ pub enum Inst {
     },
     Putchar(IrNode),
     Getchar,
+    /// Non-blocking getchar: the pressed key, or -1 when none is held.
+    TryGetchar,
     /// Read one 32-bit sample from the animation-driven `rand` device.
     Random,
     Drop,

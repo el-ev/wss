@@ -5,6 +5,7 @@ enum IndirectTargetKind {
     Direct(u32),
     Putchar,
     Getchar,
+    TryGetchar,
     Random,
 }
 
@@ -172,6 +173,12 @@ fn emit_indirect_target_case(
             let ch = b.alloc_reg();
             b.emit(Inst8::with_dst(ch, Inst8Kind::Getchar));
             b.set_ret_from_byte(ch);
+            finish_indirect_case(b, emit_ctx)?;
+        }
+        IndirectTargetKind::TryGetchar => {
+            let word = b.emit_try_getchar();
+            b.copy_word(crate::ir8::RET_LO, word);
+            b.copy_word(crate::ir8::RET_HI, crate::ir8::Word::from_u32_imm(0));
             finish_indirect_case(b, emit_ctx)?;
         }
         IndirectTargetKind::Random => {
@@ -431,6 +438,9 @@ fn resolve_indirect_target(
     }
     if Some(func_index) == module.getchar_import() {
         return Some(IndirectTargetKind::Getchar);
+    }
+    if Some(func_index) == module.try_getchar_import() {
+        return Some(IndirectTargetKind::TryGetchar);
     }
     if Some(func_index) == module.rand_import() {
         return Some(IndirectTargetKind::Random);

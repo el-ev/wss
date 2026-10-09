@@ -35,6 +35,11 @@ pub(super) struct BlockFrame {
     pub(super) insts: Vec<Node>,
     pub(super) unreachable: bool,
     pub(super) dummy_refs: Vec<TypedAstRef>,
+    /// Locals holding the enclosing frame's operand stack, spilled on entry
+    /// and pushed back onto it (as `local.get`s in the parent) after `end`.
+    /// The block itself starts on an empty stack: wasm validation keeps it
+    /// from touching values below its own frame.
+    pub(super) saved_temps: Vec<u32>,
 }
 
 impl BlockFrame {
@@ -42,6 +47,16 @@ impl BlockFrame {
         let r = AstRef::new(self.insts.len());
         self.insts.push(inst);
         r
+    }
+
+    /// Code after a branch, return, throw or `unreachable` is
+    /// stack-polymorphic: whatever the frame left on its stack is discarded.
+    /// Keeping it would leak refs into the next frame that materializes the
+    /// stack, where they index the wrong instruction list.
+    pub(super) fn set_unreachable(&mut self, ref_stack: &mut Vec<TypedAstRef>) {
+        self.ensure_dummy(ValType::I32);
+        self.unreachable = true;
+        ref_stack.clear();
     }
 
     pub(super) fn ensure_dummy(&mut self, ty: ValType) -> TypedAstRef {

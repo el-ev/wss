@@ -111,11 +111,15 @@ fn emit_call(
     }
 }
 
-fn emit_return_call(frame: &mut BlockFrame, call: Node, has_result: bool) {
+fn emit_return_call(
+    frame: &mut BlockFrame,
+    ref_stack: &mut Vec<TypedAstRef>,
+    call: Node,
+    has_result: bool,
+) {
     let call_ref = frame.emit(call);
     frame.emit(Node::Return(has_result.then_some(call_ref)));
-    frame.ensure_dummy(ValType::I32);
-    frame.unreachable = true;
+    frame.set_unreachable(ref_stack);
 }
 
 fn local_type(locals: &[ValType], local_index: u32, op_name: &str) -> anyhow::Result<ValType> {
@@ -465,6 +469,7 @@ fn parse_function(
         temp_locals: Vec::new(),
         unreachable: false,
         dummy_refs: Vec::new(),
+        saved_temps: Vec::new(),
     }];
     let mut ops_reader = body.get_operators_reader()?;
 
@@ -978,7 +983,8 @@ fn parse_function(
                     locals.push(return_type);
                     temp_locals.push((locals.len() - 1) as u32);
                 }
-                let temps = materialize_ref_stack(&mut ref_stack, &mut block_stack, &mut locals)?;
+                let saved_temps =
+                    materialize_ref_stack(&mut ref_stack, &mut block_stack, &mut locals)?;
                 block_stack.push(BlockFrame {
                     kind: block_kind,
                     return_types: return_type.into_iter().collect(),
@@ -986,12 +992,8 @@ fn parse_function(
                     insts: Vec::new(),
                     unreachable: false,
                     dummy_refs: Vec::new(),
+                    saved_temps,
                 });
-                for temp in temps.iter() {
-                    let ty = local_type(&locals, *temp, "block temp local")?;
-                    let r = current_frame_mut(&mut block_stack)?.emit(Node::LocalGet(*temp));
-                    ref_stack.push(TypedAstRef::new(r, ty));
-                }
             }
             Operator::Else => {
                 let mut if_frame = block_stack.pop().context("Else without matching If")?;
@@ -1004,6 +1006,7 @@ fn parse_function(
                         .context("if then-branch end: stack underflow")?;
                     if_frame.emit(Node::LocalSet(temp_index, last_ref.value));
                 }
+                ref_stack.clear();
 
                 if let BlockKind::If { cond_ref } = if_frame.kind {
                     block_stack.push(BlockFrame {
@@ -1016,6 +1019,7 @@ fn parse_function(
                         insts: Vec::new(),
                         unreachable: false,
                         dummy_refs: Vec::new(),
+                        saved_temps: if_frame.saved_temps,
                     });
                 } else {
                     bail!("Else without If");
@@ -1050,7 +1054,9 @@ fn parse_function(
                         return Ok(AstFuncBody::new(locals, frame.insts));
                     }
                     _ => {
+                        ref_stack.clear();
                         let temp_locals = frame.temp_locals;
+                        let saved_temps = frame.saved_temps;
                         let result_inst = match frame.kind {
                             BlockKind::Function => {
                                 bail!("ice: unexpected nested function frame")
@@ -1107,7 +1113,7 @@ fn parse_function(
                         };
                         let parent = current_frame_mut(&mut block_stack)?;
                         parent.emit(result_inst);
-                        for &temp_index in temp_locals.iter() {
+                        for &temp_index in saved_temps.iter().chain(&temp_locals) {
                             let ty = local_type(&locals, temp_index, "block temp local")?;
                             let r = parent.emit(Node::LocalGet(temp_index));
                             ref_stack.push(TypedAstRef::new(r, ty));
@@ -1128,8 +1134,7 @@ fn parse_function(
                 } else {
                     None
                 };
-                frame.ensure_dummy(ValType::I32);
-                frame.unreachable = true;
+                frame.set_unreachable(&mut ref_stack);
                 frame.emit(Node::Return(return_ref));
             }
             Operator::Br { relative_depth } => {
@@ -1141,8 +1146,7 @@ fn parse_function(
                     let last_ref = current.pop_ref_or_dummy(&mut ref_stack, ty)?;
                     current.emit(Node::LocalSet(temp_index, last_ref.value));
                 }
-                current.ensure_dummy(ValType::I32);
-                current.unreachable = true;
+                current.set_unreachable(&mut ref_stack);
                 current.emit(Node::Br(relative_depth));
             }
 
@@ -1257,13 +1261,11 @@ fn parse_function(
                 }
 
                 current.emit(Node::BrTable(target_depths, default_depth, index_ref));
-                current.ensure_dummy(ValType::I32);
-                current.unreachable = true;
+                current.set_unreachable(&mut ref_stack);
             }
             Operator::Unreachable => {
                 let frame = current_frame_mut(&mut block_stack)?;
-                frame.ensure_dummy(ValType::I32);
-                frame.unreachable = true;
+                frame.set_unreachable(&mut ref_stack);
                 frame.emit(Node::Unreachable);
             }
             Operator::Nop => {}
@@ -1315,6 +1317,7 @@ fn parse_function(
                 let current_block = current_frame_mut(&mut block_stack)?;
                 emit_return_call(
                     current_block,
+                    &mut ref_stack,
                     Node::Call(function_index, args),
                     result_ty.is_some(),
                 );
@@ -1338,6 +1341,7 @@ fn parse_function(
                 let current_block = current_frame_mut(&mut block_stack)?;
                 emit_return_call(
                     current_block,
+                    &mut ref_stack,
                     Node::CallIndirect {
                         type_index,
                         table_index,
@@ -1360,6 +1364,7 @@ fn parse_function(
                 ref_stack.clear();
                 let return_types = frame.return_types;
                 let temp_locals = frame.temp_locals;
+                let saved_temps = frame.saved_temps;
                 let segment_insts = frame.insts;
                 let (try_insts, prior_catches) = match frame.kind {
                     BlockKind::Try => (segment_insts, Vec::new()),
@@ -1394,6 +1399,7 @@ fn parse_function(
                     insts: Vec::new(),
                     unreachable: false,
                     dummy_refs: Vec::new(),
+                    saved_temps,
                 });
                 if tag_has_i32_payload(module, tag_index)? {
                     let frame = current_frame_mut(&mut block_stack)?;
@@ -1414,6 +1420,7 @@ fn parse_function(
                 ref_stack.clear();
                 let return_types = frame.return_types;
                 let temp_locals = frame.temp_locals;
+                let saved_temps = frame.saved_temps;
                 let segment_insts = frame.insts;
                 let (try_insts, prior_catches) = match frame.kind {
                     BlockKind::Try => (segment_insts, Vec::new()),
@@ -1448,6 +1455,7 @@ fn parse_function(
                     insts: Vec::new(),
                     unreachable: false,
                     dummy_refs: Vec::new(),
+                    saved_temps,
                 });
             }
             Operator::Delegate { relative_depth } => {
@@ -1460,9 +1468,11 @@ fn parse_function(
                         .context("Delegate: stack underflow at try body end")?;
                     frame.emit(Node::LocalSet(temp_index, last_ref.value));
                 }
+                ref_stack.clear();
                 match frame.kind {
                     BlockKind::Try => {
                         let temp_locals = frame.temp_locals;
+                        let saved_temps = frame.saved_temps;
                         let result_inst = Node::Try {
                             body: frame.insts,
                             catches: Vec::new(),
@@ -1471,7 +1481,7 @@ fn parse_function(
                         };
                         let parent = current_frame_mut(&mut block_stack)?;
                         parent.emit(result_inst);
-                        for &temp_index in temp_locals.iter() {
+                        for &temp_index in saved_temps.iter().chain(&temp_locals) {
                             let ty = local_type(&locals, temp_index, "Delegate temp local")?;
                             let r = parent.emit(Node::LocalGet(temp_index));
                             ref_stack.push(TypedAstRef::new(r, ty));
@@ -1489,8 +1499,7 @@ fn parse_function(
                     None
                 };
                 let frame = current_frame_mut(&mut block_stack)?;
-                frame.ensure_dummy(ValType::I32);
-                frame.unreachable = true;
+                frame.set_unreachable(&mut ref_stack);
                 frame.emit(Node::Throw {
                     tag: tag_index,
                     arg,
@@ -1498,8 +1507,7 @@ fn parse_function(
             }
             Operator::Rethrow { relative_depth } => {
                 let frame = current_frame_mut(&mut block_stack)?;
-                frame.ensure_dummy(ValType::I32);
-                frame.unreachable = true;
+                frame.set_unreachable(&mut ref_stack);
                 frame.emit(Node::Rethrow(relative_depth));
             }
             _ => bail!("Unsupported operator: {:?}", op),
@@ -1537,6 +1545,65 @@ mod tests {
 
         let i32_payload = module_with_tag(&[ValType::I32], &[]);
         assert!(tag_has_i32_payload(&i32_payload, 0).expect("i32-payload tag should work"));
+    }
+
+    #[test]
+    fn stack_values_do_not_leak_across_block_boundaries() {
+        // (func (export "_start") (result i32)
+        //   i32.const 7
+        //   block i32.const 1 br 0 end  ;; 1 is discarded by the branch
+        //   block end                   ;; 7 is carried across both blocks
+        // )
+        #[rustfmt::skip]
+        let wasm: &[u8] = &[
+            0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+            0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7f,
+            0x03, 0x02, 0x01, 0x00,
+            0x07, 0x0a, 0x01, 0x06, b'_', b's', b't', b'a', b'r', b't', 0x00, 0x00,
+            0x0a, 0x10, 0x01, 0x0e, 0x00,
+            0x41, 0x07,
+            0x02, 0x40, 0x41, 0x01, 0x0c, 0x00, 0x0b,
+            0x02, 0x40, 0x0b,
+            0x0b,
+        ];
+        let info = crate::module::decode_module_info(wasm).expect("decode");
+        crate::validate::validate(&info, wasm).expect("validate");
+        let module = super::parse_module(info, wasm).expect("parse");
+        let body = module.bodies()[0].as_ref().expect("body");
+        let insts = body.insts();
+
+        // Every ref names an earlier instruction of the same list.
+        for (i, node) in insts.iter().enumerate() {
+            let refs: Vec<usize> = match node {
+                Node::LocalSet(_, r) => vec![r.index()],
+                Node::Return(r) => r.iter().map(|r| r.index()).collect(),
+                _ => vec![],
+            };
+            assert!(refs.iter().all(|&r| r < i), "{i}: {node:?} in {insts:#?}");
+        }
+        // The function returns the 7, read back after the last block.
+        let Some(Node::Return(Some(ret))) = insts.last() else {
+            panic!("expected a trailing return: {insts:#?}");
+        };
+        let Node::LocalGet(carried) = insts[ret.index()] else {
+            panic!("return should read the carried temp: {insts:#?}");
+        };
+        let mut src = carried;
+        loop {
+            let set = insts
+                .iter()
+                .find_map(|n| match n {
+                    Node::LocalSet(l, r) if *l == src => Some(&insts[r.index()]),
+                    _ => None,
+                })
+                .expect("carried temp is set in the function body");
+            match set {
+                Node::I32Const(7) => break,
+                Node::LocalGet(l) => src = *l,
+                other => panic!("carried temp holds {other:?}: {insts:#?}"),
+            }
+        }
+        crate::lower::lower_module(module).expect("lower");
     }
 
     fn assert_block_loop(node: Node) -> Vec<Node> {

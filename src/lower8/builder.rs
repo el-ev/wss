@@ -191,6 +191,22 @@ impl FuncBuilder {
         self.copy_word(RET_HI, Word::from_u32_imm(0));
     }
 
+    /// Non-blocking key read widened to i32: the key, or -1 (all lanes
+    /// 0xff) when none is held. Keys are ASCII, so a 0xff low byte is
+    /// unambiguous.
+    pub(super) fn emit_try_getchar(&mut self) -> Word {
+        let ch = self.alloc_reg();
+        self.emit(Inst8::with_dst(ch, Inst8Kind::TryGetchar));
+        let none = self.alloc_reg();
+        self.emit(Inst8::with_dst(none, Inst8Kind::Eq(ch, Val8::imm(0xff))));
+        let hi = self.alloc_reg();
+        self.emit(Inst8::with_dst(
+            hi,
+            Inst8Kind::Sel(none, Val8::imm(0xff), Val8::imm(0)),
+        ));
+        Word::new(ch, hi, hi, hi)
+    }
+
     pub(super) fn load_global_word(&mut self, global_idx: u32) -> Word {
         let dst = self.alloc_word();
         for (lane, dst_lane) in dst.bytes().into_iter().enumerate() {

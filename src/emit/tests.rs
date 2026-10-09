@@ -454,8 +454,8 @@ fn emit_html_memory_visualizer_tracks_read_and_write_slots() {
     assert!(html.contains("--mro0:"));
     assert!(html.contains("--mvh-0"));
     assert!(html.contains(".memvis::before {"));
-    assert!(html.contains("rgb(--mhi(var(--m000))"));
-    assert!(html.contains("rgb(--mlo(var(--m000))"));
+    assert!(html.contains("hsl(0 0% calc(--mhi(var(--m000)) * 100% / 255))"));
+    assert!(html.contains("hsl(0 0% calc(--mlo(var(--m000)) * 100% / 255))"));
 }
 
 #[test]

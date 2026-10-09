@@ -621,6 +621,10 @@ fn lower_call_io_inst(
             b.emit(Inst8::with_dst(ch, Inst8Kind::Getchar));
             b.set_word(iref, Word::narrow(ch));
         }
+        Inst::TryGetchar => {
+            let word = b.emit_try_getchar();
+            b.set_word(iref, word);
+        }
         Inst::Random => {
             let dst = b.alloc_word();
             for (lane, dst_lane) in dst.bytes().into_iter().enumerate() {

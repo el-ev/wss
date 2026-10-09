@@ -121,6 +121,7 @@ fn ir_produces_value(inst: &Inst) -> bool {
             | Inst::Store { .. }
             | Inst::Putchar(_)
             | Inst::Getchar
+            | Inst::TryGetchar
             | Inst::Random
             | Inst::ExcSet { .. }
             | Inst::ExcClear
@@ -226,6 +227,7 @@ fn print_ir_inst(out: &mut String, r: IrNode, inst: &Inst) {
             write_ir_operand(out, *v);
         }
         Inst::Getchar => write!(out, "getchar").unwrap(),
+        Inst::TryGetchar => write!(out, "try_getchar").unwrap(),
         Inst::Random => write!(out, "rand").unwrap(),
         Inst::Drop => write!(out, "drop").unwrap(),
         Inst::LocalSet(local, v) => {
@@ -822,6 +824,7 @@ fn print_inst8(out: &mut String, inst: &crate::ir8::Inst8) {
         .unwrap(),
 
         Inst8Kind::Getchar => write!(out, "getchar").unwrap(),
+        Inst8Kind::TryGetchar => write!(out, "try_getchar").unwrap(),
         Inst8Kind::Putchar(v) => write!(out, "putchar {}", fmt_val8(*v)).unwrap(),
         Inst8Kind::PutcharIf { val, enable } => write!(
             out,

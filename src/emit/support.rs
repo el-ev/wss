@@ -56,23 +56,18 @@ impl<'a> Emitter<'a> {
             self.emit_byte_ctz_lookup(out);
         }
 
-        let mem_reads = self
-            .mem_names
-            .iter()
-            .enumerate()
-            .map(|(i, name)| (i, format!("var({})", Self::shadow_name(0, name))))
+        // Loads read memory as of the end of the previous cycle: the store
+        // snapshot, which is also the merge's `prev`. The scheduler relies
+        // on this when it lets a load share a cycle with a later store to
+        // the same byte (the load must see the old value). The execute
+        // snapshot (`--_0m*`) would not do: it is captured from the cells
+        // in the same recalc that merges this cycle's stores, so a load
+        // would see them. Increments read the same stage, which also keeps
+        // their merge free of a dependency cycle.
+        let mem_reads = (0..self.mem_names.len())
+            .map(|i| (i, self.mem_prev_expr(i)))
             .collect::<Vec<_>>();
         Self::emit_chunked_read_function(out, "--read_m16", &mem_reads);
-        if self.uses_mem_inc {
-            // Increments merge in the cycle they execute, so they must read
-            // the same stage as the merge's `prev` (the store snapshot):
-            // reading the execute snapshot (`--_0m*`) would form a
-            // dependency cycle.
-            let prev_reads = (0..self.mem_names.len())
-                .map(|i| (i, self.mem_prev_expr(i)))
-                .collect::<Vec<_>>();
-            Self::emit_chunked_read_function(out, "--read_m16p", &prev_reads);
-        }
 
         if self.uses_callstack() {
             let cs_reads = self
@@ -353,6 +348,13 @@ impl<'a> Emitter<'a> {
         format!("{} {} rgba({}, {})", x, y, rgba, alpha_expr)
     }
 
+    /// The gray pixel for byte expression `byte`. Lightness takes the byte
+    /// once, where `rgb(b, b, b)` would evaluate it three times: the pixels
+    /// are most of a recalc's work, every cycle.
+    fn vis_gray(byte: &str) -> String {
+        format!("hsl(0 0% calc({} * 100% / 255))", byte)
+    }
+
     pub(super) fn emit_memory_visualizer(&self, out: &mut String) {
         let mem_cols = VIS_COLS;
         let mem_rows = (self.memory_end as usize).div_ceil(mem_cols).max(1);
@@ -374,7 +376,7 @@ impl<'a> Emitter<'a> {
                 } else {
                     format!("--mhi(var({}))", name)
                 };
-                format!("{}px {}px rgb({}, {}, {})", x, y, byte, byte, byte)
+                format!("{}px {}px {}", x, y, Self::vis_gray(&byte))
             })
             .collect::<Vec<_>>();
         Self::emit_chunked_shadow(out, ".memvis", "::after", "mv", &mem_entries);
@@ -430,7 +432,7 @@ impl<'a> Emitter<'a> {
                 } else {
                     format!("--mhi(var({}))", name)
                 };
-                format!("{}px {}px rgb({}, {}, {})", x, y, byte, byte, byte)
+                format!("{}px {}px {}", x, y, Self::vis_gray(&byte))
             })
             .collect::<Vec<_>>();
         Self::emit_chunked_shadow(out, ".csvis", "::after", "csv", &cs_entries);
@@ -652,7 +654,7 @@ impl<'a> Emitter<'a> {
             );
             let _ = writeln!(
                 out,
-                " --mir{j}: if(style(--mik: -1): 0; else: --read_m16p(calc(var(--mik) + {j})));"
+                " --mir{j}: if(style(--mik: -1): 0; else: --read_m16(calc(var(--mik) + {j})));"
             );
         }
         let window = "(var(--mir0) + 65536 * var(--mir1) + 4294967296 * var(--mir2))";

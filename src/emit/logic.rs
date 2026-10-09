@@ -14,6 +14,9 @@ impl<'a> Emitter<'a> {
         let mut g_arms: BTreeMap<(u32, u8), String> = BTreeMap::new();
         let mut pc_arms = String::new();
         let mut wait_input_arms = String::new();
+        // PCs whose cycle reads the keyboard; the JS clock holds a short
+        // click until one of them has run (see base.html).
+        let mut kb_read_pcs: Vec<u16> = Vec::new();
         let mut fb_arms = String::new();
         let mut ra_arms = String::new();
         let mut cop_op_arms = String::new();
@@ -91,6 +94,7 @@ impl<'a> Emitter<'a> {
             let mut putchars = Vec::new();
             let mut mem_inc: Option<(String, String, u32)> = None;
             let mut has_getchar = false;
+            let mut reads_kb = false;
             let mut getchar_ready = String::from("0");
 
             for op in &cycle.ops {
@@ -448,6 +452,7 @@ impl<'a> Emitter<'a> {
                     Inst8Kind::Getchar => {
                         if let Some(dst) = op.dst {
                             has_getchar = true;
+                            reads_kb = true;
                             // `--kb` is registered as `@property --kb`
                             // with `initial-value: -1` (see base.html),
                             // so `var(--kb)` is always defined; the
@@ -461,6 +466,17 @@ impl<'a> Emitter<'a> {
                                     "mod(var(--kb), 256)",
                                     &format!("var(--_1r{})", dst.expect_vreg()),
                                 ),
+                            );
+                        }
+                    }
+                    Inst8Kind::TryGetchar => {
+                        if let Some(dst) = op.dst {
+                            reads_kb = true;
+                            // Same read as Getchar, but 0xff instead of a
+                            // stall when no key is held.
+                            reg_now.insert(
+                                dst.expect_vreg(),
+                                Self::sel_expr("--ne(var(--kb), -1)", "mod(var(--kb), 256)", "255"),
                             );
                         }
                     }
@@ -638,6 +654,9 @@ impl<'a> Emitter<'a> {
                 };
             }
 
+            if reads_kb {
+                kb_read_pcs.push(pc);
+            }
             if has_getchar {
                 term.pc_expr = Self::sel_expr(&getchar_ready, &term.pc_expr, &format!("{}", pc));
                 let _ = write!(
@@ -998,6 +1017,14 @@ impl<'a> Emitter<'a> {
         let pc_fallback = "--sel(--lt(var(--_1pc), 0), var(--_1pc), calc(var(--_1pc) + 1))";
         Self::emit_if_or_fallback(out, "--pc", &pc_arms, pc_fallback);
         Self::emit_if_or_fallback(out, "--wait_input", &wait_input_arms, "0");
+        if !kb_read_pcs.is_empty() {
+            let conds = kb_read_pcs
+                .iter()
+                .map(|pc| format!("(--_1pc: {})", pc))
+                .collect::<Vec<_>>()
+                .join(" or ");
+            let _ = writeln!(out, " --kb_read: if(style({}): 1; else: 0);", conds);
+        }
         if self.uses_callstack() {
             Self::emit_if_or_fallback(out, "--cs_sp", &cs_sp_arms, "var(--_1cs_sp)");
         }
@@ -2857,16 +2884,16 @@ impl<'a> Emitter<'a> {
     }
 
     /// The loaded byte for an in-bounds load of fixed byte address `at`: a
-    /// direct read of the cell (the same `--_0m*` stage `--read_m16` reads).
+    /// direct read of the cell, at the same stage `--read_m16` reads.
     fn const_load_expr(&self, at: u32) -> Option<String> {
-        if at >= self.memory_end {
+        if at >= self.memory_end || at as usize / 2 >= self.mem_names.len() {
             return None;
         }
-        let cell = Self::shadow_name(0, self.mem_names.get(at as usize / 2)?);
+        let cell = self.mem_prev_expr(at as usize / 2);
         Some(if at.is_multiple_of(2) {
-            format!("mod(var({}), 256)", cell)
+            format!("mod({}, 256)", cell)
         } else {
-            format!("round(down, var({}) / 256)", cell)
+            format!("round(down, {} / 256)", cell)
         })
     }
 

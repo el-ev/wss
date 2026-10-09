@@ -111,9 +111,10 @@ pub(super) fn rw_word(subst: &HashMap<Val8, Val8>, w: Word) -> Word {
 
 pub(super) fn rewrite_inst(mut inst: Inst8, subst: &HashMap<Val8, Val8>) -> Inst8 {
     inst.kind = match inst.kind {
-        Inst8Kind::GlobalGetByte { .. } | Inst8Kind::Getchar | Inst8Kind::RandomByte { .. } => {
-            inst.kind
-        }
+        Inst8Kind::GlobalGetByte { .. }
+        | Inst8Kind::Getchar
+        | Inst8Kind::TryGetchar
+        | Inst8Kind::RandomByte { .. } => inst.kind,
         Inst8Kind::Copy(s) => Inst8Kind::Copy(rw(subst, s)),
         Inst8Kind::Add32Byte { lhs, rhs, lane } => Inst8Kind::Add32Byte {
             lhs: rw_word(subst, lhs),
@@ -264,6 +265,7 @@ pub(super) fn has_side_effect(kind: &Inst8Kind) -> bool {
         Inst8Kind::Putchar(_)
             | Inst8Kind::PutcharIf { .. }
             | Inst8Kind::Getchar
+            | Inst8Kind::TryGetchar
             | Inst8Kind::StoreMem { .. }
             | Inst8Kind::MemInc32 { .. }
             | Inst8Kind::GlobalSetByte { .. }
@@ -286,7 +288,10 @@ pub(super) fn inst_uses(kind: &Inst8Kind, live: &mut HashSet<Val8>) {
     };
 
     match kind {
-        Inst8Kind::Getchar | Inst8Kind::RandomByte { .. } | Inst8Kind::GlobalGetByte { .. } => {}
+        Inst8Kind::Getchar
+        | Inst8Kind::TryGetchar
+        | Inst8Kind::RandomByte { .. }
+        | Inst8Kind::GlobalGetByte { .. } => {}
 
         Inst8Kind::Copy(s) | Inst8Kind::BoolNot(s) | Inst8Kind::Putchar(s) => {
             add_use(live, *s);

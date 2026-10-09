@@ -1561,7 +1561,9 @@ fn dump_case_memory(
                 });
 
                 let ret = match import_name.as_str() {
-                    "getchar" => caller.data_mut().input_queue.pop_front().unwrap_or(-1),
+                    "getchar" | "try_getchar" => {
+                        caller.data_mut().input_queue.pop_front().unwrap_or(-1)
+                    }
                     "putchar" => {
                         let value = first_arg.unwrap_or(0);
                         caller
