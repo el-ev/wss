@@ -1476,8 +1476,7 @@ impl<'a> Emitter<'a> {
     /// inlined): CSS evaluates the argument once into a local, while the
     /// definition reads it twice.
     pub(super) fn inrange_expr(idx: &str, k: i64) -> String {
-        let (base, off) =
-            Self::try_split_calc_offset(idx).unwrap_or_else(|| (idx.to_string(), 0));
+        let (base, off) = Self::try_split_calc_offset(idx).unwrap_or_else(|| (idx.to_string(), 0));
         format!("--inrange({}, {}, {})", base, -off, k - off)
     }
 
@@ -1746,6 +1745,13 @@ impl<'a> Emitter<'a> {
         {
             return true;
         }
+        // Bit 7 of a register byte (see [`Self::byte_bit_expr`]).
+        if let Some(byte) = t
+            .strip_prefix("round(down, calc(")
+            .and_then(|rest| rest.strip_suffix(" / 128))"))
+        {
+            return Self::is_byte_valued_var(byte);
+        }
         // `mod(<inner>, 2)` is always 0 or 1.
         if let Some(rest) = t.strip_prefix("mod(")
             && let Some(inner) = rest.strip_suffix(", 2)")
@@ -1920,41 +1926,6 @@ impl<'a> Emitter<'a> {
             return "0".to_string();
         }
         Self::floor_div_expr(constant, &terms, 1i64 << (8 * u32::from(lane)))
-    }
-
-    /// Byte-level borrow-out for one subtraction step, folding literals.
-    fn byte_borrow_step(lhs: &str, rhs: &str, borrow_in: &str) -> String {
-        let mut const_sum: i64 = 255;
-        let mut neg_terms: Vec<String> = Vec::new();
-        let mut pos_terms: Vec<String> = Vec::new();
-        if let Ok(l) = lhs.trim().parse::<i64>() {
-            const_sum -= l;
-        } else {
-            neg_terms.push(lhs.trim().to_string());
-        }
-        for t in [rhs.trim(), borrow_in.trim()] {
-            if t == "0" {
-                continue;
-            }
-            if let Ok(n) = t.parse::<i64>() {
-                const_sum += n;
-            } else {
-                pos_terms.push(t.to_string());
-            }
-        }
-        if neg_terms.is_empty() && pos_terms.is_empty() {
-            return const_sum.div_euclid(256).to_string();
-        }
-        let mut numerator = const_sum.to_string();
-        for t in &pos_terms {
-            numerator.push_str(" + ");
-            numerator.push_str(&Self::calc_inner(t));
-        }
-        for t in &neg_terms {
-            numerator.push_str(" - ");
-            numerator.push_str(&Self::calc_inner(t));
-        }
-        format!("round(down, calc(({}) / 256))", numerator)
     }
 
     /// Borrow into byte `lane` of `lhs - rhs`: `L < R` on the low `lane`
@@ -2140,14 +2111,9 @@ impl<'a> Emitter<'a> {
         Self::fold_mod(&total, 256)
     }
 
+    /// Borrow out of `lhs - rhs`: the borrow into a fifth lane.
     pub(super) fn sub32_borrow_expr(now: &HashMap<u16, String>, lhs: Word, rhs: Word) -> String {
-        let mut borrow = "0".to_string();
-        for idx in 0..4u8 {
-            let lhs_byte = Self::val_expr(now, lhs.byte(idx));
-            let rhs_byte = Self::val_expr(now, rhs.byte(idx));
-            borrow = Self::byte_borrow_step(&lhs_byte, &rhs_byte, &borrow);
-        }
-        borrow
+        Self::sub32_borrow_in_expr(now, lhs, rhs, 4)
     }
 
     pub(super) fn zero_word_expr() -> [String; 4] {
@@ -2174,7 +2140,6 @@ impl<'a> Emitter<'a> {
 
     pub(super) fn byte_bit_expr(byte: &str, bit: u8) -> String {
         let trimmed = byte.trim();
-        let p2 = 1u32 << bit;
         // Constant-fold when the byte is a numeric literal — common when the
         // builder is selecting bits of an immediate shift/rotate count.
         if let Ok(v) = trimmed.parse::<i64>() {
@@ -2190,10 +2155,11 @@ impl<'a> Emitter<'a> {
             };
         }
         let b = Self::paren_if_needed(byte);
-        if p2 == 1 {
-            format!("mod({b}, 2)")
-        } else {
-            format!("mod(round(down, calc({b} / {p2})), 2)")
+        match bit {
+            0 => format!("mod({b}, 2)"),
+            // A byte is below 256: the top bit needs no `mod`.
+            7 => format!("round(down, calc({b} / 128))"),
+            _ => format!("mod(round(down, calc({b} / {})), 2)", 1u32 << bit),
         }
     }
 
@@ -2916,27 +2882,10 @@ impl<'a> Emitter<'a> {
         format!("mod({}, {})", value, modulus)
     }
 
+    /// `var(<register>)`: a register always holds a byte.
     fn is_byte_valued_var(v: &str) -> bool {
-        let Some(inner) = v.strip_prefix("var(").and_then(|t| t.strip_suffix(')')) else {
-            return false;
-        };
-        let inner = inner.trim();
-        let after_dash = match inner.strip_prefix("--_") {
-            Some(t) => t,
-            None => return false,
-        };
-        // Stage digit, then `r`, then digits.
-        let mut chars = after_dash.bytes();
-        let Some(stage) = chars.next() else {
-            return false;
-        };
-        if !stage.is_ascii_digit() {
-            return false;
-        }
-        let Some(b'r') = chars.next() else {
-            return false;
-        };
-        let rest = &after_dash[2..];
-        !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit())
+        v.strip_prefix("var(")
+            .and_then(|t| t.strip_suffix(')'))
+            .is_some_and(|name| crate::css::is_register_name(name.trim()))
     }
 }

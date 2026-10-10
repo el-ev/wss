@@ -15,6 +15,7 @@ pub use doc::{
 };
 pub(crate) use doc::{is_custom_name_cont, is_custom_name_start};
 pub use fold::fold;
+pub(crate) use fold::is_register_name;
 pub use opt::{parse_registrations, propagate_state_facts};
 pub use parse::parse;
 pub(crate) use parse::skip_css_string;

@@ -547,7 +547,9 @@ fn fold_sel_strips_zero_preserving_condition_wrappers() {
     );
     // `1 - abs(sign(d))` is the bool `d == 0`: swap the branches, then strip.
     assert_eq!(
-        fold_str("--sel(calc(1 - abs(sign(calc(var(--a) + calc(var(--b) * 256) - 66)))), 2104, 2101)"),
+        fold_str(
+            "--sel(calc(1 - abs(sign(calc(var(--a) + calc(var(--b) * 256) - 66)))), 2104, 2101)"
+        ),
         "--sel(calc(var(--a) + var(--b) * 256 - 66), 2101, 2104)"
     );
     // Not as a value: the register needs the 0/1 result.
@@ -555,4 +557,61 @@ fn fold_sel_strips_zero_preserving_condition_wrappers() {
         fold_str("calc(1 - abs(sign(calc(var(--a) - 2))))"),
         "calc(1 - abs(sign(calc(var(--a) - 2))))"
     );
+}
+
+#[test]
+fn fold_product_unwraps_nested_calc() {
+    assert_eq!(
+        fold_str("calc(calc(var(--a) + 3) * 5)"),
+        "calc((var(--a) + 3) * 5)"
+    );
+    assert_eq!(
+        fold_str("calc(calc(var(--a) * 3) * 5)"),
+        "calc(var(--a) * 15)"
+    );
+}
+
+#[test]
+fn fold_mod_reduces_linear_terms() {
+    // Distribute, then reduce the constant modulo M.
+    assert_eq!(
+        fold_str("mod(calc(calc(var(--_1r37) + 30976) * 26125), 65536)"),
+        "mod(var(--_1r37) * 26125 + 9472, 65536)"
+    );
+    // `mod(Y, 65536) * 65536` is `Y * 65536` modulo 2^32; like terms merge
+    // into the LCG multiplier, and the constant takes its smallest form.
+    assert_eq!(
+        fold_str(
+            "mod(calc(calc(var(--_1r37) + 1831565568) * 26125 \
+             + mod(calc(calc(var(--_1r37) + 30976) * 25), 65536) * 65536), 4294967296)"
+        ),
+        "mod(var(--_1r37) * 1664525 - 1368709888, 4294967296)"
+    );
+    // Multipliers reduce only on integer-valued terms (registers here).
+    assert_eq!(
+        fold_str("mod(calc(var(--_1r1) * 70000 + 65537), 65536)"),
+        "mod(var(--_1r1) * 4464 + 1, 65536)"
+    );
+    assert_eq!(
+        fold_str("mod(calc(var(--x) * 70000 + 65537), 65536)"),
+        "mod(var(--x) * 70000 + 1, 65536)"
+    );
+    // An inner `mod` stays when dropping it could lose exactness.
+    assert_eq!(
+        fold_str("mod(calc(mod(var(--x), 65536) * 65536 + var(--_1r1)), 4294967296)"),
+        "mod(calc(mod(var(--x), 65536) * 65536 + var(--_1r1)), 4294967296)"
+    );
+    // With a known bound it goes.
+    assert_eq!(
+        fold_str("mod(calc(mod(var(--_1r2) * 300, 65536) * 65536 + var(--_1r1)), 4294967296)"),
+        "mod(var(--_1r2) * 19660800 + var(--_1r1), 4294967296)"
+    );
+}
+
+#[test]
+fn fold_round_of_literal_division() {
+    assert_eq!(fold_str("round(down, 52501 / 256)"), "205");
+    assert_eq!(fold_str("round(down, calc(-1 / 256))"), "-1");
+    assert_eq!(fold_str("round(up, 257 / 256)"), "2");
+    assert_eq!(fold_str("round(to-zero, -257 / 256)"), "-1");
 }

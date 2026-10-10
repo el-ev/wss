@@ -97,6 +97,22 @@ fn fold_local(node: Node) -> Node {
 /// internally use wider integers for the multiplication; bytes are
 /// near-neutral.
 fn fold_math_fn(name: String, args: Vec<Node>) -> Node {
+    if name == "round"
+        && let [mode, x] = args.as_slice()
+        && let Some((a, b)) = as_int_div(x)
+        && b != 0
+    {
+        let (q, r) = (a.div_euclid(b), a.rem_euclid(b));
+        let folded = match mode {
+            Node::Raw(m) if m == "down" => Some(q),
+            Node::Raw(m) if m == "up" => Some(if r == 0 { q } else { q + 1 }),
+            Node::Raw(m) if m == "to-zero" => Some(a / b),
+            _ => None,
+        };
+        if let Some(v) = folded {
+            return Node::Int(v);
+        }
+    }
     if name == "mod"
         && let [num, denom] = args.as_slice()
         && let Some(m) = as_int(denom)
@@ -143,8 +159,218 @@ fn fold_math_fn(name: String, args: Vec<Node>) -> Node {
                 Node::Int(k),
             ]);
         }
+        if let Some(reduced) = reduce_mod_linear(num, m) {
+            return match reduced {
+                Node::Int(v) => Node::Int(v.rem_euclid(m)),
+                reduced => Node::MathFn {
+                    name: "mod".to_string(),
+                    args: vec![reduced, Node::Int(m)],
+                },
+            };
+        }
     }
     Node::MathFn { name, args }
+}
+
+/// `a / b` of two literals, possibly under `calc()` / `(…)`.
+fn as_int_div(node: &Node) -> Option<(i64, i64)> {
+    let Node::Div(a, b) = peel(node) else {
+        return None;
+    };
+    Some((as_int(a)?, as_int(b)?))
+}
+
+/// Rewrites `X` under `mod(X, m)` as `Σ k·node + c` with every literal
+/// respecting the modulus: products distribute over a sum's constant, the
+/// constant and the multipliers of integer-valued terms reduce to their
+/// smallest residue, like terms merge, and an inner `mod(Y, n) * k` becomes
+/// `Y * k` when `m` divides `n·k` (they differ by a multiple of `m`). That
+/// last step can enlarge values, so it only stands when the result provably
+/// stays exact in a `double`. `None` when nothing changes.
+fn reduce_mod_linear(num: &Node, m: i64) -> Option<Node> {
+    let rebuild = |drop_inner_mods: bool| {
+        let mut lin = Linear {
+            m: i128::from(m),
+            drop_inner_mods,
+            dropped: false,
+            terms: Vec::new(),
+            constant: 0,
+        };
+        lin.add(num, 1)?;
+        Some((lin.dropped, lin.into_node()))
+    };
+    let (dropped, node) = rebuild(true)?;
+    let node = if dropped && bound(&node).is_none_or(|b| b > 1 << 53) {
+        rebuild(false)?.1
+    } else {
+        node
+    };
+    // `Linear` drops wrappers, so compare against the unwrapped input.
+    (node != *peel(num)).then_some(node)
+}
+
+struct Linear {
+    m: i128,
+    drop_inner_mods: bool,
+    dropped: bool,
+    terms: Vec<(Node, i128)>,
+    constant: i128,
+}
+
+impl Linear {
+    /// Adds `k · node`; `None` on overflow.
+    fn add(&mut self, node: &Node, k: i128) -> Option<()> {
+        let node = peel(node);
+        match node {
+            Node::Int(c) => {
+                self.constant = (self.constant + k.checked_mul(i128::from(*c))?).rem_euclid(self.m);
+                return Some(());
+            }
+            Node::Sum(terms) => {
+                for t in terms {
+                    let sign = if t.sign == Sign::Pos { 1 } else { -1 };
+                    self.add(&t.node, k * sign)?;
+                }
+                return Some(());
+            }
+            Node::MathFn { name, args } if name == "mod" && self.drop_inner_mods => {
+                if let [y, n] = args.as_slice()
+                    && let Some(n) = as_int(n)
+                    && n > 0
+                    && (i128::from(n).checked_mul(k)? % self.m) == 0
+                {
+                    self.dropped = true;
+                    return self.add(y, k);
+                }
+            }
+            _ => {}
+        }
+        if let Some((other, j)) = product_with_int_factor(node) {
+            let k = k.checked_mul(i128::from(j))?;
+            return match peel_sum(other) {
+                // Keep a multi-term sum grouped; only its constant splits off.
+                Node::Sum(terms)
+                    if terms.iter().filter(|t| as_int(&t.node).is_none()).count() > 1 =>
+                {
+                    let (group, c) = split_int_offset(Node::Sum(terms));
+                    self.add(&Node::Int(c), k)?;
+                    self.push(group, k);
+                    Some(())
+                }
+                other => self.add(&other, k),
+            };
+        }
+        self.push(node.clone(), k);
+        Some(())
+    }
+
+    fn push(&mut self, node: Node, k: i128) {
+        match self.terms.iter_mut().find(|(n, _)| *n == node) {
+            Some((_, acc)) => *acc += k,
+            None => self.terms.push((node, k)),
+        }
+    }
+
+    /// Smallest-magnitude residue of `v` modulo `m`.
+    fn residue(&self, v: i128) -> i128 {
+        let r = v.rem_euclid(self.m);
+        if 2 * r > self.m { r - self.m } else { r }
+    }
+
+    fn into_node(self) -> Node {
+        let mut out = Vec::with_capacity(self.terms.len() + 1);
+        for (node, k) in &self.terms {
+            let k = if is_integral(node) {
+                self.residue(*k)
+            } else {
+                *k
+            };
+            if k == 0 {
+                continue;
+            }
+            let sign = if k > 0 { Sign::Pos } else { Sign::Neg };
+            let mag = k.unsigned_abs();
+            let node = if mag == 1 {
+                node.clone()
+            } else {
+                Node::Product(vec![node.clone(), Node::Int(mag as i64)])
+            };
+            out.push(Term { sign, node });
+        }
+        let c = self.residue(self.constant);
+        if c != 0 {
+            out.push(Term {
+                sign: if c > 0 { Sign::Pos } else { Sign::Neg },
+                node: Node::Int(c.unsigned_abs() as i64),
+            });
+        }
+        match out.len() {
+            0 => Node::Int(0),
+            1 if out[0].sign == Sign::Pos => out.pop().unwrap().node,
+            _ => Node::Sum(out),
+        }
+    }
+}
+
+/// Register names: a stage digit, `r`, and the register number (`--_1r3`).
+/// Every register holds a byte.
+pub(crate) fn is_register_name(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix("--_") else {
+        return false;
+    };
+    let mut bytes = rest.bytes();
+    matches!(bytes.next(), Some(b'0'..=b'9'))
+        && bytes.next() == Some(b'r')
+        && rest.len() > 2
+        && bytes.all(|b| b.is_ascii_digit())
+}
+
+/// `node` always evaluates to an integer.
+fn is_integral(node: &Node) -> bool {
+    match node {
+        Node::Int(_) => true,
+        Node::Var { name, .. } => is_register_name(name) || known_nonneg_var(node),
+        Node::Calc(inner) | Node::Paren(inner) => is_integral(inner),
+        Node::Sum(terms) => terms.iter().all(|t| is_integral(&t.node)),
+        Node::Product(factors) => factors.iter().all(is_integral),
+        Node::MathFn { name, args } => match name.as_str() {
+            "round" => true,
+            "mod" | "rem" | "abs" | "sign" | "min" | "max" | "clamp" => {
+                args.iter().all(is_integral)
+            }
+            _ => false,
+        },
+        Node::Fn { name, args } => {
+            BOOL_HELPERS.contains(&name.as_str())
+                || (name == "--sel" && args.len() == 3 && args[1..].iter().all(is_integral))
+        }
+        _ => false,
+    }
+}
+
+/// An upper bound on `|node|`, when one is known.
+fn bound(node: &Node) -> Option<i128> {
+    match node {
+        Node::Int(n) => Some(i128::from(*n).abs()),
+        Node::Var { name, .. } if is_register_name(name) => Some(255),
+        Node::Calc(inner) | Node::Paren(inner) => bound(inner),
+        Node::Sum(terms) => terms
+            .iter()
+            .try_fold(0i128, |acc, t| acc.checked_add(bound(&t.node)?)),
+        Node::Product(factors) => factors
+            .iter()
+            .try_fold(1i128, |acc, f| acc.checked_mul(bound(f)?)),
+        Node::Div(a, b) => Some(bound(a)? / as_int(b)?.unsigned_abs().max(1) as i128 + 1),
+        Node::MathFn { name, args } => match (name.as_str(), args.as_slice()) {
+            ("mod", [_, n]) => as_int(n).filter(|n| *n > 0).map(i128::from),
+            ("round", [_, x]) | ("round", [x]) => Some(bound(x)? + 1),
+            ("abs", [x]) => bound(x),
+            ("sign", [_]) => Some(1),
+            _ => None,
+        },
+        Node::Fn { name, .. } if BOOL_HELPERS.contains(&name.as_str()) => Some(1),
+        _ => None,
+    }
 }
 
 /// Matches `round(down, mod(X, A) / B)` with `B * m` dividing `A` and
@@ -829,18 +1055,23 @@ fn fold_product(factors: Vec<Node>) -> Node {
 
 /// Returns `false` if the factor zeroes the entire product.
 fn push_factor(flat: &mut Vec<Node>, const_acc: &mut i64, saw_zero: &mut bool, node: Node) -> bool {
-    match &node {
+    // A `calc()` or `(…)` factor needs no wrapper: a sum prints in
+    // parentheses, and a product joins this one.
+    match peel_sum(node) {
         Node::Int(0) => {
             *saw_zero = true;
             false
         }
         Node::Int(1) => true,
         Node::Int(n) => {
-            *const_acc *= *n;
+            *const_acc *= n;
             true
         }
-        _ => {
-            flat.push(node);
+        Node::Product(factors) => factors
+            .into_iter()
+            .all(|f| push_factor(flat, const_acc, saw_zero, f)),
+        other => {
+            flat.push(other);
             true
         }
     }

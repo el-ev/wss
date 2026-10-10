@@ -1152,3 +1152,33 @@ fn inrange_expr_moves_offset_into_bounds() {
         "--inrange(var(--_1cs_sp), 0, 17)"
     );
 }
+
+#[test]
+fn sub32_borrow_is_one_division() {
+    let word = |base: u16| {
+        crate::ir8::Word::new(
+            Val8::reg(base),
+            Val8::reg(base + 1),
+            Val8::reg(base + 2),
+            Val8::reg(base + 3),
+        )
+    };
+    let borrow = Emitter::sub32_borrow_expr(&HashMap::new(), word(0), word(4));
+    // `L < R` as `floor((2^32 - 1 - L + R) / 2^32)`, not a chain of byte steps.
+    assert_eq!(borrow.matches("round(").count(), 1, "{borrow}");
+    assert!(borrow.ends_with("/ 4294967296))"), "{borrow}");
+}
+
+#[test]
+fn byte_bit7_needs_no_mod() {
+    // A byte is below 256, so `floor(b / 128)` is already 0 or 1.
+    let bit = Emitter::byte_bit_expr("var(--_1r3)", 7);
+    assert_eq!(bit, "round(down, calc(var(--_1r3) / 128))");
+    assert!(Emitter::is_bool_expr(&bit));
+    assert_eq!(
+        Emitter::byte_bit_expr("var(--_1r3)", 6),
+        "mod(round(down, calc(var(--_1r3) / 64)), 2)"
+    );
+    // Not for an arbitrary operand, which may not be a byte.
+    assert!(!Emitter::is_bool_expr("round(down, calc(var(--x) / 128))"));
+}
