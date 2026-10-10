@@ -9,6 +9,7 @@
 //! non-math function argument — the AST never confuses the two
 //! contexts because they're distinct enum variants.
 
+use super::opt::static_range;
 use super::{Arm, Node, Sign, Term};
 
 /// Run all simplification rules to fixpoint.
@@ -183,11 +184,18 @@ fn fold_math_fn(name: String, args: Vec<Node>) -> Node {
         && let Some(m) = as_int(denom)
         && m > 0
     {
-        // TODO: Facts are not used very well
-        // `mod(<register>, M)` for M ≥ 256 → the register: it already
-        // holds a byte.
-        if m >= 256 && is_byte_register(peel(num)) {
-            return peel(num).clone();
+        // `mod(X, M)` is `X` when `X` already lies in `0..M` (a register
+        // under `mod(_, 256)`, a bool under any modulus, `mod(_, 128)`
+        // under `mod(_, 256)`, …).
+        let r = static_range(num);
+        if r.lo >= 0.0 && r.hi < m as f64 {
+            return match peel(num) {
+                // Arithmetic needs `calc()` once it leaves the `mod()`.
+                x @ (Node::Sum(_) | Node::Product(_) | Node::Div(..)) => {
+                    Node::Calc(Box::new(x.clone()))
+                }
+                x => x.clone(),
+            };
         }
         // `mod(mod(X, A), B)` where B divides A → `mod(X, B)`. The
         // inner mod is redundant since the outer one is stricter.
@@ -262,10 +270,11 @@ fn reduce_mod_linear(num: &Node, m: i64) -> Option<Node> {
     let rebuild = |drop_inner_mods: bool| {
         let mut lin = Linear::new(m, drop_inner_mods);
         lin.add(num, 1)?;
+        lin.distribute_mergeable_groups()?;
         Some((lin.dropped, lin.into_node()))
     };
     let (dropped, node) = rebuild(true)?;
-    let node = if dropped && bound(&node).is_none_or(|b| b > 1 << 53) {
+    let node = if dropped && static_range(&node).magnitude() > 2f64.powi(53) {
         rebuild(false)?.1
     } else {
         node
@@ -346,11 +355,41 @@ impl Linear {
         }
     }
 
+    /// Distributes a grouped sum `(a + b·j) · k` over its terms when one of
+    /// them merges with a term already present: `a + (a + b) · k` has fewer
+    /// operations as `a · (k + 1) + b · k`, while an unrelated group stays
+    /// one multiplication.
+    fn distribute_mergeable_groups(&mut self) -> Option<()> {
+        let base = |node: &Node| match product_with_int_factor(node) {
+            Some((other, _)) => other,
+            None => peel(node).clone(),
+        };
+        loop {
+            let Some(i) = self.terms.iter().position(|(node, _)| {
+                let Node::Sum(terms) = peel(node) else {
+                    return false;
+                };
+                terms.iter().any(|t| {
+                    let b = base(&t.node);
+                    self.terms.iter().any(|(n, _)| *n != *node && *n == b)
+                })
+            }) else {
+                return Some(());
+            };
+            let (group, k) = self.terms.remove(i);
+            self.add(&group, k)?;
+        }
+    }
+
     fn into_node(self) -> Node {
         let m = self.m;
         let mut out = Vec::with_capacity(self.terms.len() + 1);
         for (node, k) in self.terms {
-            let k = if is_integral(&node) { residue(k, m) } else { k };
+            let k = if static_range(&node).int {
+                residue(k, m)
+            } else {
+                k
+            };
             if k == 0 {
                 continue;
             }
@@ -390,71 +429,6 @@ pub(crate) fn is_register_name(name: &str) -> bool {
         && rest[0].is_ascii_digit()
         && rest[1] == b'r'
         && rest[2..].iter().all(u8::is_ascii_digit)
-}
-
-/// `var(<register>)`, optionally with a literal byte fallback: the value is
-/// always in `0..256`.
-fn is_byte_register(node: &Node) -> bool {
-    matches!(
-        node,
-        Node::Var { name, fallback }
-            if is_register_name(name)
-                && fallback
-                    .as_deref()
-                    .is_none_or(|fb| as_int(fb).is_some_and(|v| (0..256).contains(&v)))
-    )
-}
-
-/// `node` always evaluates to an integer.
-fn is_integral(node: &Node) -> bool {
-    if is_bool_node(node) {
-        return true;
-    }
-    match node {
-        Node::Int(_) => true,
-        Node::Var { .. } => is_byte_register(node) || known_nonneg_var(node),
-        Node::Calc(inner) | Node::Paren(inner) => is_integral(inner),
-        Node::Sum(terms) => terms.iter().all(|t| is_integral(&t.node)),
-        Node::Product(factors) => factors.iter().all(is_integral),
-        Node::MathFn { name, args } => match name.as_str() {
-            "round" => true,
-            "mod" | "rem" | "abs" | "sign" | "min" | "max" | "clamp" => {
-                args.iter().all(is_integral)
-            }
-            _ => false,
-        },
-        Node::Fn { name, args } => {
-            name == "--sel" && args.len() == 3 && args[1..].iter().all(is_integral)
-        }
-        _ => false,
-    }
-}
-
-/// An upper bound on `|node|`, when one is known.
-fn bound(node: &Node) -> Option<i128> {
-    if is_bool_node(node) {
-        return Some(1);
-    }
-    match node {
-        Node::Int(n) => Some(i128::from(*n).abs()),
-        Node::Var { .. } if is_byte_register(node) => Some(255),
-        Node::Calc(inner) | Node::Paren(inner) => bound(inner),
-        Node::Sum(terms) => terms
-            .iter()
-            .try_fold(0i128, |acc, t| acc.checked_add(bound(&t.node)?)),
-        Node::Product(factors) => factors
-            .iter()
-            .try_fold(1i128, |acc, f| acc.checked_mul(bound(f)?)),
-        Node::Div(a, b) => Some(bound(a)? / as_int(b)?.unsigned_abs().max(1) as i128 + 1),
-        Node::MathFn { name, args } => match (name.as_str(), args.as_slice()) {
-            ("mod", [_, n]) => as_int(n).filter(|n| *n > 0).map(i128::from),
-            ("round", [_, x]) | ("round", [x]) => Some(bound(x)? + 1),
-            ("abs", [x]) => bound(x),
-            ("sign", [_]) => Some(1),
-            _ => None,
-        },
-        _ => None,
-    }
 }
 
 /// Matches `round(down, mod(X, A) / B)` with `B * m` dividing `A` and
@@ -590,43 +564,17 @@ fn char_literal(x: i64) -> String {
     format!("\"{body}\"")
 }
 
-/// Custom-property names that the wss runtime guarantees to be
-/// non-negative by construction:
-///   - `--_1cs_sp` — the callstack stack pointer. The increment /
-///     decrement gates check `0 ≤ sp ± 1 < 257` (`--inrange`), so the
-///     pointer can never dip below zero (and never exceed 256).
-fn known_nonneg_var(node: &Node) -> bool {
-    matches!(
-        node,
-        Node::Var { name, .. } if name == "--_1cs_sp"
-    )
-}
-
 fn fold_lt_ge(a: Node, b: Node, is_lt: bool) -> Node {
     let name = if is_lt { "--lt" } else { "--ge" };
 
-    // Constant-constant fold.
-    if let (Some(x), Some(y)) = (as_int(&a), as_int(&b)) {
-        let result = if is_lt { x < y } else { x >= y };
-        return Node::Int(i64::from(result));
-    }
-
-    // Known-nonneg LHS vs literal threshold.
-    //   --lt(sp, K) where K <= 0 → 0   (since sp >= 0)
-    //   --ge(sp, K) where K <= 0 → 1
-    if known_nonneg_var(&a)
-        && let Some(k) = as_int(&b)
-        && k <= 0
-    {
-        return Node::Int(i64::from(!is_lt));
-    }
-    // Symmetric: --lt(K, sp) where K < 0 → 1 (negative < nonneg).
-    //           --ge(K, sp) where K < 0 → 0
-    if known_nonneg_var(&b)
-        && let Some(k) = as_int(&a)
-        && k < 0
-    {
+    // Disjoint ranges decide the comparison: literals against literals, a
+    // register or the stack pointer against a threshold outside its range.
+    let (ra, rb) = (static_range(&a), static_range(&b));
+    if ra.hi < rb.lo {
         return Node::Int(i64::from(is_lt));
+    }
+    if ra.lo >= rb.hi {
+        return Node::Int(i64::from(!is_lt));
     }
 
     Node::Fn {
@@ -649,11 +597,14 @@ fn fold_inrange(x: Node, lo: Node, hi: Node) -> Node {
     if hi <= lo {
         return Node::Int(0);
     }
-    if let Some(v) = as_int(&x) {
-        return Node::Int(i64::from(lo <= v && v < hi));
-    }
-    if known_nonneg_var(&x) && lo <= 0 {
+    // A bound the value cannot cross leaves a single comparison (or a
+    // constant, once both are known).
+    let r = static_range(&x);
+    if r.lo >= lo as f64 {
         return fold_lt_ge(x, Node::Int(hi), /*is_lt=*/ true);
+    }
+    if r.hi < hi as f64 {
+        return fold_lt_ge(x, Node::Int(lo), /*is_lt=*/ false);
     }
     Node::Fn {
         name: "--inrange".to_string(),
@@ -874,33 +825,9 @@ fn peel_one_minus_bool(node: &Node) -> Option<Node> {
 /// A node is statically known to evaluate to 0 or 1. The boolean
 /// recognizer used by [`fold_sel`] and friends to enable the
 /// bool-vs-literal shortcuts.
-/// Base-template comparison helpers: they always return 0 or 1.
-pub(super) const BOOL_HELPERS: &[&str] = &[
-    "--eq",
-    "--ne",
-    "--eq1",
-    "--eqz",
-    "--nez",
-    "--lt",
-    "--ge",
-    "--inrange",
-];
-
 fn is_bool_node(node: &Node) -> bool {
-    match node {
-        Node::Int(0) | Node::Int(1) => true,
-        Node::Fn { name, .. } => BOOL_HELPERS.contains(&name.as_str()),
-        Node::If { arms, default } => is_bool_if(&Node::If {
-            arms: arms.clone(),
-            default: default.clone(),
-        }),
-        Node::Calc(inner) | Node::Paren(inner) => is_bool_node(inner),
-        // `abs(sign(x))` is 0 or 1 for any `x`.
-        Node::MathFn { name, args } if name == "abs" => {
-            matches!(args.as_slice(), [Node::MathFn { name, .. }] if name == "sign")
-        }
-        _ => false,
-    }
+    let r = static_range(node);
+    r.int && r.within(0.0, 1.0)
 }
 
 /// Returns Some(integer) if `node` is just an integer literal — possibly

@@ -1171,20 +1171,6 @@ fn sub32_borrow_is_one_division() {
 }
 
 #[test]
-fn byte_bit7_needs_no_mod() {
-    // A byte is below 256, so `floor(b / 128)` is already 0 or 1.
-    let bit = Emitter::byte_bit_expr("var(--_1r3)", 7);
-    assert_eq!(bit, "round(down, calc(var(--_1r3) / 128))");
-    assert!(Emitter::is_bool_expr(&bit));
-    assert_eq!(
-        Emitter::byte_bit_expr("var(--_1r3)", 6),
-        "mod(round(down, calc(var(--_1r3) / 64)), 2)"
-    );
-    // Not for an arbitrary operand, which may not be a byte.
-    assert!(!Emitter::is_bool_expr("round(down, calc(var(--x) / 128))"));
-}
-
-#[test]
 fn read_call_passes_chunk_directly() {
     assert_eq!(
         Emitter::read_call("--f", 32, "var(--x)", None),

@@ -14,17 +14,29 @@ use std::collections::{HashMap, HashSet};
 use super::doc::{
     Body, DeclItem, Doc, Item, Prelude, Rule, is_custom_name_cont, parse_doc, visit_value_mut,
 };
-use super::fold::BOOL_HELPERS;
+use super::fold::is_register_name;
 use super::{Node, Sign};
+
+/// Base-template comparison helpers: they always return 0 or 1.
+const BOOL_HELPERS: &[&str] = &[
+    "--eq",
+    "--ne",
+    "--eq1",
+    "--eqz",
+    "--nez",
+    "--lt",
+    "--ge",
+    "--inrange",
+];
 
 /// Interval of possible values plus an "always an integer" flag. Unknown
 /// bounds are infinite; integrality is tracked independently of bounds
 /// (every registered `<integer>` property is integral whatever its range).
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct Range {
-    lo: f64,
-    hi: f64,
-    int: bool,
+pub(super) struct Range {
+    pub(super) lo: f64,
+    pub(super) hi: f64,
+    pub(super) int: bool,
 }
 
 const TOP: Range = Range {
@@ -68,8 +80,12 @@ impl Range {
             int: self.int && o.int,
         }
     }
-    fn within(self, lo: f64, hi: f64) -> bool {
+    pub(super) fn within(self, lo: f64, hi: f64) -> bool {
         self.lo >= lo && self.hi <= hi
+    }
+    /// An upper bound on the magnitude; infinite when unbounded.
+    pub(super) fn magnitude(self) -> f64 {
+        self.lo.abs().max(self.hi.abs())
     }
     fn is_empty(self) -> bool {
         self.lo > self.hi
@@ -100,14 +116,32 @@ fn mul_bound(a: f64, b: f64) -> f64 {
 type Facts = HashMap<String, Range>;
 
 /// Static knowledge about properties written outside the emitted rules
-/// (from JS or the base template).
+/// (from JS or the base template), or constrained by the runtime's own
+/// construction.
 fn external_range(name: &str) -> Range {
     match name {
         "--kb" => Range::new(-1.0, 255.0, true),
         "--clk" => Range::new(0.0, 3.0, true),
         n if n.starts_with("--rng") || n.starts_with("--cop_o") => Range::new(-1.0, 255.0, true),
+        // Every register holds a byte.
+        n if is_register_name(n) => Range::new(0.0, 255.0, true),
+        // The callstack pointer: its increment / decrement gates check
+        // `0 ≤ sp ± 1 < 257` (`--inrange`), so it never leaves `0..=256`.
+        "--_1cs_sp" => Range::new(0.0, 256.0, true),
         _ => TOP,
     }
+}
+
+/// The range of `node` from its shape alone: literals, the base template's
+/// helpers and [`external_range`], with no knowledge of other declarations.
+pub(super) fn static_range(node: &Node) -> Range {
+    let (facts, fn_ranges, scope) = (Facts::new(), HashMap::new(), Scope::default());
+    Analyzer {
+        facts: &facts,
+        fn_ranges: &fn_ranges,
+        scope: &scope,
+    }
+    .range(node)
 }
 
 /// Bindings visible inside an `@function` body.
@@ -255,9 +289,24 @@ impl Analyzer<'_> {
                 }
                 _ => TOP,
             },
+            ("rem", [x, m]) => match m.as_point_int() {
+                // `rem` takes the dividend's sign.
+                Some(m) if m > 0 => {
+                    let b = (m - 1) as f64;
+                    let lo = if x.lo >= 0.0 { 0.0 } else { -b };
+                    let hi = if x.hi <= 0.0 { 0.0 } else { b };
+                    Range::new(lo, hi, x.int)
+                }
+                _ => TOP,
+            },
+            ("clamp", [lo, x, hi]) => Range::new(
+                lo.lo.max(x.lo.min(hi.lo)),
+                lo.hi.max(x.hi.min(hi.hi)),
+                lo.int && x.int && hi.int,
+            ),
             ("round", [_, x]) => {
                 let strategy = match args.first() {
-                    Some(Node::Ident(s)) => s.as_str(),
+                    Some(Node::Ident(s) | Node::Raw(s)) => s.as_str(),
                     _ => return TOP,
                 };
                 let (lo, hi) = match strategy {

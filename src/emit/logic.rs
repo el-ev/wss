@@ -1762,13 +1762,6 @@ impl<'a> Emitter<'a> {
         {
             return true;
         }
-        // Bit 7 of a register byte (see [`Self::byte_bit_expr`]).
-        if let Some(byte) = t
-            .strip_prefix("round(down, calc(")
-            .and_then(|rest| rest.strip_suffix(" / 128))"))
-        {
-            return Self::is_byte_valued_var(byte);
-        }
         // `mod(<inner>, 2)` is always 0 or 1.
         if let Some(rest) = t.strip_prefix("mod(")
             && let Some(inner) = rest.strip_suffix(", 2)")
@@ -2214,12 +2207,13 @@ impl<'a> Emitter<'a> {
                 "0".to_string()
             };
         }
+        // The CSS fold drops the `mod` where the operand's range makes it
+        // redundant (bit 7 of a register, say).
         let b = Self::paren_if_needed(byte);
-        match bit {
-            0 => format!("mod({b}, 2)"),
-            // A byte is below 256: the top bit needs no `mod`.
-            7 => format!("round(down, calc({b} / 128))"),
-            _ => format!("mod(round(down, calc({b} / {})), 2)", 1u32 << bit),
+        if bit == 0 {
+            format!("mod({b}, 2)")
+        } else {
+            format!("mod(round(down, calc({b} / {})), 2)", 1u32 << bit)
         }
     }
 

@@ -422,6 +422,45 @@ fn fold_mod_drops_register_wrap() {
 }
 
 #[test]
+fn fold_uses_static_ranges() {
+    // `mod` over a value already inside `0..M`.
+    assert_eq!(fold_str("mod(--lt(var(--a), 3), 256)"), "--lt(var(--a), 3)");
+    assert_eq!(
+        fold_str("mod(mod(var(--x), 128), 256)"),
+        "mod(var(--x), 128)"
+    );
+    assert_eq!(
+        fold_str("mod(calc(var(--_1r1) + var(--_1r2)), 512)"),
+        "calc(var(--_1r1) + var(--_1r2))"
+    );
+    assert_eq!(
+        fold_str("mod(round(down, calc(var(--_1r3) / 128)), 2)"),
+        "round(down, calc(var(--_1r3) / 128))"
+    );
+    // Comparisons a register can never win or lose.
+    assert_eq!(fold_str("--lt(var(--_1r3), 256)"), "1");
+    assert_eq!(fold_str("--ge(var(--_1r3), 256)"), "0");
+    assert_eq!(fold_str("--lt(var(--_1r3), 255)"), "--lt(var(--_1r3), 255)");
+    assert_eq!(fold_str("--lt(-1, var(--_1cs_sp))"), "1");
+    assert_eq!(fold_str("--lt(var(--_1cs_sp), 0)"), "0");
+    // `--inrange` keeps only the bound a register can cross.
+    assert_eq!(
+        fold_str("--inrange(var(--_1r3), 0, 100)"),
+        "--lt(var(--_1r3), 100)"
+    );
+    assert_eq!(
+        fold_str("--inrange(var(--_1r3), 7, 256)"),
+        "--ge(var(--_1r3), 7)"
+    );
+    assert_eq!(fold_str("--inrange(var(--_1r3), 0, 256)"), "1");
+    // Any 0/1-valued condition counts as a bool for `--sel`.
+    assert_eq!(
+        fold_str("--sel(mod(var(--_1r3), 2), 1, 0)"),
+        "mod(var(--_1r3), 2)"
+    );
+}
+
+#[test]
 fn fold_calc_combines_inside_mod() {
     // `var + var` combines to `var * 2`, then the `mod(X*K, M)` rule
     // pulls the literal factor out of the mod (K=2 | M=256), giving
@@ -611,13 +650,38 @@ fn fold_mod_reduces_linear_terms() {
     );
     // An inner `mod` stays when dropping it could lose exactness.
     assert_eq!(
-        fold_str("mod(calc(mod(var(--x), 65536) * 65536 + var(--_1r1)), 4294967296)"),
-        "mod(calc(mod(var(--x), 65536) * 65536 + var(--_1r1)), 4294967296)"
+        fold_str("mod(calc(mod(var(--x), 65536) * 65536 + var(--_1r1) * 65536), 4294967296)"),
+        "mod(calc(mod(var(--x), 65536) * 65536 + var(--_1r1) * 65536), 4294967296)"
     );
     // With a known bound it goes.
     assert_eq!(
+        fold_str(
+            "mod(calc(mod(var(--_1r2) * 300, 65536) * 65536 + var(--_1r1) * 65536), 4294967296)"
+        ),
+        "mod(var(--_1r2) * 19660800 + var(--_1r1) * 65536, 4294967296)"
+    );
+    // The outer `mod` itself goes when the sum provably stays below it.
+    assert_eq!(
         fold_str("mod(calc(mod(var(--_1r2) * 300, 65536) * 65536 + var(--_1r1)), 4294967296)"),
-        "mod(var(--_1r2) * 19660800 + var(--_1r1), 4294967296)"
+        "calc(mod(var(--_1r2) * 300, 65536) * 65536 + var(--_1r1))"
+    );
+    assert_eq!(
+        fold_str("mod(calc(mod(var(--x), 65536) * 65536 + var(--_1r1)), 4294967296)"),
+        "calc(mod(var(--x), 65536) * 65536 + var(--_1r1))"
+    );
+    // A grouped sum distributes when its terms merge with existing ones
+    // (here the low half-word re-appears shifted up)…
+    assert_eq!(
+        fold_str(
+            "mod(calc(var(--_1r1) + var(--_1r2) * 256 + var(--_1r3) * 65536 \
+             + mod(calc(var(--_1r1) + var(--_1r2) * 256), 65536) * 65536), 4294967296)"
+        ),
+        "mod(var(--_1r1) * 65537 + var(--_1r2) * 16777472 + var(--_1r3) * 65536, 4294967296)"
+    );
+    // …and otherwise stays one multiplication.
+    assert_eq!(
+        fold_str("mod(calc(calc(var(--_1r1) + var(--_1r2)) * 300 + var(--_1r3)), 65536)"),
+        "mod(calc((var(--_1r1) + var(--_1r2)) * 300 + var(--_1r3)), 65536)"
     );
 }
 

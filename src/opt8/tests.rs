@@ -1780,7 +1780,7 @@ fn opt8_unroll_printf_loop_handles_direct_putchar_of_load_dst() {
     //   putchar c
     //   4x add32.bN(P, +1)
     //   4x copy P.bN = add_dst
-    //   cond = ne(add_dst0, 0) | ne(add_dst1, 0) | ...
+    //   cond = ne c 0
     //   branch cond -> self / exit
     let p = Word::new(r(8), r(9), r(10), r(11));
     let p_addr = Addr::new(r(8), r(9));
@@ -1790,10 +1790,6 @@ fn opt8_unroll_printf_loop_handles_direct_putchar_of_load_dst() {
     let a2 = r(32);
     let a3 = r(33);
     let cond = r(40);
-    let n0 = r(41);
-    let n1 = r(42);
-    let n2 = r(43);
-    let n3 = r(44);
 
     let one = Word::from_u32_imm(1);
 
@@ -1846,14 +1842,7 @@ fn opt8_unroll_printf_loop_handles_direct_putchar_of_load_dst() {
                 Inst8::with_dst(p.b1, Inst8Kind::Copy(a1)),
                 Inst8::with_dst(p.b2, Inst8Kind::Copy(a2)),
                 Inst8::with_dst(p.b3, Inst8Kind::Copy(a3)),
-                Inst8::with_dst(n0, Inst8Kind::Ne(a0, Val8::imm(0))),
-                Inst8::with_dst(n1, Inst8Kind::Ne(a1, Val8::imm(0))),
-                Inst8::with_dst(n2, Inst8Kind::Ne(a2, Val8::imm(0))),
-                Inst8::with_dst(n3, Inst8Kind::Ne(a3, Val8::imm(0))),
-                Inst8::with_dst(
-                    cond,
-                    Inst8Kind::BoolOr(BoolNary8::from_vals(&[n0, n1, n2, n3]).unwrap()),
-                ),
+                Inst8::with_dst(cond, Inst8Kind::Ne(c, Val8::imm(0))),
             ],
             terminator: Terminator8::Branch {
                 cond,
@@ -1900,10 +1889,6 @@ fn opt8_unroll_printf_loop_handles_addr_with_static_offset() {
     let a1 = r(92);
     let a2 = r(93);
     let a3 = r(94);
-    let n0 = r(99);
-    let n1 = r(100);
-    let n2 = r(101);
-    let n3 = r(102);
     let cond = r(103);
 
     let one = Word::from_u32_imm(1);
@@ -1973,14 +1958,7 @@ fn opt8_unroll_printf_loop_handles_addr_with_static_offset() {
                 Inst8::with_dst(counter.b1, Inst8Kind::Copy(a1)),
                 Inst8::with_dst(counter.b2, Inst8Kind::Copy(a2)),
                 Inst8::with_dst(counter.b3, Inst8Kind::Copy(a3)),
-                Inst8::with_dst(n0, Inst8Kind::Ne(a0, Val8::imm(0))),
-                Inst8::with_dst(n1, Inst8Kind::Ne(a1, Val8::imm(0))),
-                Inst8::with_dst(n2, Inst8Kind::Ne(a2, Val8::imm(0))),
-                Inst8::with_dst(n3, Inst8Kind::Ne(a3, Val8::imm(0))),
-                Inst8::with_dst(
-                    cond,
-                    Inst8Kind::BoolOr(BoolNary8::from_vals(&[n0, n1, n2, n3]).unwrap()),
-                ),
+                Inst8::with_dst(cond, Inst8Kind::Ne(c, Val8::imm(0))),
             ],
             terminator: Terminator8::Branch {
                 cond,
@@ -2031,10 +2009,6 @@ fn opt8_unroll_printf_loop_recognizes_putchar_if() {
     let a2 = r(32);
     let a3 = r(33);
     let cond = r(40);
-    let n0 = r(41);
-    let n1 = r(42);
-    let n2 = r(43);
-    let n3 = r(44);
 
     let one = Word::from_u32_imm(1);
 
@@ -2088,14 +2062,7 @@ fn opt8_unroll_printf_loop_recognizes_putchar_if() {
                 Inst8::with_dst(p.b1, Inst8Kind::Copy(a1)),
                 Inst8::with_dst(p.b2, Inst8Kind::Copy(a2)),
                 Inst8::with_dst(p.b3, Inst8Kind::Copy(a3)),
-                Inst8::with_dst(n0, Inst8Kind::Ne(a0, Val8::imm(0))),
-                Inst8::with_dst(n1, Inst8Kind::Ne(a1, Val8::imm(0))),
-                Inst8::with_dst(n2, Inst8Kind::Ne(a2, Val8::imm(0))),
-                Inst8::with_dst(n3, Inst8Kind::Ne(a3, Val8::imm(0))),
-                Inst8::with_dst(
-                    cond,
-                    Inst8Kind::BoolOr(BoolNary8::from_vals(&[n0, n1, n2, n3]).unwrap()),
-                ),
+                Inst8::with_dst(cond, Inst8Kind::Ne(c, Val8::imm(0))),
             ],
             terminator: Terminator8::Branch {
                 cond,
