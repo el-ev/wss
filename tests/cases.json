@@ -187,8 +187,10 @@
     "console_input": "q",
     "memory_bytes": 2048,
     "stack_slots": 128,
-    "virtual_time_budget_ms": 60000,
-    "tags": ["lengthy"],
+    "tags": [
+      "lengthy"
+    ],
+    "virtual_time_budget_ms": 70000,
     "expect": {
       "pc": -1,
       "ra": "0x00000000",
@@ -348,10 +350,6 @@
   {
     "id": "addsub_i32_stress",
     "source": "tests/cases/addsub_i32_stress.c",
-    "tags": [
-      "lengthy"
-    ],
-    "virtual_time_budget_ms": 60000,
     "expect": {
       "pc": -1,
       "ra": "0x9fe2e067",
@@ -374,10 +372,6 @@
   {
     "id": "basic_udivrem_i32_stress",
     "source": "tests/cases/basic_udivrem_i32_stress.c",
-    "tags": [
-      "lengthy"
-    ],
-    "virtual_time_budget_ms": 60000,
     "expect": {
       "pc": -1,
       "ra": "0xd2639a07",
@@ -389,10 +383,6 @@
   {
     "id": "basic_sdivrem_i32_stress",
     "source": "tests/cases/basic_sdivrem_i32_stress.c",
-    "tags": [
-      "lengthy"
-    ],
-    "virtual_time_budget_ms": 60000,
     "expect": {
       "pc": -1,
       "ra": "0xb966f6cc",
@@ -404,10 +394,6 @@
   {
     "id": "basic_bitwise_i32_stress",
     "source": "tests/cases/basic_bitwise_i32_stress.c",
-    "tags": [
-      "lengthy"
-    ],
-    "virtual_time_budget_ms": 30000,
     "expect": {
       "pc": -1,
       "ra": "0x5b37eeae",
@@ -419,10 +405,6 @@
   {
     "id": "basic_relops_i32_stress",
     "source": "tests/cases/basic_relops_i32_stress.c",
-    "tags": [
-      "lengthy"
-    ],
-    "virtual_time_budget_ms": 30000,
     "expect": {
       "pc": -1,
       "ra": "0x52339709",
@@ -434,10 +416,6 @@
   {
     "id": "basic_relops_u32_stress",
     "source": "tests/cases/basic_relops_u32_stress.c",
-    "tags": [
-      "lengthy"
-    ],
-    "virtual_time_budget_ms": 30000,
     "expect": {
       "pc": -1,
       "ra": "0x2f4f1b66",
@@ -516,10 +494,6 @@
   {
     "id": "loop_break_continue_do_while",
     "source": "tests/cases/loop_break_continue_do_while.c",
-    "tags": [
-      "lengthy"
-    ],
-    "virtual_time_budget_ms": 60000,
     "expect": {
       "pc": -1,
       "ra": "0x0000007c",
@@ -587,10 +561,6 @@
     "id": "recursion_fib",
     "source": "tests/cases/recursion_fib.c",
     "max_frames": 800,
-    "virtual_time_budget_ms": 20000,
-    "tags": [
-      "lengthy"
-    ],
     "expect": {
       "pc": -1,
       "ra": "0x00000003",
@@ -715,10 +685,6 @@
   {
     "id": "memory_rw",
     "source": "tests/cases/memory_rw.c",
-    "tags": [
-      "lengthy"
-    ],
-    "virtual_time_budget_ms": 25000,
     "expect": {
       "pc": -1,
       "ra": "0x00000043",
@@ -898,6 +864,10 @@
   {
     "id": "divrem_const_i32",
     "source": "tests/cases/divrem_const_i32.c",
+    "tags": [
+      "lengthy"
+    ],
+    "virtual_time_budget_ms": 40000,
     "expect": {
       "pc": -1,
       "ra": "0x51259716",
@@ -909,6 +879,10 @@
   {
     "id": "divrem_const_i32_coprocessor",
     "source": "tests/cases/divrem_const_i32.c",
+    "tags": [
+      "lengthy"
+    ],
+    "virtual_time_budget_ms": 40000,
     "js_coprocessor": true,
     "expect": {
       "pc": -1,
@@ -921,11 +895,6 @@
   {
     "id": "division_large_unsigned",
     "source": "tests/cases/division_large_unsigned.c",
-    "tags": [
-      "lengthy"
-    ],
-    "max_frames": 120000,
-    "virtual_time_budget_ms": 50000,
     "expect": {
       "pc": -1,
       "ra": "0xf29d507c",
@@ -961,11 +930,6 @@
   {
     "id": "division_large_signed",
     "source": "tests/cases/division_large_signed.c",
-    "tags": [
-      "lengthy"
-    ],
-    "max_frames": 120000,
-    "virtual_time_budget_ms": 30000,
     "expect": {
       "pc": -1,
       "ra": "0xfeca6443",
@@ -1033,10 +997,6 @@
   {
     "id": "division_hazard_small_u24_remonly",
     "source": "tests/cases/division_hazard_small_u24_remonly.c",
-    "tags": [
-      "lengthy"
-    ],
-    "virtual_time_budget_ms": 30000,
     "expect": {
       "pc": -1,
       "ra": "0x0000374d",
@@ -1205,11 +1165,6 @@
     "id": "callstack_overflow_trap",
     "source": "tests/cases/callstack_overflow_trap.c",
     "stack_slots": 48,
-    "max_frames": 60000,
-    "tags": [
-      "lengthy"
-    ],
-    "virtual_time_budget_ms": 60000,
     "expect": {
       "pc": -5,
       "rendered_includes": [
@@ -1220,11 +1175,6 @@
   {
     "id": "division_large_unsigned_divonly",
     "source": "tests/cases/division_large_unsigned_divonly.c",
-    "tags": [
-      "lengthy"
-    ],
-    "max_frames": 120000,
-    "virtual_time_budget_ms": 30000,
     "expect": {
       "pc": -1,
       "ra": "0x000000f2",
@@ -1236,11 +1186,6 @@
   {
     "id": "division_large_unsigned_remonly",
     "source": "tests/cases/division_large_unsigned_remonly.c",
-    "tags": [
-      "lengthy"
-    ],
-    "max_frames": 120000,
-    "virtual_time_budget_ms": 30000,
     "expect": {
       "pc": -1,
       "ra": "0x00369d93",
@@ -1252,11 +1197,6 @@
   {
     "id": "division_large_signed_divonly",
     "source": "tests/cases/division_large_signed_divonly.c",
-    "tags": [
-      "lengthy"
-    ],
-    "max_frames": 120000,
-    "virtual_time_budget_ms": 50000,
     "expect": {
       "pc": -1,
       "ra": "0xffff1dfe",
@@ -1268,11 +1208,6 @@
   {
     "id": "division_large_signed_remonly",
     "source": "tests/cases/division_large_signed_remonly.c",
-    "tags": [
-      "lengthy"
-    ],
-    "max_frames": 120000,
-    "virtual_time_budget_ms": 50000,
     "expect": {
       "pc": -1,
       "ra": "0xffffa80d",
@@ -1350,11 +1285,6 @@
   {
     "id": "upchibicc_control_break_continue",
     "source": "tests/cases/upchibicc_control_break_continue.c",
-    "tags": [
-      "lengthy"
-    ],
-    "max_frames": 120000,
-    "virtual_time_budget_ms": 30000,
     "expect": {
       "pc": -1,
       "ra": "0x0000016d",
@@ -1476,10 +1406,6 @@
   {
     "id": "builtin_bitcount_sum_seed",
     "source": "tests/cases/builtin_bitcount_sum_seed.c",
-    "tags": [
-      "lengthy"
-    ],
-    "virtual_time_budget_ms": 30000,
     "expect": {
       "pc": -1,
       "ra": "0x00000013",
@@ -1524,10 +1450,6 @@
   {
     "id": "relops_signed_unsigned_full",
     "source": "tests/cases/relops_signed_unsigned_full.c",
-    "tags": [
-      "lengthy"
-    ],
-    "virtual_time_budget_ms": 25000,
     "expect": {
       "pc": -1,
       "ra": "0x0000003c",
@@ -1575,8 +1497,7 @@
     "tags": [
       "lengthy"
     ],
-    "max_frames": 120000,
-    "virtual_time_budget_ms": 60000,
+    "virtual_time_budget_ms": 20000,
     "expect": {
       "pc": -1,
       "ra": "0x0000000d",
@@ -1601,10 +1522,6 @@
   {
     "id": "indirect_dispatch_switch",
     "source": "tests/cases/indirect_dispatch_switch.c",
-    "tags": [
-      "lengthy"
-    ],
-    "virtual_time_budget_ms": 60000,
     "expect": {
       "pc": -1,
       "ra": "0xffffffd4",
@@ -1617,11 +1534,6 @@
   {
     "id": "divrem_shift_paths",
     "source": "tests/cases/divrem_shift_paths.c",
-    "tags": [
-      "lengthy"
-    ],
-    "max_frames": 120000,
-    "virtual_time_budget_ms": 60000,
     "expect": {
       "pc": -1,
       "ra": "0x3acafcc3",
@@ -1634,10 +1546,6 @@
   {
     "id": "early_return_paths",
     "source": "tests/cases/early_return_paths.c",
-    "tags": [
-      "lengthy"
-    ],
-    "virtual_time_budget_ms": 25000,
     "expect": {
       "pc": -1,
       "ra": "0x00000160",
@@ -1662,10 +1570,6 @@
   {
     "id": "bitcount_relop_blend",
     "source": "tests/cases/bitcount_relop_blend.c",
-    "tags": [
-      "lengthy"
-    ],
-    "virtual_time_budget_ms": 30000,
     "expect": {
       "pc": -1,
       "ra": "0x0024408e",
@@ -1681,8 +1585,7 @@
     "tags": [
       "lengthy"
     ],
-    "max_frames": 120000,
-    "virtual_time_budget_ms": 120000,
+    "virtual_time_budget_ms": 20000,
     "expect": {
       "pc": -1,
       "ra": "0x0000020a",
@@ -1695,11 +1598,6 @@
   {
     "id": "select_branch_blend",
     "source": "tests/cases/select_branch_blend.c",
-    "tags": [
-      "lengthy"
-    ],
-    "max_frames": 120000,
-    "virtual_time_budget_ms": 90000,
     "expect": {
       "pc": -1,
       "ra": "0xffffff74",
@@ -1715,8 +1613,7 @@
     "tags": [
       "lengthy"
     ],
-    "max_frames": 240000,
-    "virtual_time_budget_ms": 300000,
+    "virtual_time_budget_ms": 50000,
     "expect": {
       "pc": -1,
       "ra": "0x00000004",
@@ -1741,10 +1638,6 @@
   {
     "id": "global_counter_mix",
     "source": "tests/cases/global_counter_mix.c",
-    "tags": [
-      "lengthy"
-    ],
-    "virtual_time_budget_ms": 60000,
     "expect": {
       "pc": -1,
       "ra": "0x00010a82",
@@ -1808,7 +1701,7 @@
     "tags": [
       "lengthy"
     ],
-    "virtual_time_budget_ms": 60000,
+    "virtual_time_budget_ms": 20000,
     "expect": {
       "pc": -1,
       "ra": "0x0000003f",
@@ -1824,7 +1717,7 @@
     "tags": [
       "lengthy"
     ],
-    "virtual_time_budget_ms": 60000,
+    "virtual_time_budget_ms": 30000,
     "expect": {
       "pc": -1,
       "ra": "0x000002bf",
@@ -1840,7 +1733,7 @@
     "tags": [
       "lengthy"
     ],
-    "virtual_time_budget_ms": 60000,
+    "virtual_time_budget_ms": 30000,
     "expect": {
       "pc": -1,
       "ra": "0x00112509",
@@ -1853,10 +1746,6 @@
   {
     "id": "recursion_fact",
     "source": "tests/cases/recursion_fact.c",
-    "tags": [
-      "lengthy"
-    ],
-    "virtual_time_budget_ms": 60000,
     "expect": {
       "pc": -1,
       "ra": "0x00000348",
@@ -1917,6 +1806,10 @@
   {
     "id": "memory_copy_basic",
     "source": "tests/cases/memory_copy_basic.wat",
+    "tags": [
+      "lengthy"
+    ],
+    "virtual_time_budget_ms": 20000,
     "expect": {
       "pc": -1,
       "ra": "0x2b20ef11",
@@ -1968,7 +1861,7 @@
     "tags": [
       "lengthy"
     ],
-    "virtual_time_budget_ms": 60000,
+    "virtual_time_budget_ms": 30000,
     "expect": {
       "pc": -1,
       "ra": "0x12bd8854",
@@ -1981,10 +1874,6 @@
   {
     "id": "indirect_memory_rotmix",
     "source": "tests/cases/indirect_memory_rotmix.c",
-    "tags": [
-      "lengthy"
-    ],
-    "virtual_time_budget_ms": 60000,
     "expect": {
       "pc": -1,
       "ra": "0x468a5ec3",
@@ -1997,10 +1886,6 @@
   {
     "id": "switch_loop_bitcount_mix",
     "source": "tests/cases/switch_loop_bitcount_mix.c",
-    "tags": [
-      "lengthy"
-    ],
-    "virtual_time_budget_ms": 120000,
     "expect": {
       "pc": -1,
       "ra": "0xc43434bd",
@@ -2013,10 +1898,6 @@
   {
     "id": "global_memory_select_chain",
     "source": "tests/cases/global_memory_select_chain.c",
-    "tags": [
-      "lengthy"
-    ],
-    "virtual_time_budget_ms": 60000,
     "expect": {
       "pc": -1,
       "ra": "0xffff9502",
@@ -2029,10 +1910,6 @@
   {
     "id": "bitcount_rotate_eqz_chain",
     "source": "tests/cases/bitcount_rotate_eqz_chain.c",
-    "tags": [
-      "lengthy"
-    ],
-    "virtual_time_budget_ms": 60000,
     "expect": {
       "pc": -1,
       "ra": "0x419d7c2d",
@@ -2046,10 +1923,6 @@
     "id": "io_triplet_transform",
     "source": "tests/cases/io_triplet_transform.c",
     "console_input": "aB3",
-    "tags": [
-      "lengthy"
-    ],
-    "virtual_time_budget_ms": 60000,
     "expect": {
       "pc": -1,
       "ra": "0x000008fc",
@@ -2063,10 +1936,6 @@
   {
     "id": "indirect_halfword_guard",
     "source": "tests/cases/indirect_halfword_guard.c",
-    "tags": [
-      "lengthy"
-    ],
-    "virtual_time_budget_ms": 60000,
     "expect": {
       "pc": -1,
       "ra": "0x55aa14e5",
@@ -2079,10 +1948,6 @@
   {
     "id": "memory_select_crosscheck",
     "source": "tests/cases/memory_select_crosscheck.c",
-    "tags": [
-      "lengthy"
-    ],
-    "virtual_time_budget_ms": 30000,
     "expect": {
       "pc": -1,
       "ra": "0x3c05d3b1",
@@ -2098,7 +1963,7 @@
     "tags": [
       "lengthy"
     ],
-    "virtual_time_budget_ms": 60000,
+    "virtual_time_budget_ms": 20000,
     "expect": {
       "pc": -1,
       "ra": "0xb0d027cc",
@@ -2111,10 +1976,6 @@
   {
     "id": "select_narrow_memory_mix",
     "source": "tests/cases/select_narrow_memory_mix.c",
-    "tags": [
-      "lengthy"
-    ],
-    "virtual_time_budget_ms": 30000,
     "expect": {
       "pc": -1,
       "ra": "0x85a4c758",
@@ -2130,7 +1991,7 @@
     "tags": [
       "lengthy"
     ],
-    "virtual_time_budget_ms": 60000,
+    "virtual_time_budget_ms": 40000,
     "expect": {
       "pc": -1,
       "ra": "0x000641ef",
@@ -2143,10 +2004,6 @@
   {
     "id": "call_select_accumulate",
     "source": "tests/cases/call_select_accumulate.c",
-    "tags": [
-      "lengthy"
-    ],
-    "virtual_time_budget_ms": 60000,
     "expect": {
       "pc": -1,
       "ra": "0x000003af",
@@ -2162,7 +2019,7 @@
     "tags": [
       "lengthy"
     ],
-    "virtual_time_budget_ms": 60000,
+    "virtual_time_budget_ms": 30000,
     "expect": {
       "pc": -1,
       "ra": "0xddbcb67f",
@@ -2663,8 +2520,10 @@
   {
     "id": "divrem_runtime_edges",
     "source": "tests/cases/divrem_runtime_edges.c",
-    "tags": ["lengthy"],
-    "virtual_time_budget_ms": 120000,
+    "tags": [
+      "lengthy"
+    ],
+    "virtual_time_budget_ms": 80000,
     "expect": {
       "pc": -1,
       "ra": "0x571da927",
