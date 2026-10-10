@@ -913,6 +913,22 @@ fn analyze_print_loop(bb: &BasicBlock8) -> Option<PrintLoopShape> {
     // Detect bounded loop: branch condition from lt_u(counter, end).
     let bound_end = detect_bounded_loop(bb, cond, &counter_bytes);
 
+    // Without a counter bound, the rewrite gates each slot on the preceding
+    // loaded bytes being nonzero and leaves the loop once a slot loads zero.
+    // That only matches the original loop when its exit is exactly a NUL test
+    // on the loaded byte: any other exit (a separate countdown, a pointer
+    // compare) would be evaluated once per four characters instead of once
+    // per character.
+    if bound_end.is_none() {
+        let is_nul_test = bb.insts.iter().any(|inst| {
+            inst.dst == Some(cond)
+                && matches!(inst.kind, Inst8Kind::Ne(v, Val8::Imm(0)) if is_load_val(v))
+        });
+        if !is_nul_test {
+            return None;
+        }
+    }
+
     let first_putchar_idx = putchar_entries.iter().map(|pe| pe.idx).min().unwrap();
 
     let mut carried_update_idx = None;
@@ -928,12 +944,6 @@ fn analyze_print_loop(bb: &BasicBlock8) -> Option<PrintLoopShape> {
             src == load_dst && inst.dst == Some(putchar_entries[0].val)
         })?;
         if update_idx <= load_idx || update_idx >= counter_inc_idxs[0] {
-            return None;
-        }
-        if !matches!(
-            bb.insts.iter().find(|inst| inst.dst == Some(cond)).map(|inst| inst.kind),
-            Some(Inst8Kind::Ne(v, Val8::Imm(0))) if v == load_dst
-        ) {
             return None;
         }
         carried_update_idx = Some(update_idx);
