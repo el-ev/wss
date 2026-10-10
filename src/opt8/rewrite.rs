@@ -143,6 +143,19 @@ pub(super) fn rewrite_inst(mut inst: Inst8, subst: &HashMap<Val8, Val8>) -> Inst
             rem,
             lane,
         },
+        Inst8Kind::DivRem32Byte {
+            lhs,
+            rhs,
+            signed,
+            rem,
+            lane,
+        } => Inst8Kind::DivRem32Byte {
+            lhs: rw_word(subst, lhs),
+            rhs: rw_word(subst, rhs),
+            signed,
+            rem,
+            lane,
+        },
         Inst8Kind::Sub32Borrow { lhs, rhs } => Inst8Kind::Sub32Borrow {
             lhs: rw_word(subst, lhs),
             rhs: rw_word(subst, rhs),
@@ -312,7 +325,9 @@ pub(super) fn inst_uses(kind: &Inst8Kind, live: &mut HashSet<Val8>) {
                 add_use(live, reg);
             }
         }
-        Inst8Kind::Sub32Borrow { lhs, rhs } | Inst8Kind::Cmp32 { lhs, rhs, .. } => {
+        Inst8Kind::Sub32Borrow { lhs, rhs }
+        | Inst8Kind::Cmp32 { lhs, rhs, .. }
+        | Inst8Kind::DivRem32Byte { lhs, rhs, .. } => {
             for reg in lhs.uses_through_lane(3) {
                 add_use(live, reg);
             }

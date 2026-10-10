@@ -223,7 +223,7 @@ fn inst_complexity(kind: &Inst8Kind) -> usize {
     match kind {
         Inst8Kind::MulLo(_, _) | Inst8Kind::MulHi(_, _) | Inst8Kind::Mul32Byte { .. } => 3,
         Inst8Kind::Cmp32 { .. } => 2,
-        Inst8Kind::DivRem32ConstByte { .. } => 3,
+        Inst8Kind::DivRem32ConstByte { .. } | Inst8Kind::DivRem32Byte { .. } => 3,
         Inst8Kind::LoadMem { .. } | Inst8Kind::StoreMem { .. } => 3,
         Inst8Kind::MemInc32 { .. } => 6,
         Inst8Kind::GlobalGetByte { .. } | Inst8Kind::GlobalSetByte { .. } => 2,

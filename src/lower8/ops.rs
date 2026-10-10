@@ -53,7 +53,7 @@ pub(super) fn lower_inst(
     if lower_locals_globals_inst(b, ctx, inst, iref)? {
         return Ok(());
     }
-    if lower_numeric_inst(b, ctx, inst, iref, live_after, live_locals_after)? {
+    if lower_numeric_inst(b, ctx, inst, iref)? {
         return Ok(());
     }
     if lower_memory_inst(b, inst, iref)? {
@@ -205,8 +205,6 @@ fn lower_numeric_inst(
     ctx: &Lower8Context<'_>,
     inst: &Inst,
     iref: IrNode,
-    live_after: &[IrNode],
-    live_locals_after: &[u32],
 ) -> anyhow::Result<bool> {
     match inst {
         Inst::Unary { op, ty, val } => {
@@ -267,7 +265,7 @@ fn lower_numeric_inst(
                         });
                         if let Some(v) = lowered_const {
                             v
-                        } else if ctx.div_builtins.is_none() {
+                        } else if ctx.js_coprocessor {
                             let builtin = if *op == BinOp::DivU {
                                 BuiltinId::DivU32
                             } else if *op == BinOp::RemU {
@@ -279,16 +277,7 @@ fn lower_numeric_inst(
                             };
                             lower_builtin_call(b, builtin, vec![lhs_word, rhs_word])
                         } else {
-                            lower_divrem_call_via_function(
-                                b,
-                                *op,
-                                lhs_word,
-                                rhs_word,
-                                live_after,
-                                live_locals_after,
-                                ctx.allocs,
-                                ctx.div_builtins,
-                            )?
+                            lower_divrem_var(b, *op, lhs_word, rhs_word)
                         }
                     }
                     _ => lower_binary(b, *op, lhs_word, rhs_word)?,

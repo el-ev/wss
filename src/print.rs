@@ -725,6 +725,22 @@ fn print_inst8(out: &mut String, inst: &crate::ir8::Inst8) {
             denom
         )
         .unwrap(),
+        Inst8Kind::DivRem32Byte {
+            lhs,
+            rhs,
+            signed,
+            rem,
+            lane,
+        } => write!(
+            out,
+            "{}32{}.b{} {} {}",
+            if *rem { "rem" } else { "div" },
+            if *signed { "_s" } else { "_u" },
+            lane,
+            fmt_word(*lhs),
+            fmt_word(*rhs)
+        )
+        .unwrap(),
         Inst8Kind::Cmp32 {
             op,
             lhs,

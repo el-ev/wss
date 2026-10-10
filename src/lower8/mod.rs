@@ -17,9 +17,9 @@ mod calls;
 mod ops;
 
 use analysis::{
-    collect_spill_words, compute_live_after_by_block, compute_local_live_after_by_block,
+    compute_live_after_by_block, compute_local_live_after_by_block,
 };
-use builder::{FuncAlloc, FuncBuilder, alloc_builtin_div_params, prealloc_locals};
+use builder::{FuncAlloc, FuncBuilder, prealloc_locals};
 use ops::lower_load_fill_byte;
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -99,27 +99,7 @@ struct Lower8Context<'a> {
     module: &'a IrModule,
     allocs: &'a [FuncAlloc],
     global_words: &'a [Vec<u32>],
-    div_builtins: Option<DivBuiltinFuncs>,
-}
-
-#[derive(Clone, Copy)]
-struct DivBuiltinFuncs {
-    div_u: u32,
-    rem_u: u32,
-    div_s: u32,
-    rem_s: u32,
-}
-
-impl DivBuiltinFuncs {
-    fn for_op(self, op: BinOp) -> Option<u32> {
-        match op {
-            BinOp::DivU => Some(self.div_u),
-            BinOp::RemU => Some(self.rem_u),
-            BinOp::DivS => Some(self.div_s),
-            BinOp::RemS => Some(self.rem_s),
-            _ => None,
-        }
-    }
+    js_coprocessor: bool,
 }
 
 fn lower_word_lane32_op(
@@ -256,24 +236,6 @@ fn lower_ltu32_bit(b: &mut FuncBuilder, lhs: Word, rhs: Word) -> Val8 {
     cmp32_bit(b, Cmp32Op::Lt, lhs, rhs, false)
 }
 
-fn shl1_word(b: &mut FuncBuilder, w: Word) -> Word {
-    lower_add32(b, w, w)
-}
-
-fn add_lsb_bit(b: &mut FuncBuilder, w: Word, bit: Val8, zero: Val8) -> Word {
-    lower_add32(b, w, Word::new(bit, zero, zero, zero))
-}
-
-fn word_bit(b: &mut FuncBuilder, w: Word, bit_index: u8, zero: Val8) -> Val8 {
-    let byte = w.byte(bit_index / 8);
-    let mask = Val8::imm(1u8 << (bit_index % 8));
-    let masked = b.alloc_reg();
-    b.emit(Inst8::with_dst(masked, Inst8Kind::And8(byte, mask)));
-    let bit = b.alloc_reg();
-    b.emit(Inst8::with_dst(bit, Inst8Kind::Ne(masked, zero)));
-    bit
-}
-
 fn negate_word(b: &mut FuncBuilder, w: Word) -> Word {
     let zero = Word::from_u32_imm(0);
     lower_sub32(b, zero, w)
@@ -388,95 +350,6 @@ fn lower_sign_extend64_from_byte(
     ValueWords::two(lo, hi)
 }
 
-fn emit_divrem_u32_iteration(
-    b: &mut FuncBuilder,
-    numer: Word,
-    denom: Word,
-    bit_idx: u8,
-    quotient_state: Word,
-    remainder_state: Word,
-    zero: Val8,
-) {
-    let remainder_shifted = shl1_word(b, remainder_state);
-    let in_bit = word_bit(b, numer, bit_idx, zero);
-    let remainder_with_bit = add_lsb_bit(b, remainder_shifted, in_bit, zero);
-
-    let (sub, borrow_out) = lower_sub32_with_borrow(b, remainder_with_bit, denom);
-    let ge = b.alloc_reg();
-    b.emit(Inst8::with_dst(ge, Inst8Kind::BoolNot(borrow_out)));
-
-    let remainder_next = select_word(b, ge, sub, remainder_with_bit);
-
-    let quotient_shifted = shl1_word(b, quotient_state);
-    let quotient_next = add_lsb_bit(b, quotient_shifted, ge, zero);
-
-    b.copy_word(remainder_state, remainder_next);
-    b.copy_word(quotient_state, quotient_next);
-}
-
-fn divrem_u32_core(b: &mut FuncBuilder, numer: Word, denom: Word) -> (Word, Word) {
-    let zero_word = Word::from_u32_imm(0);
-    let zero = Val8::imm(0);
-    let quotient_state = b.alloc_word();
-    let remainder_state = b.alloc_word();
-    b.copy_word(quotient_state, zero_word);
-    b.copy_word(remainder_state, zero_word);
-
-    // TODO(i64): restoring division is currently unrolled for a fixed 32-bit width.
-    let iter_blocks: Vec<Pc> = (0..32).map(|_| b.alloc_block()).collect();
-    let done_pc = b.alloc_block();
-    let check_b2_pc = b.alloc_block();
-    let check_b1_pc = b.alloc_block();
-
-    let b3_zero = b.alloc_reg();
-    b.emit(Inst8::with_dst(b3_zero, Inst8Kind::Eq(numer.b3, zero)));
-    b.finish(Terminator8::Branch {
-        cond: b3_zero,
-        if_true: check_b2_pc,
-        if_false: iter_blocks[31],
-    });
-
-    b.switch_to(check_b2_pc);
-    let b2_zero = b.alloc_reg();
-    b.emit(Inst8::with_dst(b2_zero, Inst8Kind::Eq(numer.b2, zero)));
-    b.finish(Terminator8::Branch {
-        cond: b2_zero,
-        if_true: check_b1_pc,
-        if_false: iter_blocks[23],
-    });
-
-    b.switch_to(check_b1_pc);
-    let b1_zero = b.alloc_reg();
-    b.emit(Inst8::with_dst(b1_zero, Inst8Kind::Eq(numer.b1, zero)));
-    b.finish(Terminator8::Branch {
-        cond: b1_zero,
-        if_true: iter_blocks[7],
-        if_false: iter_blocks[15],
-    });
-
-    for bit_idx in (0..32u8).rev() {
-        b.switch_to(iter_blocks[bit_idx as usize]);
-        emit_divrem_u32_iteration(
-            b,
-            numer,
-            denom,
-            bit_idx,
-            quotient_state,
-            remainder_state,
-            zero,
-        );
-        let next_pc = if bit_idx == 0 {
-            done_pc
-        } else {
-            iter_blocks[bit_idx as usize - 1]
-        };
-        b.finish(Terminator8::Goto(next_pc));
-    }
-
-    b.switch_to(done_pc);
-    (quotient_state, remainder_state)
-}
-
 fn emit_zero_check_trap(b: &mut FuncBuilder, denom: Word) {
     let denom_zero = lower_eq32_bit(b, denom, Word::from_u32_imm(0));
     let trap_pc = b.alloc_block();
@@ -491,37 +364,40 @@ fn emit_zero_check_trap(b: &mut FuncBuilder, denom: Word) {
     b.switch_to(cont_pc);
 }
 
-fn lower_divrem_u32(b: &mut FuncBuilder, numer: Word, denom: Word, want_rem: bool) -> Word {
+/// A variable-divisor `div`/`rem`: the zero check, then one
+/// [`Inst8Kind::DivRem32Byte`] per result lane.
+fn lower_divrem_var(b: &mut FuncBuilder, op: BinOp, numer: Word, denom: Word) -> Word {
+    let (signed, rem) = match op {
+        BinOp::DivU => (false, false),
+        BinOp::RemU => (false, true),
+        BinOp::DivS => (true, false),
+        BinOp::RemS => (true, true),
+        _ => unreachable!("expected div/rem op, got {op:?}"),
+    };
     emit_zero_check_trap(b, denom);
-    let (q, r) = divrem_u32_core(b, numer, denom);
-    if want_rem { r } else { q }
-}
-
-fn lower_divrem_s32(b: &mut FuncBuilder, numer: Word, denom: Word, want_rem: bool) -> Word {
-    emit_zero_check_trap(b, denom);
-    let zero = Val8::imm(0);
-    let numer_sign = word_bit(b, numer, 31, zero);
-    let denom_sign = word_bit(b, denom, 31, zero);
-    let numer_neg = negate_word(b, numer);
-    let denom_neg = negate_word(b, denom);
-    let numer_abs = select_word(b, numer_sign, numer_neg, numer);
-    let denom_abs = select_word(b, denom_sign, denom_neg, denom);
-
-    let (mut q, mut r) = divrem_u32_core(b, numer_abs, denom_abs);
-    if want_rem {
-        let r_neg = negate_word(b, r);
-        r = select_word(b, numer_sign, r_neg, r);
-        r
-    } else {
-        let sign = b.alloc_reg();
-        b.emit(Inst8::with_dst(
-            sign,
-            Inst8Kind::Xor8(numer_sign, denom_sign),
-        ));
-        let q_neg = negate_word(b, q);
-        q = select_word(b, sign, q_neg, q);
-        q
+    // An unsigned remainder is below the divisor: lanes above the
+    // divisor's highest possibly-nonzero byte are zero.
+    let rem_lanes = denom
+        .bytes()
+        .iter()
+        .rposition(|v| v.imm_value() != Some(0))
+        .map_or(0, |i| i + 1);
+    let dst = b.alloc_word();
+    for (lane, dst_lane) in dst.bytes().into_iter().enumerate() {
+        let kind = if rem && !signed && lane >= rem_lanes {
+            Inst8Kind::Copy(Val8::imm(0))
+        } else {
+            Inst8Kind::DivRem32Byte {
+                lhs: numer,
+                rhs: denom,
+                signed,
+                rem,
+                lane: lane as u8,
+            }
+        };
+        b.emit(Inst8::with_dst(dst_lane, kind));
     }
+    dst
 }
 
 fn shift_left_byte_const(b: &mut FuncBuilder, src: Val8, shift: u8) -> Val8 {
@@ -772,42 +648,6 @@ fn lower_divrem_const_s32(
     Some(lower_divrem_const_bytes(b, numer, denom_u32, true, is_rem))
 }
 
-#[allow(clippy::too_many_arguments)]
-fn lower_divrem_call_via_function(
-    b: &mut FuncBuilder,
-    op: BinOp,
-    lhs: Word,
-    rhs: Word,
-    live_after: &[IrNode],
-    live_locals_after: &[u32],
-    allocs: &[FuncAlloc],
-    div_builtins: Option<DivBuiltinFuncs>,
-) -> anyhow::Result<Word> {
-    let div_builtins = div_builtins.context("div/rem helper table is unavailable")?;
-    let callee_id = div_builtins
-        .for_op(op)
-        .with_context(|| format!("expected div/rem op, got {:?}", op))?;
-    let callee_alloc = &allocs[callee_id as usize];
-    let callee_arg_vregs = divrem_param_vregs(&callee_alloc.local_vregs, callee_id)?.to_vec();
-    let callee_entry = Pc::new(callee_id as u16 * PC_STRIDE);
-    let cont = b.alloc_block();
-    let spill_words = collect_spill_words(live_after, &b.inst_map, &b.local_vregs);
-    b.emit_cs_save(cont, live_locals_after, &spill_words);
-
-    b.finish(Terminator8::CallSetup {
-        callee_entry: CallTarget::Pc(callee_entry),
-        cont,
-        args: vec![lhs, rhs],
-        callee_arg_vregs,
-    });
-    b.switch_to(cont);
-    b.emit_cs_restore(live_locals_after, &spill_words);
-
-    let dst = b.alloc_word();
-    b.copy_ret_to_word(dst);
-    Ok(dst)
-}
-
 /// Sign-extend from `check_byte` (0 for i8, 1 for i16): copies bytes 0..=check_byte,
 /// fills the rest with the sign bit.
 fn lower_sign_extend(b: &mut FuncBuilder, operand: Word, check_byte: usize) -> Word {
@@ -851,10 +691,7 @@ fn lower_binary(b: &mut FuncBuilder, op: BinOp, lhs: Word, rhs: Word) -> anyhow:
         BinOp::Or => lower_word_bytewise_op(b, lhs, rhs, Inst8Kind::Or8),
         BinOp::Xor => lower_word_bytewise_op(b, lhs, rhs, Inst8Kind::Xor8),
         BinOp::Mul => lower_mul32(b, lhs, rhs),
-        BinOp::DivU => lower_divrem_u32(b, lhs, rhs, false),
-        BinOp::RemU => lower_divrem_u32(b, lhs, rhs, true),
-        BinOp::DivS => lower_divrem_s32(b, lhs, rhs, false),
-        BinOp::RemS => lower_divrem_s32(b, lhs, rhs, true),
+        BinOp::DivU | BinOp::RemU | BinOp::DivS | BinOp::RemS => lower_divrem_var(b, op, lhs, rhs),
         BinOp::Shl | BinOp::ShrU | BinOp::ShrS | BinOp::Rotl | BinOp::Rotr => {
             if let Some(rhs_const) = rhs.imm_prefix(3) {
                 lower_const_shift_or_rotate(b, op, lhs, rhs_const)
@@ -1016,52 +853,6 @@ fn lower_terminator(
     Ok(())
 }
 
-#[derive(Clone, Copy)]
-enum DivBuiltinKind {
-    DivU,
-    RemU,
-    DivS,
-    RemS,
-}
-
-fn divrem_param_vregs(local_vregs: &[ValueWords], func_id: u32) -> anyhow::Result<[Word; 2]> {
-    anyhow::ensure!(
-        local_vregs.len() >= 2,
-        "builtin div/rem function {} expects two parameter words",
-        func_id
-    );
-    Ok([local_vregs[0].lo, local_vregs[1].lo])
-}
-
-fn lower_divrem_builtin_function(
-    func_id: u32,
-    local_vregs: Vec<ValueWords>,
-    vreg_start: u16,
-    kind: DivBuiltinKind,
-) -> anyhow::Result<(Vec<BasicBlock8>, Pc, u32, u16)> {
-    let [numer, denom] = divrem_param_vregs(&local_vregs, func_id)?;
-    let mut b = FuncBuilder::new(func_id, false, vreg_start, local_vregs);
-    let entry = b.alloc_block();
-    b.switch_to(entry);
-
-    let ret = match kind {
-        // TODO(i64): synthetic div/rem helper functions exist only for 32-bit integer ops.
-        DivBuiltinKind::DivU => lower_divrem_u32(&mut b, numer, denom, false),
-        DivBuiltinKind::RemU => lower_divrem_u32(&mut b, numer, denom, true),
-        DivBuiltinKind::DivS => lower_divrem_s32(&mut b, numer, denom, false),
-        DivBuiltinKind::RemS => lower_divrem_s32(&mut b, numer, denom, true),
-    };
-
-    calls::emit_non_main_return_sequence(&mut b, Some(ValueWords::one(ret)));
-
-    Ok((
-        b.blocks,
-        Pc::new(func_id as u16 * PC_STRIDE),
-        2,
-        b.vreg_counter,
-    ))
-}
-
 pub fn lower8_module(module: &IrModule, memory_bytes_cap: u32) -> anyhow::Result<Ir8Program> {
     lower8_module_with_config(module, memory_bytes_cap, Lower8Config::default())
 }
@@ -1071,12 +862,7 @@ pub fn lower8_module_with_config(
     memory_bytes_cap: u32,
     config: Lower8Config,
 ) -> anyhow::Result<Ir8Program> {
-    let builtin_slots = if config.js_coprocessor {
-        0usize
-    } else {
-        4usize
-    };
-    let total_func_slots = module.bodies().len() + builtin_slots;
+    let total_func_slots = module.bodies().len();
     let max_func_slots = usize::from(u16::MAX / PC_STRIDE) + 1;
     anyhow::ensure!(
         total_func_slots <= max_func_slots,
@@ -1090,23 +876,7 @@ pub fn lower8_module_with_config(
     let (global_words, global_init) = build_global_init(module)?;
     let stack_pointer = global_init.first().copied();
     let (memory_end, init_bytes) = build_memory_layout(module, memory_bytes_cap, stack_pointer)?;
-    let (mut allocs, mut vreg_counter) = prealloc_locals(module);
-
-    let div_builtins = if config.js_coprocessor {
-        None
-    } else {
-        let user_func_count = module.bodies().len() as u32;
-        let builtins = DivBuiltinFuncs {
-            div_u: user_func_count,
-            rem_u: user_func_count + 1,
-            div_s: user_func_count + 2,
-            rem_s: user_func_count + 3,
-        };
-        for _ in 0..4 {
-            allocs.push(alloc_builtin_div_params(&mut vreg_counter));
-        }
-        Some(builtins)
-    };
+    let (allocs, mut vreg_counter) = prealloc_locals(module);
 
     let mut func_blocks: Vec<Vec<BasicBlock8>> = Vec::with_capacity(module.bodies().len() + 4);
     let mut func_entries: Vec<Pc> = Vec::with_capacity(module.bodies().len() + 4);
@@ -1115,7 +885,7 @@ pub fn lower8_module_with_config(
         module,
         allocs: &allocs,
         global_words: &global_words,
-        div_builtins,
+        js_coprocessor: config.js_coprocessor,
     };
 
     for (func_id, body) in module.bodies().iter().enumerate() {
@@ -1135,54 +905,6 @@ pub fn lower8_module_with_config(
         func_blocks.push(blocks);
         func_entries.push(entry_pc);
         func_num_locals.push(num_locals);
-    }
-
-    if let Some(div_builtins) = div_builtins {
-        let div_u_entry = Pc::new(div_builtins.div_u as u16 * PC_STRIDE);
-        let rem_u_entry = Pc::new(div_builtins.rem_u as u16 * PC_STRIDE);
-        let div_s_entry = Pc::new(div_builtins.div_s as u16 * PC_STRIDE);
-        let rem_s_entry = Pc::new(div_builtins.rem_s as u16 * PC_STRIDE);
-
-        let mut need_div_u = false;
-        let mut need_rem_u = false;
-        let mut need_div_s = false;
-        let mut need_rem_s = false;
-        for blocks in &func_blocks {
-            for bb in blocks {
-                if let Terminator8::CallSetup { callee_entry, .. } = bb.terminator {
-                    if callee_entry == CallTarget::Pc(div_u_entry) {
-                        need_div_u = true;
-                    } else if callee_entry == CallTarget::Pc(rem_u_entry) {
-                        need_rem_u = true;
-                    } else if callee_entry == CallTarget::Pc(div_s_entry) {
-                        need_div_s = true;
-                    } else if callee_entry == CallTarget::Pc(rem_s_entry) {
-                        need_rem_s = true;
-                    }
-                }
-            }
-        }
-
-        for (func_id, kind, needed) in [
-            (div_builtins.div_u, DivBuiltinKind::DivU, need_div_u),
-            (div_builtins.rem_u, DivBuiltinKind::RemU, need_rem_u),
-            (div_builtins.div_s, DivBuiltinKind::DivS, need_div_s),
-            (div_builtins.rem_s, DivBuiltinKind::RemS, need_rem_s),
-        ] {
-            if needed {
-                let local_vregs = allocs[func_id as usize].local_vregs.clone();
-                let (blocks, entry_pc, num_locals, new_counter) =
-                    lower_divrem_builtin_function(func_id, local_vregs, vreg_counter, kind)?;
-                vreg_counter = new_counter;
-                func_blocks.push(blocks);
-                func_entries.push(entry_pc);
-                func_num_locals.push(num_locals);
-            } else {
-                func_blocks.push(Vec::new());
-                func_entries.push(Pc::new(func_id as u16 * PC_STRIDE));
-                func_num_locals.push(2);
-            }
-        }
     }
 
     Ok(Ir8Program {
@@ -1368,7 +1090,7 @@ mod tests {
             module.set_entry_export(Some(0));
             set_ir_functions(
                 module,
-                (0..63)
+                (0..67)
                     .map(|_| (sig.clone(), Some(body.clone())))
                     .collect::<Vec<_>>(),
             );
@@ -1376,7 +1098,7 @@ mod tests {
 
         assert_lower8_error_contains(&module, 65536, "function PC slot");
 
-        module.set_entry_export(Some(62));
+        module.set_entry_export(Some(66));
         assert_lower8_error_contains(&module, 65536, "function PC slot");
     }
 
@@ -1554,7 +1276,7 @@ mod tests {
     }
 
     #[test]
-    fn lower8_divrem_lowering_uses_shared_helpers_and_keeps_trap_path() {
+    fn lower8_variable_divrem_lowers_inline_with_trap_path() {
         let module = mk_single_main_module(BasicBlock {
             id: bid(0),
             insts: vec![
@@ -1607,76 +1329,36 @@ mod tests {
         });
 
         let program = lower8_module(&module, 65536).expect("lower8_module should succeed");
+        assert_eq!(program.func_blocks.len(), 1, "no helper functions");
         let main_blocks = &program.func_blocks[0];
-
         assert!(
-            main_blocks.iter().any(|bb| matches!(
-                bb.terminator,
-                Terminator8::CallSetup {
-                    callee_entry,
-                    ..
-                } if callee_entry == CallTarget::Pc(Pc::new(PC_STRIDE))
-                    || callee_entry == CallTarget::Pc(Pc::new(2 * PC_STRIDE))
-                    || callee_entry == CallTarget::Pc(Pc::new(3 * PC_STRIDE))
-                    || callee_entry == CallTarget::Pc(Pc::new(4 * PC_STRIDE))
-            )),
-            "expected variable div/rem to call shared helper functions"
-        );
-        assert!(
-            program.func_blocks.iter().skip(1).any(|blocks| blocks
+            !main_blocks
                 .iter()
-                .any(|bb| matches!(bb.terminator, Terminator8::Trap(TrapCode::DivisionByZero)))),
-            "expected divide-by-zero trap blocks in shared helper functions"
+                .any(|bb| matches!(bb.terminator, Terminator8::CallSetup { .. })),
+            "variable div/rem lowers inline"
         );
-    }
-
-    #[test]
-    fn lower8_variable_divrem_calls_shared_builtin_function() {
-        let module = mk_single_main_module(BasicBlock {
-            id: bid(0),
-            insts: vec![
-                Inst::I32Const(100),
-                Inst::Getchar { blocking: true },
-                Inst::Binary {
-                    op: BinOp::DivU,
-                    ty: ValType::I32,
-                    lhs: r(0),
-                    rhs: r(1),
-                },
-            ],
-            terminator: Terminator::Return(Some(r(2))),
-        });
-
-        let program = lower8_module(&module, 65536).expect("lower8_module should succeed");
-        assert_eq!(
-            program.func_blocks.len(),
-            5,
-            "helper function-id slots are preserved; only referenced helpers have non-empty blocks"
-        );
-
-        let main_blocks = &program.func_blocks[0];
-        let div_u_entry = Pc::new(PC_STRIDE);
-        assert!(
-            main_blocks.iter().any(|bb| {
-                matches!(
-                    bb.terminator,
-                    Terminator8::CallSetup { callee_entry, .. }
-                        if callee_entry == CallTarget::Pc(div_u_entry)
-                )
-            }),
-            "expected variable division to call shared builtin function entry {}",
-            div_u_entry.index()
-        );
-        assert!(
-            !program.func_blocks[1].is_empty(),
-            "div_u helper should be emitted when referenced"
-        );
-        assert!(
-            program.func_blocks[2].is_empty()
-                && program.func_blocks[3].is_empty()
-                && program.func_blocks[4].is_empty(),
-            "unused helpers should not emit blocks"
-        );
+        let traps = main_blocks
+            .iter()
+            .filter(|bb| matches!(bb.terminator, Terminator8::Trap(TrapCode::DivisionByZero)))
+            .count();
+        assert_eq!(traps, 4, "each div/rem keeps its divide-by-zero trap");
+        let lanes = |want_signed: bool, want_rem: bool| -> Vec<u8> {
+            main_blocks
+                .iter()
+                .flat_map(|bb| &bb.insts)
+                .filter_map(|inst| match inst.kind {
+                    Inst8Kind::DivRem32Byte {
+                        signed, rem, lane, ..
+                    } if signed == want_signed && rem == want_rem => Some(lane),
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(lanes(false, false), [0, 1, 2, 3]);
+        assert_eq!(lanes(true, false), [0, 1, 2, 3]);
+        assert_eq!(lanes(true, true), [0, 1, 2, 3]);
+        // `getchar` returns a byte: an unsigned remainder fits in lane 0.
+        assert_eq!(lanes(false, true), [0]);
     }
 
     #[test]
@@ -1856,130 +1538,6 @@ mod tests {
                 check(a, d);
             }
         }
-    }
-
-    #[test]
-    fn lower8_divrem_helper_dispatches_on_high_dividend_bytes() {
-        let module = mk_single_main_module(BasicBlock {
-            id: bid(0),
-            insts: vec![
-                Inst::I32Const(100),
-                Inst::Getchar { blocking: true },
-                Inst::Binary {
-                    op: BinOp::DivU,
-                    ty: ValType::I32,
-                    lhs: r(0),
-                    rhs: r(1),
-                },
-            ],
-            terminator: Terminator::Return(Some(r(2))),
-        });
-
-        let program = lower8_module(&module, 65536).expect("lower8_module should succeed");
-        let div_u_entry = Pc::new(PC_STRIDE);
-        let main_blocks = &program.func_blocks[0];
-        let helper_numer_word = main_blocks
-            .iter()
-            .find_map(|bb| match bb.terminator {
-                Terminator8::CallSetup {
-                    callee_entry,
-                    ref callee_arg_vregs,
-                    ..
-                } if callee_entry == CallTarget::Pc(div_u_entry) => {
-                    callee_arg_vregs.first().copied()
-                }
-                _ => None,
-            })
-            .expect("main should call div_u helper with argument vregs");
-
-        let mut saw_b3_check = false;
-        let mut saw_b2_check = false;
-        let mut saw_b1_check = false;
-        let helper_blocks = &program.func_blocks[1];
-        for bb in helper_blocks {
-            for inst in &bb.insts {
-                if let Inst8Kind::Eq(lhs, rhs) = inst.kind {
-                    let checks = |byte: Val8| {
-                        (lhs == byte && rhs.imm_value() == Some(0))
-                            || (rhs == byte && lhs.imm_value() == Some(0))
-                    };
-                    saw_b3_check |= checks(helper_numer_word.b3);
-                    saw_b2_check |= checks(helper_numer_word.b2);
-                    saw_b1_check |= checks(helper_numer_word.b1);
-                }
-            }
-        }
-
-        assert!(
-            saw_b3_check && saw_b2_check && saw_b1_check,
-            "expected div_u helper to check dividend high bytes b3/b2/b1 for short-path dispatch"
-        );
-    }
-
-    #[test]
-    fn lower8_divrem_helper_reuses_subtract_borrow_instead_of_ltu_chain() {
-        let module = mk_single_main_module(BasicBlock {
-            id: bid(0),
-            insts: vec![
-                Inst::Getchar { blocking: true },
-                Inst::Getchar { blocking: true },
-                Inst::Binary {
-                    op: BinOp::DivU,
-                    ty: ValType::I32,
-                    lhs: r(0),
-                    rhs: r(1),
-                },
-            ],
-            terminator: Terminator::Return(Some(r(2))),
-        });
-
-        let program = lower8_module(&module, 65536).expect("lower8_module should succeed");
-        let div_u_entry = Pc::new(PC_STRIDE);
-        let main_blocks = &program.func_blocks[0];
-        let helper_denom_word = main_blocks
-            .iter()
-            .find_map(|bb| match bb.terminator {
-                Terminator8::CallSetup {
-                    callee_entry,
-                    ref callee_arg_vregs,
-                    ..
-                } if callee_entry == CallTarget::Pc(div_u_entry) => {
-                    callee_arg_vregs.get(1).copied()
-                }
-                _ => None,
-            })
-            .expect("main should call div_u helper with denominator vregs");
-
-        let helper_blocks = &program.func_blocks[1];
-        assert!(
-            helper_blocks
-                .iter()
-                .flat_map(|bb| bb.insts.iter())
-                .all(|inst| !matches!(inst.kind, Inst8Kind::LtU(_, _))),
-            "div_u helper should derive restore-step ordering from subtract borrow, not lt_u chain"
-        );
-
-        let mut defs = HashMap::new();
-        for bb in helper_blocks {
-            for inst in &bb.insts {
-                if let Some(dst) = inst.dst {
-                    defs.insert(dst, inst.kind);
-                }
-            }
-        }
-
-        assert!(
-            helper_blocks
-                .iter()
-                .flat_map(|bb| bb.insts.iter())
-                .any(|inst| {
-                    let Inst8Kind::BoolNot(src) = inst.kind else {
-                        return false;
-                    };
-                    matches!(defs.get(&src), Some(Inst8Kind::Sub32Borrow { rhs, .. }) if *rhs == helper_denom_word)
-                }),
-            "div_u helper should negate the final high-byte subtract borrow to form the quotient bit"
-        );
     }
 
     #[test]

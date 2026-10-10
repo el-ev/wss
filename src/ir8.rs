@@ -271,6 +271,12 @@ pub fn divrem32_const_byte(lhs: u32, denom: u32, signed: bool, rem: bool, lane: 
     (out >> (8 * u32::from(lane))) as u8
 }
 
+/// Reference semantics of [`Inst8Kind::DivRem32Byte`]: `None` for a zero
+/// divisor, which traps before the instruction runs. `i32::MIN / -1` wraps.
+pub fn divrem32_byte(lhs: u32, rhs: u32, signed: bool, rem: bool, lane: u8) -> Option<u8> {
+    (rhs != 0).then(|| divrem32_const_byte(lhs, rhs, signed, rem, lane))
+}
+
 /// Upper bound on the unsigned bit pattern of a constant div/rem result.
 pub fn divrem32_const_max(denom: u32, signed: bool, rem: bool) -> u32 {
     match (signed, rem) {
@@ -396,6 +402,11 @@ impl Inst8 {
                 out
             }
             Inst8Kind::DivRem32ConstByte { lhs, .. } => lhs.uses_through_lane(3),
+            Inst8Kind::DivRem32Byte { lhs, rhs, .. } => {
+                let mut out = lhs.uses_through_lane(3);
+                out.extend(rhs.uses_through_lane(3));
+                out
+            }
             Inst8Kind::Cmp32 { lhs, rhs, .. } => {
                 let mut out = lhs.uses_through_lane(3);
                 out.extend(rhs.uses_through_lane(3));
@@ -495,6 +506,17 @@ pub enum Inst8Kind {
     DivRem32ConstByte {
         lhs: Word,
         denom: u32,
+        signed: bool,
+        rem: bool,
+        lane: u8,
+    },
+    /// Byte `lane` of `lhs / rhs` (or `lhs % rhs` when `rem`) for a divisor
+    /// known nonzero at run time (a zero check precedes it), with wasm
+    /// `div`/`rem` semantics. Like [`Inst8Kind::DivRem32ConstByte`], one
+    /// exact expression over the word values.
+    DivRem32Byte {
+        lhs: Word,
+        rhs: Word,
         signed: bool,
         rem: bool,
         lane: u8,

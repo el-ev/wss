@@ -771,6 +771,10 @@ fn map_inst_kind_vals(
             map_word_vals_through_lane(rhs, *lane, f)?;
         }
         Inst8Kind::DivRem32ConstByte { lhs, .. } => map_word_vals(lhs, f)?,
+        Inst8Kind::DivRem32Byte { lhs, rhs, .. } => {
+            map_word_vals(lhs, f)?;
+            map_word_vals(rhs, f)?;
+        }
         Inst8Kind::Sub32Borrow { lhs, rhs } | Inst8Kind::Cmp32 { lhs, rhs, .. } => {
             map_word_vals(lhs, f)?;
             map_word_vals(rhs, f)?;

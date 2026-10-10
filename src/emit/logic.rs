@@ -132,6 +132,22 @@ impl<'a> Emitter<'a> {
                             );
                         }
                     }
+                    Inst8Kind::DivRem32Byte {
+                        lhs,
+                        rhs,
+                        signed,
+                        rem,
+                        lane,
+                    } => {
+                        if let Some(dst) = op.dst {
+                            reg_now.insert(
+                                dst.expect_vreg(),
+                                Self::divrem32_byte_expr(
+                                    &reg_now, *lhs, *rhs, *signed, *rem, *lane,
+                                ),
+                            );
+                        }
+                    }
                     Inst8Kind::Add32Byte { lhs, rhs, lane } => {
                         if let Some(dst) = op.dst {
                             reg_now.insert(
@@ -2074,6 +2090,49 @@ impl<'a> Emitter<'a> {
             )
         };
         Self::fold_mod_if(shifted, (max >> (8 * u32::from(lane))) > 255 || signed)
+    }
+
+    /// Byte `lane` of a word divided by a word known to be nonzero (see
+    /// [`Inst8Kind::DivRem32Byte`]). Exact for the same reason as
+    /// [`Self::divrem32_const_byte_expr`]: with `n, d < 2^32`, a quotient
+    /// `n / d` short of an integer `k` is at least `1 / d` below it, and
+    /// `d * k <= n + d < 2^33`, so the gap is far above the `double`
+    /// rounding error. Upper quotient lanes divide by `d * 256^lane`
+    /// directly: that divisor only reaches 2^53 when it is far above `n`,
+    /// where the quotient is 0 with a gap close to 1.
+    pub(super) fn divrem32_byte_expr(
+        now: &HashMap<u16, String>,
+        lhs: Word,
+        rhs: Word,
+        signed: bool,
+        rem: bool,
+        lane: u8,
+    ) -> String {
+        let n = Self::word_value_expr(now, lhs, signed);
+        let d = Self::word_value_expr(now, rhs, signed);
+        let p = |x: &str| Self::paren_if_needed(x);
+        let scale = 1u64 << (8 * u32::from(lane));
+        let value = match (signed, rem) {
+            (false, false) => {
+                let denom = if lane == 0 {
+                    p(&d)
+                } else {
+                    format!("({} * {})", p(&d), scale)
+                };
+                let value = format!("round(down, calc({} / {}))", p(&n), denom);
+                return Self::fold_mod_if(value, lane < 3);
+            }
+            (false, true) => format!("mod({}, {})", n, d),
+            (true, false) => format!("round(to-zero, calc({} / {}))", p(&n), p(&d)),
+            (true, true) => format!("rem({}, {})", n, d),
+        };
+        let shifted = if lane == 0 {
+            value
+        } else {
+            format!("round(down, calc({} / {}))", p(&value), scale)
+        };
+        // A remainder is below the divisor, so its top byte needs no wrap.
+        Self::fold_mod_if(shifted, signed || lane < 3)
     }
 
     fn fold_mod_if(value: String, wrap: bool) -> String {

@@ -141,6 +141,21 @@ fn simplify_kind(kind: Inst8Kind, facts: &HashMap<Val8, RegFact>) -> Inst8Kind {
             Some(a) => imm_kind(crate::ir8::divrem32_const_byte(a, denom, signed, rem, lane)),
             None => kind,
         },
+        Inst8Kind::DivRem32Byte {
+            lhs,
+            rhs,
+            signed,
+            rem,
+            lane,
+        } => match (const_word_prefix(lhs, 3, facts), const_word_prefix(rhs, 3, facts)) {
+            (Some(a), Some(d)) => match crate::ir8::divrem32_byte(a, d, signed, rem, lane) {
+                Some(v) => imm_kind(v),
+                None => kind,
+            },
+            // `0 / d` and `0 % d` are zero (`d` is nonzero here).
+            (Some(0), None) => imm_kind(0),
+            _ => kind,
+        },
         Inst8Kind::Add32Byte { lhs, rhs, lane } => {
             match (
                 const_word_prefix(lhs, lane, facts),

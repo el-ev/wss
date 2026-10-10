@@ -2659,5 +2659,18 @@
         "0x00000011"
       ]
     }
+  },
+  {
+    "id": "divrem_runtime_edges",
+    "source": "tests/cases/divrem_runtime_edges.c",
+    "tags": ["lengthy"],
+    "virtual_time_budget_ms": 120000,
+    "expect": {
+      "pc": -1,
+      "ra": "0x571da927",
+      "rendered_includes": [
+        "0x571da927"
+      ]
+    }
   }
 ]

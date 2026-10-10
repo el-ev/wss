@@ -28,14 +28,6 @@ pub(super) fn prealloc_locals(module: &IrModule) -> (Vec<FuncAlloc>, u16) {
     (allocs, counter)
 }
 
-pub(super) fn alloc_builtin_div_params(counter: &mut u16) -> FuncAlloc {
-    let word0 = alloc_word_from_counter(counter);
-    let word1 = alloc_word_from_counter(counter);
-    FuncAlloc {
-        local_vregs: vec![ValueWords::one(word0), ValueWords::one(word1)],
-    }
-}
-
 fn alloc_word_from_counter(counter: &mut u16) -> Word {
     let word = Word::new(
         Val8::reg(*counter),
