@@ -229,8 +229,8 @@ fn lower_numeric_inst(
                 let out = match *op {
                     UnOp::Eqz => ValueWords::one(lower_eqz64(b, value)),
                     UnOp::WrapI64 => ValueWords::one(value.lo),
-                    UnOp::Extend8S => lower_sign_extend64_from_byte(b, value, false, 0),
-                    UnOp::Extend16S => lower_sign_extend64_from_byte(b, value, false, 1),
+                    UnOp::Extend8S => lower_sign_extend64_from_byte(b, value, 0),
+                    UnOp::Extend16S => lower_sign_extend64_from_byte(b, value, 1),
                     UnOp::Extend32S => {
                         let lo = value.lo;
                         lower_extend_i32_to_i64(b, lo, true)

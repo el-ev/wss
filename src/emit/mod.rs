@@ -459,6 +459,7 @@ fn emit_html(emitter: &Emitter, program: &Ir8Program) -> anyhow::Result<String> 
         &debugger_regs,
     );
     inline::eliminate_dead_decls(&mut logic_doc, &mut support_doc, &external);
+    inline::skip_base_pass(&mut logic_doc, &mut support_doc);
     let logic_css = crate::css::print_doc(&logic_doc);
     let support_css = crate::css::print_doc(&support_doc);
 
@@ -1160,7 +1161,7 @@ impl<'a> Emitter<'a> {
                 !text[..i]
                     .bytes()
                     .next_back()
-                    .is_some_and(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+                    .is_some_and(crate::css::is_custom_name_cont)
             })
         };
         HELPERS

@@ -1,7 +1,5 @@
 //! CSS expression AST used by the emit pipeline.
 
-#![allow(dead_code)]
-
 mod doc;
 mod fold;
 mod opt;

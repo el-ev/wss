@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::css::Doc;
+use crate::css::{Body, Decl, DeclItem, Doc, Item, ListSep, Node, Prelude};
 
 const SLOT_PREFIXES: &[&str] = &["cri", "crp", "csi", "csp", "mri", "msc", "msp"];
 
@@ -85,6 +85,85 @@ pub(super) fn eliminate_dead_decls(
             break;
         }
     }
+}
+
+/// Marker the execute keyframe sets: present in the animated cascade pass
+/// only (see [`skip_base_pass`]).
+const LIVE_MARKER: &str = "--_0live";
+
+/// Skip the logic in the base cascade pass. Blink resolves `.terminal`
+/// twice per recalc: a base pass without animations, where every latch
+/// read falls back to its initial value and every `if()` chain is still
+/// evaluated arm by arm, then the animated pass that computes the real
+/// values. The base pass is discarded, so wrap each heavy declaration in
+/// the two-var trick: `--x: var(--nb, 0) var(--na, V)`. `--nb` is invalid
+/// in the base pass (so `0` is substituted) and empty in the animated
+/// pass; `--na` is the reverse, so `V` is substituted only there. A skipped
+/// fallback is tokenized but never evaluated. The passes are told apart by
+/// `--_0live: 1`, a literal the execute keyframe sets: an animation's value
+/// exists in the animated pass only, from the recalc it starts in.
+pub(super) fn skip_base_pass(logic: &mut Doc, support: &mut Doc) {
+    let Some(decls) = execute_keyframe_decls(support) else {
+        return;
+    };
+    let wrapped = logic
+        .items
+        .iter_mut()
+        .filter_map(|item| match item {
+            Item::Decl(decl) if matches!(decl.value, Node::If { .. } | Node::Fn { .. }) => {
+                Some(decl)
+            }
+            _ => None,
+        })
+        .map(|decl| {
+            let value = std::mem::replace(&mut decl.value, Node::Invalid);
+            decl.value = Node::List {
+                sep: ListSep::Space,
+                items: vec![
+                    var_with_fallback("--nb", Node::Int(0)),
+                    var_with_fallback("--na", value),
+                ],
+            };
+        })
+        .count();
+    if wrapped == 0 {
+        return;
+    }
+    decls.insert(
+        0,
+        DeclItem::Decl(Decl::new(LIVE_MARKER.to_string(), Node::Int(1))),
+    );
+    let flags = crate::css::parse_doc(&format!(
+        " --nb: if(style({LIVE_MARKER}: 1):);\n --na: if(not style({LIVE_MARKER}: 1):);\n"
+    ));
+    logic.items.extend(flags.items);
+}
+
+fn var_with_fallback(name: &str, fallback: Node) -> Node {
+    Node::Var {
+        name: name.to_string(),
+        fallback: Some(Box::new(fallback)),
+    }
+}
+
+/// The declarations of the `@keyframes execute` frame.
+fn execute_keyframe_decls(support: &mut Doc) -> Option<&mut Vec<DeclItem>> {
+    let frames = support.items.iter_mut().find_map(|item| match item {
+        Item::Rule(rule) if matches!(&rule.prelude, Prelude::Keyframes(name) if name == "execute") => {
+            match &mut rule.body {
+                Body::Nested(items) => Some(items),
+                Body::Decls(_) => None,
+            }
+        }
+        _ => None,
+    })?;
+    frames.iter_mut().find_map(|item| match item {
+        Item::Rule(frame) => match &mut frame.body {
+            Body::Decls(decls) => Some(decls),
+            Body::Nested(_) => None,
+        },
+        _ => None,
+    })
 }
 
 /// References that live outside the parsed buffers — base.html's

@@ -803,30 +803,7 @@ pub fn count_refs_in_text(s: &str, counts: &mut HashMap<String, usize>) {
 }
 
 pub fn fold_doc(doc: &mut Doc) {
-    fold_in_items(&mut doc.items);
-}
-
-fn fold_in_items(items: &mut [Item]) {
-    for item in items {
-        match item {
-            Item::Decl(d) => d.value = super::fold(std::mem::replace(&mut d.value, Node::Int(0))),
-            Item::Rule(r) => fold_in_rule(r),
-            Item::Verbatim(_) => {}
-        }
-    }
-}
-
-fn fold_in_rule(rule: &mut Rule) {
-    match &mut rule.body {
-        Body::Decls(items) => {
-            for di in items {
-                if let DeclItem::Decl(d) = di {
-                    d.value = super::fold(std::mem::replace(&mut d.value, Node::Int(0)));
-                }
-            }
-        }
-        Body::Nested(items) => fold_in_items(items),
-    }
+    super::opt::rewrite_items(&mut doc.items, None, &mut |_, value| super::fold(value));
 }
 
 // =====================================================================

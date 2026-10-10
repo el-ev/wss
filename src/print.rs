@@ -937,12 +937,12 @@ fn print_term8(out: &mut String, term: &Terminator8) {
         }
         Terminator8::Trap(code) => {
             let name = match code {
-                TrapCode::CallstackOverflow => "trap callstack_overflow",
-                TrapCode::Exited => "trap exited",
-                TrapCode::Unreachable => "trap unreachable",
-                TrapCode::InvalidMemoryAccess => "trap invalid_memory_access",
-                TrapCode::DivisionByZero => "trap division_by_zero",
-                TrapCode::UncaughtException => "trap uncaught_exception",
+                TrapCode::CallstackOverflow => "callstack_overflow",
+                TrapCode::Exited => "exited",
+                TrapCode::Unreachable => "unreachable",
+                TrapCode::InvalidMemoryAccess => "invalid_memory_access",
+                TrapCode::DivisionByZero => "division_by_zero",
+                TrapCode::UncaughtException => "uncaught_exception",
             };
             write!(out, "trap {}", name).unwrap();
         }
@@ -957,15 +957,11 @@ fn print_term8(out: &mut String, term: &Terminator8) {
 //   - dump_css_expr / Node::to_dump  — indented tree for debugging.
 // =====================================================================
 
-// CSS-AST printers — public entry points used once stage 2 routes
-// emit passes through the AST. Suppress dead-code warnings until then.
-#[allow(dead_code)]
 use crate::css::{
     Arm as CssArm, ListSep as CssListSep, Node as CssNode, Sign as CssSign, Term as CssTerm,
 };
 
 /// Render a CSS expression as a string suitable for emission.
-#[allow(dead_code)]
 pub fn print_css_expr(node: &CssNode) -> String {
     let mut out = String::new();
     write_css_expr(node, false, &mut out);
@@ -973,24 +969,23 @@ pub fn print_css_expr(node: &CssNode) -> String {
 }
 
 /// Render a CSS expression AST as an indented tree.
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn dump_css_expr(node: &CssNode) -> String {
     let mut out = String::new();
     write_css_dump(node, 0, &mut out);
     out
 }
 
-#[allow(dead_code)]
 impl CssNode {
     pub fn to_css(&self) -> String {
         print_css_expr(self)
     }
+    #[cfg(test)]
     pub fn to_dump(&self) -> String {
         dump_css_expr(self)
     }
 }
 
-#[allow(dead_code)]
 fn write_css_expr(node: &CssNode, math_ctx: bool, out: &mut String) {
     match node {
         CssNode::Invalid => {}
@@ -1170,7 +1165,6 @@ fn same_style_prop(conds: &[CssNode]) -> Option<&str> {
     shared
 }
 
-#[allow(dead_code)]
 fn write_css_arg(node: &CssNode, out: &mut String) {
     match node {
         CssNode::Sum(_) | CssNode::Product(_) | CssNode::Div(_, _) => {
@@ -1182,7 +1176,6 @@ fn write_css_arg(node: &CssNode, out: &mut String) {
     }
 }
 
-#[allow(dead_code)]
 fn write_css_sum(terms: &[CssTerm], out: &mut String) {
     for (i, t) in terms.iter().enumerate() {
         if i == 0 {
@@ -1209,7 +1202,6 @@ fn write_css_sum(terms: &[CssTerm], out: &mut String) {
     }
 }
 
-#[allow(dead_code)]
 fn write_css_product(factors: &[CssNode], out: &mut String) {
     for (i, f) in factors.iter().enumerate() {
         if i > 0 {
@@ -1221,7 +1213,6 @@ fn write_css_product(factors: &[CssNode], out: &mut String) {
 
 /// A factor inside a Product or Div lhs/rhs: wrap a Sum in `(...)` so
 /// the binding stays tighter than `+`/`-`.
-#[allow(dead_code)]
 fn write_css_factor(node: &CssNode, out: &mut String) {
     match node {
         CssNode::Sum(_) => {
@@ -1233,7 +1224,6 @@ fn write_css_factor(node: &CssNode, out: &mut String) {
     }
 }
 
-#[allow(dead_code)]
 fn write_css_arm(arm: &CssArm, out: &mut String) {
     write_css_expr(&arm.cond, false, out);
     out.push_str(": ");
@@ -1244,7 +1234,7 @@ fn write_css_arm(arm: &CssArm, out: &mut String) {
 // CSS dump format
 // ---------------------------------------------------------------------
 
-#[allow(dead_code)]
+#[cfg(test)]
 fn write_css_dump(node: &CssNode, indent: usize, out: &mut String) {
     let pad: String = " ".repeat(indent);
     match node {
@@ -1388,7 +1378,7 @@ fn write_css_dump(node: &CssNode, indent: usize, out: &mut String) {
     }
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 fn pluralize(n: usize) -> &'static str {
     if n == 1 { "" } else { "s" }
 }

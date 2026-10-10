@@ -312,40 +312,21 @@ fn lower_extend_i32_to_i64(b: &mut FuncBuilder, value: Word, signed: bool) -> Va
     }
 }
 
+/// Sign-extends the low `check_byte + 1` bytes of an i64 to all 64 bits.
 fn lower_sign_extend64_from_byte(
     b: &mut FuncBuilder,
     value: ValueWords,
-    check_word_hi: bool,
     check_byte: usize,
 ) -> ValueWords {
-    let sign_src = if check_word_hi {
-        value.hi.expect("i64 value must have hi").bytes()[check_byte]
-    } else {
-        value.lo.bytes()[check_byte]
-    };
-    let fill = lower_load_fill_byte(b, sign_src, true);
-    let mut lo = value.lo;
-    let mut hi = value.hi.expect("i64 value must have hi");
-    if check_word_hi {
-        for lane in (check_byte + 1)..4 {
-            hi = Word::new(
-                if lane == 0 { fill } else { hi.b0 },
-                if lane <= 1 { fill } else { hi.b1 },
-                if lane <= 2 { fill } else { hi.b2 },
-                if lane <= 3 { fill } else { hi.b3 },
-            );
-        }
-    } else {
-        let lo_bytes = lo.bytes();
-        lo = Word::new(
-            lo_bytes[0],
-            if check_byte < 1 { fill } else { lo_bytes[1] },
-            if check_byte < 2 { fill } else { lo_bytes[2] },
-            if check_byte < 3 { fill } else { lo_bytes[3] },
-        );
-        hi = Word::new(fill, fill, fill, fill);
-    }
-    ValueWords::two(lo, hi)
+    let lo_bytes = value.lo.bytes();
+    let fill = lower_load_fill_byte(b, lo_bytes[check_byte], true);
+    let lo = Word::new(
+        lo_bytes[0],
+        if check_byte < 1 { fill } else { lo_bytes[1] },
+        if check_byte < 2 { fill } else { lo_bytes[2] },
+        if check_byte < 3 { fill } else { lo_bytes[3] },
+    );
+    ValueWords::two(lo, Word::new(fill, fill, fill, fill))
 }
 
 fn emit_zero_check_trap(b: &mut FuncBuilder, denom: Word) {
@@ -851,6 +832,7 @@ fn lower_terminator(
     Ok(())
 }
 
+#[cfg(test)]
 pub fn lower8_module(module: &IrModule, memory_bytes_cap: u32) -> anyhow::Result<Ir8Program> {
     lower8_module_with_config(module, memory_bytes_cap, Lower8Config::default())
 }

@@ -457,10 +457,12 @@ fn emit_html_callstack_visualizer_tracks_read_and_write_slots() {
         html.contains("@function --csmerge(--idx <integer>, --prev <integer>) returns <integer>")
     );
     assert!(html.contains("style(--ctl0: var(--idx))"));
-    assert!(html.contains("--cswdp0: if(style(--cswdp_any: 0): 0; else: if("));
+    assert!(
+        html.contains("--cswdp0: var(--nb, 0) var(--na, if(style(--cswdp_any: 0): 0; else: if(")
+    );
     assert!(html.contains("@property --cswdp0 { syntax: \"<integer>\";"));
-    assert!(html.contains("--cswdps0: if(style(--cswdp0: 0): );"));
-    assert!(html.contains("--cswdpk0: if(not style(--cswdp0: 0): );"));
+    assert!(html.contains("--cswdps0: var(--nb, 0) var(--na, if(style(--cswdp0: 0): ));"));
+    assert!(html.contains("--cswdpk0: var(--nb, 0) var(--na, if(not style(--cswdp0: 0): ));"));
     assert!(html.contains(&format!(
         "{}: var(--cswdps0, --csmerge(0, var({}, 0))) var(--cswdpk0, var({}, 0));",
         Emitter::shadow_name(0, &cs0_name),
@@ -593,7 +595,7 @@ fn emit_html_includes_keyboard_ui_when_getchar_is_used() {
     let html = emit_program(&program).expect("emit should succeed");
     assert!(html.contains("@property --kb"));
     assert!(html.contains("@property --wait_input"));
-    assert!(html.contains("--wait_input: if("));
+    assert!(html.contains("--wait_input: var(--nb, 0) var(--na, if("));
     assert!(html.contains("--eq(var(--kb), -1)"));
     assert!(html.contains("@function --eqz(--a <number>) returns <integer>"));
     assert!(html.contains("@function --ne(--a <number>, --b <number>) returns <integer>"));
@@ -950,13 +952,13 @@ fn emit_html_memory_store_merge_expr_flattens_slot_conditions() {
     ));
     assert!(html.contains("style(--mta0: var(--lo))"));
     assert!(html.contains("style(--mta0b: var(--hi))"));
-    assert!(html.contains("--mta0: if("));
-    assert!(html.contains("--mta0b: if("));
+    assert!(html.contains("--mta0: var(--nb, 0) var(--na, if("));
+    assert!(html.contains("--mta0b: var(--nb, 0) var(--na, if("));
     // Page flags: one test per page when no store is active.
-    assert!(html.contains("--mwdp0: if(style(--mwdp_any: 0): 0; else: if("));
+    assert!(html.contains("--mwdp0: var(--nb, 0) var(--na, if(style(--mwdp_any: 0): 0; else: if("));
     assert!(html.contains("@property --mwdp0 { syntax: \"<integer>\";"));
-    assert!(html.contains("--mwdps0: if(style(--mwdp0: 0): );"));
-    assert!(html.contains("--mwdpk0: if(not style(--mwdp0: 0): );"));
+    assert!(html.contains("--mwdps0: var(--nb, 0) var(--na, if(style(--mwdp0: 0): ));"));
+    assert!(html.contains("--mwdpk0: var(--nb, 0) var(--na, if(not style(--mwdp0: 0): ));"));
     assert!(html.contains(&format!(
         "{}: var(--mwdps0, --mmerge16(0, 1, {})) var(--mwdpk0, {});",
         Emitter::shadow_name(0, &m0_name),
@@ -1186,4 +1188,18 @@ fn read_call_passes_chunk_directly() {
     // One entry point dispatching on `--c`; no one-argument wrapper.
     assert!(out.contains("@function --f(--c <integer>, --i <integer>) returns <integer> { result: if(style(--c: 0): --f_0(var(--i)); style(--c: 1): --f_1(var(--i)); "));
     assert!(!out.contains("--f_d"));
+}
+
+#[test]
+fn emit_html_skips_logic_in_base_pass() {
+    let html = emit_program(&minimal_exit_program()).expect("emit should succeed");
+    // The execute keyframe marks the animated pass; the flags derive from it.
+    assert!(html.contains("--_0live: 1;"));
+    assert!(html.contains("--nb: if(style(--_0live: 1): );"));
+    assert!(html.contains("--na: if(not style(--_0live: 1): );"));
+    // `if()` chains are evaluated in the animated pass only; latch reads
+    // and other cheap declarations are left alone.
+    assert!(html.contains("--pc: var(--nb, 0) var(--na, if("));
+    assert!(html.contains("--_1pc: var(--_2pc, "));
+    assert!(!html.contains("--_1pc: var(--nb"));
 }

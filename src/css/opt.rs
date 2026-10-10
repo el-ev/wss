@@ -431,7 +431,7 @@ fn collect_function_scopes(items: &[Item], out: &mut HashMap<String, Scope>) {
     }
 }
 
-fn rewrite_items(
+pub(super) fn rewrite_items(
     items: &mut [Item],
     function: Option<&str>,
     f: &mut impl FnMut(Option<&str>, Node) -> Node,

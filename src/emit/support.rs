@@ -886,7 +886,6 @@ impl<'a> Emitter<'a> {
         self.cs_names.len().div_ceil(CALLSTACK_DIRTY_PAGE_CELLS)
     }
 
-    /// Finds long `style(--_1pc: N) or style(--_1pc: M) or ...` chains that
     /// Removes slot-indicator alias declarations of the form
     /// ` --criN: var(--criT);` (also `cro`, `csi`, `cso`, `mri`, `mro`), then
     /// rewrites every `var(--{prefix}N)` reference in both `logic` and
@@ -934,6 +933,7 @@ impl<'a> Emitter<'a> {
         *props = new_props;
     }
 
+    /// Finds long `style(--_1pc: N) or style(--_1pc: M) or ...` chains that
     /// appear multiple times in `logic` and replaces them with
     /// `style(--gK: 1)` indicator-property references, emitting the
     /// corresponding `@property --gK` declaration into `props` and the

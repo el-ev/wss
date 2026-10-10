@@ -490,18 +490,17 @@ fn remove_unreachable_blocks(prog: &mut Ir8Program) -> bool {
 // putchar batching across the (now-collapsed) diamond.
 fn predicate_branch_putchar(prog: &mut Ir8Program) -> bool {
     let mut changed = false;
-    for func_id in 0..prog.func_blocks.len() {
-        loop {
-            if !predicate_branch_putchar_once(&mut prog.func_blocks[func_id]) {
-                break;
-            }
+    let mut next_vreg = prog.num_vregs.max(VREG_START);
+    for blocks in &mut prog.func_blocks {
+        while predicate_branch_putchar_once(blocks, &mut next_vreg) {
             changed = true;
         }
     }
+    prog.num_vregs = next_vreg;
     changed
 }
 
-fn predicate_branch_putchar_once(blocks: &mut [BasicBlock8]) -> bool {
+fn predicate_branch_putchar_once(blocks: &mut [BasicBlock8], next_vreg: &mut u16) -> bool {
     if blocks.len() < 2 {
         return false;
     }
@@ -559,7 +558,8 @@ fn predicate_branch_putchar_once(blocks: &mut [BasicBlock8]) -> bool {
             };
 
             let enable = if negate {
-                let new_reg = next_vreg(blocks);
+                let new_reg = Val8::reg(*next_vreg);
+                *next_vreg += 1;
                 blocks[i]
                     .insts
                     .push(Inst8::with_dst(new_reg, Inst8Kind::BoolNot(cond)));
@@ -576,30 +576,6 @@ fn predicate_branch_putchar_once(blocks: &mut [BasicBlock8]) -> bool {
     }
 
     false
-}
-
-fn next_vreg(blocks: &[BasicBlock8]) -> Val8 {
-    let mut max = VREG_START;
-    for bb in blocks {
-        for inst in &bb.insts {
-            if let Some(dst) = inst.dst
-                && let Some(idx) = dst.reg_index()
-            {
-                max = max.max(idx + 1);
-            }
-            for r in inst.uses() {
-                if let Some(idx) = r.reg_index() {
-                    max = max.max(idx + 1);
-                }
-            }
-        }
-        for r in bb.terminator.uses().into_iter().chain(bb.terminator.defs()) {
-            if let Some(idx) = r.reg_index() {
-                max = max.max(idx + 1);
-            }
-        }
-    }
-    Val8::reg(max)
 }
 
 const MAX_UNROLLS_PER_FUNC: usize = 8;

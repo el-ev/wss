@@ -2,7 +2,7 @@ use crate::constants::{
     DEFAULT_CALLSTACK_SLOTS_CAP, DEFAULT_MAX_PHYS_REGS, DEFAULT_MEMORY_BYTES_CAP,
 };
 use crate::emit::{EmitConfig, emit_program, emit_program_with_memory_layout};
-use crate::lower8::{Lower8Config, lower8_module, lower8_module_with_config};
+use crate::lower8::{Lower8Config, lower8_module_with_config};
 use crate::module::decode_module_info;
 use crate::print::{print_ir8_program, print_module_ast, print_module_ir, print_program};
 use crate::regalloc::regalloc;
@@ -303,17 +303,13 @@ fn main() -> Result<()> {
         print!("{}", print_module_ir(&module));
     }
 
-    let mut ir8 = if args.js_coprocessor {
-        lower8_module_with_config(
-            &module,
-            args.memory_bytes,
-            Lower8Config {
-                js_coprocessor: true,
-            },
-        )?
-    } else {
-        lower8_module(&module, args.memory_bytes)?
-    };
+    let mut ir8 = lower8_module_with_config(
+        &module,
+        args.memory_bytes,
+        Lower8Config {
+            js_coprocessor: args.js_coprocessor,
+        },
+    )?;
 
     if dump.ir8 {
         println!("\n--- IR8 ---\n");

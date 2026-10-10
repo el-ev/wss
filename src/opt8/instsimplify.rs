@@ -331,50 +331,28 @@ fn simplify_kind(kind: Inst8Kind, facts: &HashMap<Val8, RegFact>) -> Inst8Kind {
                 }
             }
         },
-        Inst8Kind::GlobalSetByte {
-            global_idx,
-            lane,
-            val,
-        } => Inst8Kind::GlobalSetByte {
-            global_idx,
-            lane,
-            val,
-        },
-        Inst8Kind::LoadMem { base, addr, lane } => Inst8Kind::LoadMem { base, addr, lane },
-        Inst8Kind::MemInc32 { .. } => kind,
-        Inst8Kind::StoreMem {
-            base,
-            addr,
-            lane,
-            val,
-        } => Inst8Kind::StoreMem {
-            base,
-            addr,
-            lane,
-            val,
-        },
-        Inst8Kind::Putchar(v) => Inst8Kind::Putchar(v),
-        Inst8Kind::PutcharIf { val, enable } => match const_of(enable) {
-            // enable known true -> degrade to unconditional putchar
-            Some(c) if c != 0 => Inst8Kind::Putchar(val),
-            // enable known false -> effectively no-op; emit a self-copy
-            // sink that downstream DCE removes via dst-less self check.
-            Some(_) => Inst8Kind::PutcharIf { val, enable },
-            None => Inst8Kind::PutcharIf { val, enable },
-        },
-        Inst8Kind::CsStore { offset, val } => Inst8Kind::CsStore { offset, val },
-        Inst8Kind::CsLoad { offset } => Inst8Kind::CsLoad { offset },
-        Inst8Kind::CsStorePc { offset, val } => Inst8Kind::CsStorePc { offset, val },
-        Inst8Kind::CsLoadPc { offset } => Inst8Kind::CsLoadPc { offset },
-        Inst8Kind::CsAlloc(n) => Inst8Kind::CsAlloc(n),
-        Inst8Kind::CsFree(n) => Inst8Kind::CsFree(n),
-
-        Inst8Kind::ExcFlagSet { val } => Inst8Kind::ExcFlagSet { val },
-        Inst8Kind::ExcFlagGet => Inst8Kind::ExcFlagGet,
-        Inst8Kind::ExcTagSet { lane, val } => Inst8Kind::ExcTagSet { lane, val },
-        Inst8Kind::ExcTagGet { lane } => Inst8Kind::ExcTagGet { lane },
-        Inst8Kind::ExcPayloadSet { lane, val } => Inst8Kind::ExcPayloadSet { lane, val },
-        Inst8Kind::ExcPayloadGet { lane } => Inst8Kind::ExcPayloadGet { lane },
+        // Enable known true: degrade to an unconditional putchar.
+        Inst8Kind::PutcharIf { val, enable } if const_of(enable).is_some_and(|c| c != 0) => {
+            Inst8Kind::Putchar(val)
+        }
+        Inst8Kind::GlobalSetByte { .. }
+        | Inst8Kind::LoadMem { .. }
+        | Inst8Kind::MemInc32 { .. }
+        | Inst8Kind::StoreMem { .. }
+        | Inst8Kind::Putchar(_)
+        | Inst8Kind::PutcharIf { .. }
+        | Inst8Kind::CsStore { .. }
+        | Inst8Kind::CsLoad { .. }
+        | Inst8Kind::CsStorePc { .. }
+        | Inst8Kind::CsLoadPc { .. }
+        | Inst8Kind::CsAlloc(_)
+        | Inst8Kind::CsFree(_)
+        | Inst8Kind::ExcFlagSet { .. }
+        | Inst8Kind::ExcFlagGet
+        | Inst8Kind::ExcTagSet { .. }
+        | Inst8Kind::ExcTagGet { .. }
+        | Inst8Kind::ExcPayloadSet { .. }
+        | Inst8Kind::ExcPayloadGet { .. } => kind,
     }
 }
 

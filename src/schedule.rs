@@ -73,11 +73,6 @@ pub fn schedule(ir8: &mut Ir8Program) -> anyhow::Result<()> {
     let mut first_pc_map: HashMap<Pc, Pc> = HashMap::new();
 
     for (func_id, blocks) in ir8.func_blocks.iter().enumerate() {
-        if blocks.is_empty() {
-            scheduled_funcs.push(Vec::new());
-            continue;
-        }
-
         let mut scheduled_blocks = Vec::with_capacity(blocks.len());
         for block in blocks {
             let mut groups = schedule_block_ops(&block.insts);
@@ -109,7 +104,7 @@ pub fn schedule(ir8: &mut Ir8Program) -> anyhow::Result<()> {
         scheduled_funcs.push(scheduled_blocks);
     }
 
-    let mut cycles: Vec<Cycle> = scheduled_funcs
+    let cycles: Vec<Cycle> = scheduled_funcs
         .iter()
         .flat_map(|scheduled_blocks| scheduled_blocks.iter())
         .flat_map(|block| {
@@ -138,7 +133,13 @@ pub fn schedule(ir8: &mut Ir8Program) -> anyhow::Result<()> {
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
 
-    cycles.sort_by_key(|c| c.pc.index());
+    debug_assert!(cycles.is_sorted_by_key(|c| c.pc.index()));
+    // Imported functions have no blocks, so their entries stay unmapped.
+    for pc in &mut ir8.func_entries {
+        if let Some(&new_pc) = first_pc_map.get(pc) {
+            *pc = new_pc;
+        }
+    }
     ir8.cycles = cycles;
     Ok(())
 }
