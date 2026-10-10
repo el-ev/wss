@@ -1,4 +1,4 @@
-<!-- compile command: wss /tmp/claude-1000/-home-iris-Projects-wss/6f9d821a-2f41-497d-ac09-b90afcf880aa/scratchpad/examples/quine.wasm -o quine.html --memory-bytes 768 --stack-slots 64 -->
+<!-- compile command: wss /tmp/claude-1000/-home-iris-Projects-wss/3c72db33-c79c-4e75-977b-a3d21d53f7a0/scratchpad/examples/quine.wasm -o quine.html --memory-bytes 768 --stack-slots 64 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -50,16 +50,16 @@ flex-direction:column;
 align-items:center;
 }
 @keyframes anim-play {
-0% { --clk:0 }
-25% { --clk:1 }
-50% { --clk:2 }
-75% { --clk:3 }
+0% { --clk:0;}
+25% { --clk:1;}
+50% { --clk:2;}
+75% { --clk:3;}
 }
 .terminal {
 animation:store 1ms infinite,execute 1ms infinite;
 animation-play-state:paused,paused;
-@container style(--clk:1) { animation-play-state:running,paused }
-@container style(--clk:3) { animation-play-state:paused,running }
+@container style(--clk:1) { animation-play-state:running,paused;}
+@container style(--clk:3) { animation-play-state:paused,running;}
 --_1pc:var(--_2pc,2000);
 --_1r4:var(--_2r4,0);--_1r5:var(--_2r5,0);--_1r6:var(--_2r6,0);--_1r7:var(--_2r7,0);
 --_1r8:var(--_2r8,0);--_1r9:var(--_2r9,0);--_1r10:var(--_2r10,0);--_1r11:var(--_2r11,0);--_1r12:var(--_2r12,0);--_1r13:var(--_2r13,0);--_1r16:var(--_2r16,0);--_1r17:var(--_2r17,0);--_1r20:var(--_2r20,0);--_1r21:var(--_2r21,0);--_1r22:var(--_2r22,0);--_1r23:var(--_2r23,0);
@@ -88,7 +88,7 @@ animation-play-state:paused,paused;
 --cswdp0:if(style(--cswdp_any:0):0;else:if(style(--ctp0:0):1;else:0));
 --cri0:if(style(--_1pc:1007):var(--_1cs_sp);else:0);
 --cro0:if(style(--_1pc:1007):--lt(var(--_1cs_sp),1);else:0);
---pc:if(style(--_1pc:1000):--sel(calc(--ge(var(--_1r9),3) + --ge(var(--mb0),765)),-3,1001);style(--_1pc:1005):--sel(var(--_1r21),1000,1006);style(--_1pc:1006):--sel(calc(--lt(var(--_1cs_sp),1) + --ge(var(--_1cs_sp),3)),-5,1007);style(--_1pc:1007):calc(--ge(var(--_1cs_sp),1)*-5 + --lt(var(--_1cs_sp),1)*--sel(--lt(var(--_1cs_sp),1),--read_cs(var(--_1cs_sp)),var(--_1pc)));style(--_1pc:2000):--sel(--ge(var(--_1cs_sp),1),-5,2001);style(--pcg1:1):--sel(--ge(var(--_1cs_sp),1),-5,1000);style(--_1pc:2002):--sel(--ge(var(--_1cs_sp),2),-5,2003);style(--_1pc:2003):--sel(--ge(var(--_1cs_sp),1),-5,2004);style(--_1pc:2005):--sel(--ge(var(--_1cs_sp),2),-5,2006);style(--_1pc:2006):--sel(--ge(var(--_1cs_sp),1),-5,2007);style(--_1pc:2008):--sel(--ge(var(--_1cs_sp),2),-5,-1);else:--sel(--lt(var(--_1pc),0),var(--_1pc),calc(var(--_1pc) + 1)));
+--pc:if(style(--_1pc:1000):--sel(calc(--ge(var(--_1r9),3) + --ge(var(--mb0),765)),-3,1001);style(--_1pc:1005):--sel(var(--_1r21),1000,1006);style(--_1pc:1006):--sel(calc(--lt(var(--_1cs_sp),1) + --ge(var(--_1cs_sp),3)),-5,1007);style(--_1pc:1007):calc(--ge(var(--_1cs_sp),1)*-5 + --lt(var(--_1cs_sp),1)*--sel(--lt(var(--_1cs_sp),1),--read_cs(0,var(--_1cs_sp)),var(--_1pc)));style(--_1pc:2000):--sel(--ge(var(--_1cs_sp),1),-5,2001);style(--pcg1:1):--sel(--ge(var(--_1cs_sp),1),-5,1000);style(--_1pc:2002):--sel(--ge(var(--_1cs_sp),2),-5,2003);style(--_1pc:2003):--sel(--ge(var(--_1cs_sp),1),-5,2004);style(--_1pc:2005):--sel(--ge(var(--_1cs_sp),2),-5,2006);style(--_1pc:2006):--sel(--ge(var(--_1cs_sp),1),-5,2007);style(--_1pc:2008):--sel(--ge(var(--_1cs_sp),2),-5,-1);else:--sel(--lt(var(--_1pc),0),var(--_1pc),calc(var(--_1pc) + 1)));
 --wait_input:0;
 --cs_sp:if(style(--_1pc:1006):--sel(--inrange(var(--_1cs_sp),1,3),calc(var(--_1cs_sp) - 1),var(--_1cs_sp));style(--pcg1:1):--sel(--lt(var(--_1cs_sp),1),calc(var(--_1cs_sp) + 1),var(--_1cs_sp));else:var(--_1cs_sp));
 --r4:if(style(--_1pc:1001):calc(1 - abs(sign(calc(var(--_1r24) - var(--_1r16) - var(--_1r17)*256))));else:var(--_1r4));
@@ -128,7 +128,7 @@ animation-play-state:paused,paused;
 --r42:if(style(--_1pc:1004):calc(var(--_1r26)*var(--_1r38));else:var(--_1r42));
 --r43:if(style(--_1pc:1004):calc(var(--_1r27)*var(--_1r39));else:var(--_1r43));
 --fb:if(style(--_1pc:1002):var(--_1fb) --cond_char(var(--_1r36),92) --i2char(var(--_1r20));style(--_1pc:1005):var(--_1fb) --cond_char(var(--_1r42),92) --cond_char(var(--_1r26),var(--_1r22)) --cond_char(var(--_1r43),92) --cond_char(var(--_1r27),var(--_1r23)) --cond_char(var(--_1r28),92) --cond_char(var(--_1r37),var(--_1r24));else:var(--_1fb));
---ra:if(style(--_1pc:2008):"0x" --hex(round(down,calc((0)/16))) --hex(mod((0),16)) --hex(round(down,calc((0)/16))) --hex(mod((0),16)) --hex(round(down,calc((0)/16))) --hex(mod((0),16)) --hex(round(down,calc((0)/16))) --hex(mod((0),16));else:var(--_2ra,"0x00000000"));
+--ra:if(style(--_1pc:2008):"0x" "0" "0" "0" "0" "0" "0" "0" "0";else:var(--_2ra,"0x00000000"));
 --pcg0:if(style((--_1pc:2000) or (--_1pc:2003) or (--_1pc:2006)):1;else:0);
 --pcg1:if(style((--_1pc:2001) or (--_1pc:2004) or (--_1pc:2007)):1;else:0);
 }
@@ -145,7 +145,7 @@ animation-play-state:paused,paused;
 @function --mpar(--byte <number>) returns <integer> { result:mod(var(--byte),2);}
 @function --mlo(--w <number>) returns <integer> { result:mod(var(--w),256);}
 @function --mhi(--w <number>) returns <integer> { result:mod(round(down,calc(var(--w)/256)),256);}
-@function --mload(--byte <number>) returns <integer> { result:mod(round(down,calc(--read_m16(--mhalf(var(--byte)))/(1 + 255*mod(var(--byte),2)))),256);}
+@function --mload(--byte <number>) returns <integer> { result:mod(round(down,calc(--read_m16(round(down,var(--byte)/64),--mhalf(var(--byte)))/(1 + 255*mod(var(--byte),2)))),256);}
 @function --i2char(--i <integer>) returns <string> { result:if(style(--i:-1):"";style(--i:8):"";style(--i:9):"    ";style(--i:10):"\a ";style(--i:32):" ";style(--i:33):"!";style(--i:34):"\"";style(--i:35):"#";style(--i:36):"$";style(--i:37):"%";style(--i:38):"&";style(--i:39):"'";style(--i:40):"(";style(--i:41):")";style(--i:42):"*";style(--i:43):"+";style(--i:44):",";style(--i:45):"-";style(--i:46):".";style(--i:47):"/";style(--i:48):"0";style(--i:49):"1";style(--i:50):"2";style(--i:51):"3";style(--i:52):"4";style(--i:53):"5";style(--i:54):"6";style(--i:55):"7";style(--i:56):"8";style(--i:57):"9";style(--i:58):":";style(--i:59):";";style(--i:60):"<";style(--i:61):"=";style(--i:62):">";style(--i:64):"@";style(--i:65):"A";style(--i:66):"B";style(--i:67):"C";style(--i:68):"D";style(--i:69):"E";style(--i:70):"F";style(--i:71):"G";style(--i:72):"H";style(--i:73):"I";style(--i:74):"J";style(--i:75):"K";style(--i:76):"L";style(--i:77):"M";style(--i:78):"N";style(--i:79):"O";style(--i:80):"P";style(--i:81):"Q";style(--i:82):"R";style(--i:83):"S";style(--i:84):"T";style(--i:85):"U";style(--i:86):"V";style(--i:87):"W";style(--i:88):"X";style(--i:89):"Y";style(--i:90):"Z";style(--i:91):"[";style(--i:92):"\\";style(--i:93):"]";style(--i:94):"^";style(--i:95):"_";style(--i:96):"`";style(--i:97):"a";style(--i:98):"b";style(--i:99):"c";style(--i:100):"d";style(--i:101):"e";style(--i:102):"f";style(--i:103):"g";style(--i:104):"h";style(--i:105):"i";style(--i:106):"j";style(--i:107):"k";style(--i:108):"l";style(--i:109):"m";style(--i:110):"n";style(--i:111):"o";style(--i:112):"p";style(--i:113):"q";style(--i:114):"r";style(--i:115):"s";style(--i:116):"t";style(--i:117):"u";style(--i:118):"v";style(--i:119):"w";style(--i:120):"x";style(--i:121):"y";style(--i:122):"z";style(--i:123):"{";style(--i:124):"|";style(--i:125):"}";style(--i:126):"~";else:"?");}
 @function --cond_char(--c <integer>,--v <integer>) returns <string> { result:if(style(--c:0):"";else:--i2char(var(--v)));}
 @function --hex(--i <integer>) returns <string> { result:if(style(--i:1):"1";style(--i:2):"2";style(--i:3):"3";style(--i:4):"4";style(--i:5):"5";style(--i:6):"6";style(--i:7):"7";style(--i:8):"8";style(--i:9):"9";style(--i:10):"a";style(--i:11):"b";style(--i:12):"c";style(--i:13):"d";style(--i:14):"e";style(--i:15):"f";else:"0");}
@@ -161,9 +161,8 @@ animation-play-state:paused,paused;
 @function --read_m16_9(--i <integer>) returns <integer> { result:0;}
 @function --read_m16_10(--i <integer>) returns <integer> { result:0;}
 @function --read_m16_11(--i <integer>) returns <integer> { result:0;}
-@function --read_m16(--i <integer>) returns <integer> { result:--read_m16_d(round(down,var(--i)/32),var(--i));}
-@function --read_m16_d(--c <integer>,--i <integer>) returns <integer> { result:if(style(--c:0):--read_m16_0(var(--i));style(--c:1):--read_m16_1(var(--i));style(--c:2):--read_m16_2(var(--i));style(--c:3):--read_m16_3(var(--i));style(--c:4):--read_m16_4(var(--i));style(--c:5):--read_m16_5(var(--i));style(--c:6):--read_m16_6(var(--i));style(--c:7):--read_m16_7(var(--i));style(--c:8):--read_m16_8(var(--i));style(--c:9):--read_m16_9(var(--i));style(--c:10):--read_m16_10(var(--i));style(--c:11):--read_m16_11(var(--i));else:0);}
-@function --read_cs(--i <integer>) returns <integer> { result:if(style(--i:0):var(--_2cs0,0);else:0);}
+@function --read_m16(--c <integer>,--i <integer>) returns <integer> { result:if(style(--c:0):--read_m16_0(var(--i));style(--c:1):--read_m16_1(var(--i));style(--c:2):--read_m16_2(var(--i));style(--c:3):--read_m16_3(var(--i));style(--c:4):--read_m16_4(var(--i));style(--c:5):--read_m16_5(var(--i));style(--c:6):--read_m16_6(var(--i));style(--c:7):--read_m16_7(var(--i));style(--c:8):--read_m16_8(var(--i));style(--c:9):--read_m16_9(var(--i));style(--c:10):--read_m16_10(var(--i));style(--c:11):--read_m16_11(var(--i));else:0);}
+@function --read_cs(--c <integer>,--i <integer>) returns <integer> { result:if(style(--i:0):var(--_2cs0,0);else:0);}
 @function --csmerge(--idx <integer>,--prev <integer>) returns <integer> { result:calc(if(style(--cth0:var(--idx)):var(--cvl0);else:--mlo(var(--prev))) + if(style(--cth0:var(--idx)):var(--cvh0);else:--mhi(var(--prev)))*256);}
 @keyframes store {
 0%,100% {
@@ -294,7 +293,7 @@ animation-play-state:paused,paused;
 .memvis { --mv-94:904px 48px rgb(0,0,0),912px 48px rgb(0,0,0),920px 48px rgb(0,0,0),928px 48px rgb(0,0,0),936px 48px rgb(0,0,0),944px 48px rgb(0,0,0),952px 48px rgb(0,0,0),960px 48px rgb(0,0,0);}
 .memvis { --mv-95:968px 48px rgb(0,0,0),976px 48px rgb(0,0,0),984px 48px rgb(0,0,0),992px 48px rgb(0,0,0),1000px 48px rgb(0,0,0),1008px 48px rgb(0,0,0),1016px 48px rgb(0,0,0),1024px 48px rgb(0,0,0);}
 .memvis::after { box-shadow:var(--mv-0),var(--mv-1),var(--mv-2),var(--mv-3),var(--mv-4),var(--mv-5),var(--mv-6),var(--mv-7),var(--mv-8),var(--mv-9),var(--mv-10),var(--mv-11),var(--mv-12),var(--mv-13),var(--mv-14),var(--mv-15),var(--mv-16),var(--mv-17),var(--mv-18),var(--mv-19),var(--mv-20),var(--mv-21),var(--mv-22),var(--mv-23),var(--mv-24),var(--mv-25),var(--mv-26),var(--mv-27),var(--mv-28),var(--mv-29),var(--mv-30),var(--mv-31),var(--mv-32),var(--mv-33),var(--mv-34),var(--mv-35),var(--mv-36),var(--mv-37),var(--mv-38),var(--mv-39),var(--mv-40),var(--mv-41),var(--mv-42),var(--mv-43),var(--mv-44),var(--mv-45),var(--mv-46),var(--mv-47),var(--mv-48),var(--mv-49),var(--mv-50),var(--mv-51),var(--mv-52),var(--mv-53),var(--mv-54),var(--mv-55),var(--mv-56),var(--mv-57),var(--mv-58),var(--mv-59),var(--mv-60),var(--mv-61),var(--mv-62),var(--mv-63),var(--mv-64),var(--mv-65),var(--mv-66),var(--mv-67),var(--mv-68),var(--mv-69),var(--mv-70),var(--mv-71),var(--mv-72),var(--mv-73),var(--mv-74),var(--mv-75),var(--mv-76),var(--mv-77),var(--mv-78),var(--mv-79),var(--mv-80),var(--mv-81),var(--mv-82),var(--mv-83),var(--mv-84),var(--mv-85),var(--mv-86),var(--mv-87),var(--mv-88),var(--mv-89),var(--mv-90),var(--mv-91),var(--mv-92),var(--mv-93),var(--mv-94),var(--mv-95),0 0 transparent;}
-.memvis { --mvh-0:calc((mod((var(--mri0)),128)*8px) + 8px) calc((round(down,calc((var(--mri0))/128))*8px) + 8px) rgba(48,170,84,calc(0.72*var(--mro0))),calc((mod((var(--mri1)),128)*8px) + 8px) calc((round(down,calc((var(--mri1))/128))*8px) + 8px) rgba(48,170,84,calc(0.72*var(--mro1))),calc((mod((var(--mri2)),128)*8px) + 8px) calc((round(down,calc((var(--mri2))/128))*8px) + 8px) rgba(48,170,84,calc(0.72*var(--mro2))),calc((mod((var(--mri3)),128)*8px) + 8px) calc((round(down,calc((var(--mri3))/128))*8px) + 8px) rgba(48,170,84,calc(0.72*var(--mro3)));}
+.memvis { --mvh-0:calc((mod(var(--mri0),128)*8px) + 8px) calc((round(down,calc(var(--mri0)/128))*8px) + 8px) rgba(48,170,84,calc(0.72*var(--mro0))),calc((mod(var(--mri1),128)*8px) + 8px) calc((round(down,calc(var(--mri1)/128))*8px) + 8px) rgba(48,170,84,calc(0.72*var(--mro1))),calc((mod(var(--mri2),128)*8px) + 8px) calc((round(down,calc(var(--mri2)/128))*8px) + 8px) rgba(48,170,84,calc(0.72*var(--mro2))),calc((mod(var(--mri3),128)*8px) + 8px) calc((round(down,calc(var(--mri3)/128))*8px) + 8px) rgba(48,170,84,calc(0.72*var(--mro3)));}
 .memvis::before { box-shadow:var(--mvh-0),0 0 transparent;}
 }
 .csvis { width:1024px;height:8px;}
@@ -303,7 +302,7 @@ animation-play-state:paused,paused;
 @container style(--clk:3) {
 .csvis { --csv-0:8px 8px hsl(0 0% calc(--mlo(var(--_0cs0))*100%/255)),16px 8px hsl(0 0% calc(--mhi(var(--_0cs0))*100%/255));}
 .csvis::after { box-shadow:var(--csv-0),0 0 transparent;}
-.csvis { --csh-0:calc((mod((calc((var(--cri0)*2) + --eq1(if(style(--_1pc:1007):2;else:0)))),128)*8px) + 8px) calc((round(down,calc((calc((var(--cri0)*2) + --eq1(if(style(--_1pc:1007):2;else:0))))/128))*8px) + 8px) rgba(48,170,84,calc(0.72*var(--cro0))),calc((mod((calc((var(--csi0)*2) + --eq1(if(style(--pcg0:1):2;else:0)))),128)*8px) + 8px) calc((round(down,calc((calc((var(--csi0)*2) + --eq1(if(style(--pcg0:1):2;else:0))))/128))*8px) + 8px) rgba(38,112,255,calc(0.88*var(--cso0)));}
+.csvis { --csh-0:calc((mod(var(--cri0),64)*2*8px) + 8px) calc((round(down,calc((calc(var(--cri0)*2))/128))*8px) + 8px) rgba(48,170,84,calc(0.72*var(--cro0))),calc((mod(var(--csi0),64)*2*8px) + 8px) calc((round(down,calc((calc(var(--csi0)*2))/128))*8px) + 8px) rgba(38,112,255,calc(0.88*var(--cso0)));}
 .csvis::before { box-shadow:var(--csh-0),0 0 transparent;}
 }
 .screen::after { white-space:pre-wrap;word-break:break-all;content:if(style(--pc:-1):var(--fb,"") "\a[Program exited with code " var(--ra,"0x00000000") "]";style(--pc:-2):var(--fb,"") "\a[Trap: unreachable]";style(--pc:-3):var(--fb,"") "\a[Trap: invalid memory access]";style(--pc:-4):var(--fb,"") "\a[Trap: division by zero]";style(--pc:-5):var(--fb,"") "\a[Trap: callstack overflow]";style(--pc:-6):var(--fb,"") "\a[Trap: uncaught exception]";else:var(--fb,""));color:if(style(--pc:-2):#d00;style(--pc:-3):#d00;style(--pc:-4):#d00;style(--pc:-5):#d00;style(--pc:-6):#d00;else:#222);display:block;flex:0 0 auto;}

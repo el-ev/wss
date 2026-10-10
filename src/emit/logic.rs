@@ -523,7 +523,7 @@ impl<'a> Emitter<'a> {
                                 parity: format!("{}", parity),
                                 ok: ok.clone(),
                             });
-                            let word = format!("--read_cs({})", idx);
+                            let word = self.read_cs_call(&idx);
                             let load = if parity == 0 {
                                 format!("--mlo({})", word)
                             } else {
@@ -557,11 +557,8 @@ impl<'a> Emitter<'a> {
                             parity: "2".to_string(),
                             ok: ok.clone(),
                         });
-                        loaded_pc_expr = Some(Self::sel_expr(
-                            &ok,
-                            &format!("--read_cs({})", idx),
-                            "var(--_1pc)",
-                        ));
+                        loaded_pc_expr =
+                            Some(Self::sel_expr(&ok, &self.read_cs_call(&idx), "var(--_1pc)"));
                     }
                     Inst8Kind::CsAlloc(size) => {
                         let next_sp = Self::var_with_offset("var(--_1cs_sp)", *size as i64);
@@ -1135,7 +1132,7 @@ impl<'a> Emitter<'a> {
                     // re-read RA from the current call-stack top.
                     let idx = "var(--_1cs_sp)";
                     let ok = Self::inrange_expr(idx, self.cs_names.len() as i64);
-                    Self::sel_expr(&ok, &format!("--read_cs({})", idx), "var(--_1pc)")
+                    Self::sel_expr(&ok, &self.read_cs_call(idx), "var(--_1pc)")
                 } else {
                     "var(--_1pc)".to_string()
                 };
@@ -1469,6 +1466,10 @@ impl<'a> Emitter<'a> {
             }
         }
         format!("--ge({}, {})", l, r)
+    }
+
+    fn read_cs_call(&self, idx: &str) -> String {
+        Self::read_call("--read_cs", self.cs_names.len(), idx, None)
     }
 
     /// Emit `0 <= idx < k` as `--inrange(base, -off, k - off)`, with a
@@ -2179,7 +2180,7 @@ impl<'a> Emitter<'a> {
             let r = if b == 0 { 8 } else { b.trailing_zeros() };
             return format!("{}", r);
         }
-        format!("--byte_ctz({})", Self::sanitize_byte_arg(byte))
+        Self::read_call("--byte_ctz", 256, &Self::sanitize_byte_arg(byte), None)
     }
 
     pub(super) fn byte_clz_expr(byte: &str) -> String {
@@ -2190,7 +2191,7 @@ impl<'a> Emitter<'a> {
             let r = if b == 0 { 8 } else { b.leading_zeros() };
             return format!("{}", r);
         }
-        format!("--byte_clz({})", Self::sanitize_byte_arg(byte))
+        Self::read_call("--byte_clz", 256, &Self::sanitize_byte_arg(byte), None)
     }
 
     /// Normalize byte expr for table-lookup, eliding redundant mod-256 wrap.
@@ -2875,9 +2876,6 @@ impl<'a> Emitter<'a> {
             && modulus > 0
         {
             return n.rem_euclid(modulus).to_string();
-        }
-        if modulus == 256 && Self::is_byte_valued_var(v) {
-            return v.to_string();
         }
         format!("mod({}, {})", value, modulus)
     }

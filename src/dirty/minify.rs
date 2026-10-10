@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use super::{SplitMix64, fisher_yates};
 use crate::css::{
-    Arm, Body, DeclItem, Doc, Item, Node, count_custom_names, is_custom_name_cont,
+    Arm, Body, DeclItem, Doc, Item, Node, Prelude, count_custom_names, is_custom_name_cont,
     is_custom_name_start, rename_custom_names, scrub_verbatim, skip_css_string,
 };
 use crate::page::Page;
@@ -260,7 +260,6 @@ fn shuffle_commutative_in_body(body: &mut Body, rng: &mut SplitMix64) {
                 shuffle_commutative_in_item(it, rng);
             }
         }
-        Body::Verbatim(_) => {}
     }
 }
 
@@ -342,8 +341,7 @@ fn permute_at_rules(items: &mut [Item], rng: &mut SplitMix64) {
 
 fn is_shufflable_at_rule(item: &Item) -> bool {
     if let Item::Rule(r) = item {
-        let head = r.head.trim_start();
-        head.starts_with("@property") || head.starts_with("@function")
+        r.prelude.is_property() || r.prelude.is_function()
     } else {
         false
     }
@@ -355,14 +353,11 @@ fn is_shufflable_at_rule(item: &Item) -> bool {
 
 fn collect_registered_properties(doc: &Doc, out: &mut HashSet<String>) {
     for item in &doc.items {
-        if let Item::Rule(r) = item {
-            let head = r.head.trim_start();
-            if let Some(rest) = head.strip_prefix("@property") {
-                let name = rest.trim_start().trim_end_matches('{').trim();
-                if let Some(stripped) = name.strip_prefix("--") {
-                    out.insert(stripped.to_string());
-                }
-            }
+        if let Item::Rule(r) = item
+            && let Prelude::Property(name) = &r.prelude
+            && let Some(stripped) = name.strip_prefix("--")
+        {
+            out.insert(stripped.to_string());
         }
     }
 }
@@ -370,8 +365,7 @@ fn collect_registered_properties(doc: &Doc, out: &mut HashSet<String>) {
 fn inject_in_item(item: &mut Item, registered: &HashSet<String>, rng: &mut SplitMix64) {
     match item {
         Item::Rule(r) => {
-            let head = r.head.trim_start();
-            if head.starts_with("@property") {
+            if r.prelude.is_property() {
                 return;
             }
             inject_in_body(&mut r.body, registered, rng);
@@ -395,7 +389,6 @@ fn inject_in_body(body: &mut Body, registered: &HashSet<String>, rng: &mut Split
                 inject_in_item(it, registered, rng);
             }
         }
-        Body::Verbatim(_) => {}
     }
 }
 
@@ -455,11 +448,9 @@ fn inject_in_node(node: &mut Node, registered: &HashSet<String>, rng: &mut Split
 fn collect_integer_var_candidates(doc: &Doc, out: &mut Vec<String>) {
     for item in &doc.items {
         let Item::Rule(r) = item else { continue };
-        let head = r.head.trim_start();
-        let Some(rest) = head.strip_prefix("@property") else {
+        let Prelude::Property(name) = &r.prelude else {
             continue;
         };
-        let name = rest.trim().trim_end_matches('{').trim();
         let Some(stripped) = name.strip_prefix("--") else {
             continue;
         };
@@ -469,10 +460,7 @@ fn collect_integer_var_candidates(doc: &Doc, out: &mut Vec<String>) {
                 if d.name != "syntax" {
                     return false;
                 }
-                match &d.value {
-                    Node::Raw(s) => s.contains("<integer>") || s.contains("<number>"),
-                    _ => false,
-                }
+                matches!(d.value.string_contents(), Some("<integer>" | "<number>"))
             })
         } else {
             false
@@ -485,11 +473,10 @@ fn collect_integer_var_candidates(doc: &Doc, out: &mut Vec<String>) {
 
 fn bake_in_item(item: &mut Item, candidates: &[String], rng: &mut SplitMix64) {
     let Item::Rule(r) = item else { return };
-    let head = r.head.trim_start();
-    if !head.starts_with("@function") {
+    let Prelude::Function(f) = &r.prelude else {
         return;
-    }
-    if !head.contains("returns <integer>") {
+    };
+    if f.returns.as_deref() != Some("<integer>") {
         return;
     }
     let Body::Decls(items) = &mut r.body else {
@@ -526,7 +513,7 @@ fn bake_into_result(node: &mut Node, candidates: &[String], rng: &mut SplitMix64
         let decoy = Arm {
             cond: Node::Style {
                 prop: prop.clone(),
-                value: idx.to_string(),
+                value: Box::new(Node::Int(idx)),
             },
             value: Node::Var {
                 name: format!("--{}", var_name),
@@ -552,7 +539,6 @@ fn split_pc_in_item(item: &mut Item, counter: &mut u32, rng: &mut SplitMix64) {
                     split_pc_in_item(it, counter, rng);
                 }
             }
-            Body::Verbatim(_) => {}
         },
         Item::Decl(_) | Item::Verbatim(_) => {}
     }
@@ -628,13 +614,13 @@ fn try_split_pc_decl(
     for chunk in chunks.into_iter().rev() {
         let helper_name = format!("--__{}", *counter);
         *counter += 1;
-        let helper_decl = crate::css::Decl {
-            name: helper_name.clone(),
-            value: Node::If {
+        let helper_decl = crate::css::Decl::new(
+            helper_name.clone(),
+            Node::If {
                 arms: chunk,
                 default: Box::new(tail_default.clone()),
             },
-        };
+        );
         tail_default = Node::Var {
             name: helper_name,
             fallback: None,
@@ -643,11 +629,11 @@ fn try_split_pc_decl(
     }
     helpers_rev.reverse();
     let modified = crate::css::Decl {
-        name: d.name.clone(),
         value: Node::If {
             arms: first_chunk,
             default: Box::new(tail_default),
         },
+        ..d.clone()
     };
     Some(PcSplit {
         helpers: helpers_rev,
@@ -854,7 +840,7 @@ fn lut_key_prop(arms: &[Arm]) -> Option<String> {
 
 fn collect_style_terms(node: &Node) -> Vec<(String, String)> {
     match node {
-        Node::Style { prop, value } => vec![(prop.clone(), value.clone())],
+        Node::Style { prop, value } => vec![(prop.clone(), value.to_css())],
         Node::Or(conds) => {
             let mut out = Vec::new();
             for c in conds {
@@ -920,7 +906,6 @@ fn shuffle_in_body(body: &mut Body, rng: &mut SplitMix64) {
                 shuffle_in_item(it, rng);
             }
         }
-        Body::Verbatim(_) => {}
     }
 }
 
@@ -982,7 +967,7 @@ fn sort_decls(page: &mut Page, seed: u64) {
 fn sort_doc_decls(doc: &mut Doc, rng: &mut SplitMix64) {
     for item in &mut doc.items {
         if let Item::Rule(rule) = item {
-            let randomize = rule.head.trim_start().starts_with("@property");
+            let randomize = rule.prelude.is_property();
             sort_body(&mut rule.body, randomize, rng);
         }
     }
@@ -995,12 +980,11 @@ fn sort_body(body: &mut Body, randomize: bool, rng: &mut SplitMix64) {
             sort_nested_items(items);
             for it in items {
                 if let Item::Rule(r) = it {
-                    let inner_randomize = r.head.trim_start().starts_with("@property");
+                    let inner_randomize = r.prelude.is_property();
                     sort_body(&mut r.body, inner_randomize, rng);
                 }
             }
         }
-        Body::Verbatim(_) => {}
     }
 }
 

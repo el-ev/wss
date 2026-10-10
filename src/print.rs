@@ -944,7 +944,9 @@ fn print_term8(out: &mut String, term: &Terminator8) {
 // CSS-AST printers — public entry points used once stage 2 routes
 // emit passes through the AST. Suppress dead-code warnings until then.
 #[allow(dead_code)]
-use crate::css::{Arm as CssArm, Node as CssNode, Sign as CssSign, Term as CssTerm};
+use crate::css::{
+    Arm as CssArm, ListSep as CssListSep, Node as CssNode, Sign as CssSign, Term as CssTerm,
+};
 
 /// Render a CSS expression as a string suitable for emission.
 #[allow(dead_code)]
@@ -1077,7 +1079,7 @@ fn write_css_expr(node: &CssNode, math_ctx: bool, out: &mut String) {
             out.push_str("style(");
             out.push_str(prop);
             out.push_str(": ");
-            out.push_str(value);
+            write_css_expr(value, false, out);
             out.push(')');
         }
         CssNode::Or(conds) => {
@@ -1098,7 +1100,7 @@ fn write_css_expr(node: &CssNode, math_ctx: bool, out: &mut String) {
                     out.push('(');
                     out.push_str(prop);
                     out.push_str(": ");
-                    out.push_str(value);
+                    write_css_expr(value, false, out);
                     out.push(')');
                 }
                 out.push(')');
@@ -1111,7 +1113,26 @@ fn write_css_expr(node: &CssNode, math_ctx: bool, out: &mut String) {
                 }
             }
         }
-        CssNode::Raw(s) => out.push_str(s),
+        CssNode::Ident(s) | CssNode::Str(s) | CssNode::Raw(s) => out.push_str(s),
+        CssNode::Dim { value, unit } => {
+            write!(out, "{}{}", value, unit).unwrap();
+        }
+        CssNode::Hash(s) => {
+            out.push('#');
+            out.push_str(s);
+        }
+        CssNode::List { sep, items } => {
+            let sep = match sep {
+                CssListSep::Space => " ",
+                CssListSep::Comma => ", ",
+            };
+            for (i, item) in items.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(sep);
+                }
+                write_css_expr(item, false, out);
+            }
+        }
     }
 }
 
@@ -1317,13 +1338,32 @@ fn write_css_dump(node: &CssNode, indent: usize, out: &mut String) {
             write_css_dump(default, indent + 4, out);
         }
         CssNode::Style { prop, value } => {
-            writeln!(out, "{}Style {}: {}", pad, prop, value).unwrap();
+            writeln!(out, "{}Style {}:", pad, prop).unwrap();
+            write_css_dump(value, indent + 2, out);
         }
         CssNode::Or(conds) => {
             let plural = if conds.len() == 1 { "" } else { "es" };
             writeln!(out, "{}Or ({} branch{})", pad, conds.len(), plural).unwrap();
             for c in conds {
                 write_css_dump(c, indent + 2, out);
+            }
+        }
+        CssNode::Ident(s) => {
+            writeln!(out, "{}Ident {}", pad, s).unwrap();
+        }
+        CssNode::Str(s) => {
+            writeln!(out, "{}Str {}", pad, s).unwrap();
+        }
+        CssNode::Dim { value, unit } => {
+            writeln!(out, "{}Dim {}{}", pad, value, unit).unwrap();
+        }
+        CssNode::Hash(s) => {
+            writeln!(out, "{}Hash #{}", pad, s).unwrap();
+        }
+        CssNode::List { sep, items } => {
+            writeln!(out, "{}List {:?} ({})", pad, sep, items.len()).unwrap();
+            for item in items {
+                write_css_dump(item, indent + 2, out);
             }
         }
         CssNode::Raw(s) => {

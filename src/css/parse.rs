@@ -2,11 +2,14 @@ use chumsky::error::Rich;
 use chumsky::extra;
 use chumsky::prelude::*;
 
-use super::{Arm, Node, Sign, Term};
+use super::{Arm, ListSep, Node, Sign, Term};
 
 pub fn parse(input: &str) -> Node {
     let trimmed = input.trim();
-    match atom_parser()
+    if trimmed.is_empty() {
+        return Node::empty();
+    }
+    match value_parser()
         .then_ignore(end())
         .parse(trimmed)
         .into_result()
@@ -18,23 +21,70 @@ pub fn parse(input: &str) -> Node {
 
 type Err<'a> = extra::Err<Rich<'a, char>>;
 
-fn atom_parser<'a>() -> impl Parser<'a, &'a str, Node, Err<'a>> + Clone {
-    recursive(|atom| {
-        let math = math_expr_parser(atom.clone()).boxed();
+/// A full value: comma-separated groups of space-separated components.
+fn value_parser<'a>() -> impl Parser<'a, &'a str, Node, Err<'a>> + Clone {
+    comma_list(space_list_parser())
+}
 
-        choice((
-            calc_call(math.clone()),
-            var_call(atom.clone()),
-            if_call(),
-            style_call(),
-            math_fn_call(math.clone()),
-            user_fn_call(atom.clone()),
-            paren_atom(math),
-            int_literal(),
-            bare_ident(),
-        ))
-        .padded()
+/// Space-separated components. Function arguments and `var()` fallbacks
+/// recurse back into this level.
+fn space_list_parser<'a>() -> impl Parser<'a, &'a str, Node, Err<'a>> + Clone {
+    recursive(|space_list| {
+        let component = recursive(|component| {
+            let atom = component.padded();
+            let math = math_expr_parser(atom.clone()).boxed();
+
+            choice((
+                calc_call(math.clone()),
+                var_call(comma_list(space_list.clone())),
+                if_call(),
+                style_call(),
+                math_fn_call(math.clone()),
+                user_fn_call(space_list.clone()),
+                paren_atom(math),
+                number(),
+                string_literal(),
+                hash_token(),
+                bare_ident(),
+            ))
+        });
+        // Components are only split at whitespace: `a#b` is not `a #b`.
+        let gap = any()
+            .filter(|c: &char| c.is_whitespace())
+            .repeated()
+            .at_least(1);
+        component
+            .clone()
+            .then(gap.ignore_then(component).repeated().collect::<Vec<_>>())
+            .padded()
+            .map(|(first, mut rest)| {
+                rest.insert(0, first);
+                list(ListSep::Space, rest)
+            })
     })
+}
+
+fn comma_list<'a>(
+    item: impl Parser<'a, &'a str, Node, Err<'a>> + Clone + 'a,
+) -> impl Parser<'a, &'a str, Node, Err<'a>> + Clone {
+    item.separated_by(just(',').padded())
+        .at_least(1)
+        .collect::<Vec<_>>()
+        .map(|items| list(ListSep::Comma, items))
+}
+
+/// `)`, with any whitespace before it. Whitespace after it separates the
+/// next component and is left to the caller.
+fn close_paren<'a>() -> impl Parser<'a, &'a str, char, Err<'a>> + Clone {
+    text::whitespace().ignore_then(just(')'))
+}
+
+fn list(sep: ListSep, mut items: Vec<Node>) -> Node {
+    if items.len() == 1 {
+        items.pop().unwrap()
+    } else {
+        Node::List { sep, items }
+    }
 }
 
 fn math_expr_parser<'a>(
@@ -75,12 +125,76 @@ fn math_expr_parser<'a>(
     )
 }
 
-fn int_literal<'a>() -> impl Parser<'a, &'a str, Node, Err<'a>> + Clone {
+/// `12`, `-4px`, `50%`, `0.5`: an `Int` when unitless and integral.
+fn number<'a>() -> impl Parser<'a, &'a str, Node, Err<'a>> + Clone {
+    let digits = any().filter(|c: &char| c.is_ascii_digit()).repeated();
+    let mantissa = choice((
+        digits
+            .at_least(1)
+            .then(just('.').then(digits.at_least(1)).or_not())
+            .ignored(),
+        just('.').then(digits.at_least(1)).ignored(),
+    ));
     just('-')
         .or_not()
-        .then(text::int(10))
+        .then(mantissa)
         .to_slice()
-        .map(|s: &str| Node::Int(s.parse().unwrap_or(0)))
+        .then(choice((just("%"), css_ident())).or_not())
+        .try_map(|(num, unit): (&str, Option<&str>), span| {
+            if unit.is_none()
+                && !num.contains('.')
+                && let Ok(n) = num.parse()
+            {
+                return Ok(Node::Int(n));
+            }
+            let value = num
+                .parse()
+                .map_err(|_| Rich::custom(span, "number out of range"))?;
+            Ok(Node::Dim {
+                value,
+                unit: unit.unwrap_or("").to_string(),
+            })
+        })
+}
+
+fn string_literal<'a>() -> impl Parser<'a, &'a str, Node, Err<'a>> + Clone {
+    custom::<_, &str, _, Err>(|input| {
+        let start = input.cursor();
+        let quote = match input.peek() {
+            Some(q @ ('"' | '\'')) => q,
+            _ => {
+                let span = input.span_since(&start);
+                return Err(Rich::custom(span, "expected a string"));
+            }
+        };
+        input.next();
+        loop {
+            match input.next() {
+                Some('\\') => {
+                    input.next();
+                }
+                Some(c) if c == quote => break,
+                Some(_) => {}
+                None => {
+                    let span = input.span_since(&start);
+                    return Err(Rich::custom(span, "unterminated string"));
+                }
+            }
+        }
+        Ok(Node::Str(input.slice(&start..&input.cursor()).to_string()))
+    })
+}
+
+fn hash_token<'a>() -> impl Parser<'a, &'a str, Node, Err<'a>> + Clone {
+    just('#')
+        .ignore_then(
+            any()
+                .filter(|c: &char| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+                .repeated()
+                .at_least(1)
+                .to_slice(),
+        )
+        .map(|s: &str| Node::Hash(s.to_string()))
 }
 
 fn css_ident<'a>() -> impl Parser<'a, &'a str, &'a str, Err<'a>> + Clone {
@@ -99,18 +213,18 @@ fn calc_call<'a>(
 ) -> impl Parser<'a, &'a str, Node, Err<'a>> + Clone {
     just("calc(")
         .ignore_then(math)
-        .then_ignore(just(')').padded())
+        .then_ignore(close_paren())
         .map(|inner| Node::Calc(Box::new(inner)))
 }
 
 fn var_call<'a>(
-    atom: impl Parser<'a, &'a str, Node, Err<'a>> + Clone + 'a,
+    value: impl Parser<'a, &'a str, Node, Err<'a>> + Clone + 'a,
 ) -> impl Parser<'a, &'a str, Node, Err<'a>> + Clone {
-    let fallback = just(',').padded().ignore_then(atom).or_not();
+    let fallback = just(',').padded().ignore_then(value).or_not();
     just("var(")
         .ignore_then(css_ident().padded())
         .then(fallback)
-        .then_ignore(just(')').padded())
+        .then_ignore(close_paren())
         .map(|(name, fb)| Node::Var {
             name: name.to_string(),
             fallback: fb.map(Box::new),
@@ -128,7 +242,7 @@ fn math_fn_call<'a>(
                 .at_least(1)
                 .collect::<Vec<_>>(),
         )
-        .then_ignore(just(')').padded())
+        .then_ignore(close_paren())
         .map(|(name, args)| Node::MathFn {
             name: name.to_string(),
             args,
@@ -136,17 +250,13 @@ fn math_fn_call<'a>(
 }
 
 fn user_fn_call<'a>(
-    atom: impl Parser<'a, &'a str, Node, Err<'a>> + Clone + 'a,
+    arg: impl Parser<'a, &'a str, Node, Err<'a>> + Clone + 'a,
 ) -> impl Parser<'a, &'a str, Node, Err<'a>> + Clone {
     css_ident()
         .filter(|s: &&str| !Node::is_math_function(s) && *s != "var" && *s != "if" && *s != "style")
         .then_ignore(just('('))
-        .then(
-            atom.separated_by(just(',').padded())
-                .at_least(1)
-                .collect::<Vec<_>>(),
-        )
-        .then_ignore(just(')').padded())
+        .then(arg.separated_by(just(',').padded()).collect::<Vec<_>>())
+        .then_ignore(close_paren())
         .map(|(name, args)| Node::Fn {
             name: name.to_string(),
             args,
@@ -158,25 +268,25 @@ fn paren_atom<'a>(
 ) -> impl Parser<'a, &'a str, Node, Err<'a>> + Clone {
     just('(')
         .ignore_then(math)
-        .then_ignore(just(')').padded())
+        .then_ignore(close_paren())
         .map(|inner| Node::Paren(Box::new(inner)))
 }
 
 fn bare_ident<'a>() -> impl Parser<'a, &'a str, Node, Err<'a>> + Clone {
-    css_ident().map(|s: &str| Node::Raw(s.to_string()))
+    css_ident().map(|s: &str| Node::Ident(s.to_string()))
 }
 
 fn if_call<'a>() -> impl Parser<'a, &'a str, Node, Err<'a>> + Clone {
     just("if(")
         .ignore_then(balanced_body())
-        .then_ignore(just(')').padded())
+        .then_ignore(close_paren())
         .map(|body| parse_if_body(&body))
 }
 
 fn style_call<'a>() -> impl Parser<'a, &'a str, Node, Err<'a>> + Clone {
     just("style(")
         .ignore_then(balanced_body())
-        .then_ignore(just(')').padded())
+        .then_ignore(close_paren())
         .map(|body| parse_style_body(&body))
 }
 
@@ -238,7 +348,7 @@ fn parse_if_body(body: &str) -> Node {
         let Some(idx) = find_arm_colon(arm) else {
             arms.push(Arm {
                 cond: Node::Raw(arm.to_string()),
-                value: Node::Raw(String::new()),
+                value: Node::empty(),
             });
             continue;
         };
@@ -271,10 +381,7 @@ fn parse_style_body(body: &str) -> Node {
     }
     if let Some(idx) = top_level_colon(trimmed) {
         let (prop, value) = trimmed.split_at(idx);
-        return Node::Style {
-            prop: prop.trim().to_string(),
-            value: value[1..].trim().to_string(),
-        };
+        return style_feature(prop, &value[1..]);
     }
     Node::Raw(format!("style({})", body))
 }
@@ -284,10 +391,14 @@ fn parse_paren_style_feature(s: &str) -> Option<Node> {
     let inner = inner.trim();
     let idx = top_level_colon(inner)?;
     let (prop, value) = inner.split_at(idx);
-    Some(Node::Style {
+    Some(style_feature(prop, &value[1..]))
+}
+
+fn style_feature(prop: &str, value: &str) -> Node {
+    Node::Style {
         prop: prop.trim().to_string(),
-        value: value[1..].trim().to_string(),
-    })
+        value: Box::new(parse(value)),
+    }
 }
 
 fn top_level_colon(s: &str) -> Option<usize> {

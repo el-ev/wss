@@ -1,42 +1,108 @@
 use super::Node;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Doc {
     pub items: Vec<Item>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Item {
+    /// Whitespace, comments, or text the parser does not model.
     Verbatim(String),
     Rule(Rule),
     Decl(Decl),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Rule {
-    pub head: String,
+    pub prelude: Prelude,
+    /// Whitespace between the prelude and `{`.
+    pub head_pad: String,
     pub open_pad: String,
     pub body: Body,
     pub close_pad: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// What a rule applies to: the text before its `{`.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Prelude {
+    /// A selector list (`.clk`, `0%, 100%`), kept as text.
+    Selector(String),
+    /// `@property --name`
+    Property(String),
+    /// `@function --name(--p <type>, ...) returns <type>`
+    Function(FunctionHead),
+    /// `@keyframes name`
+    Keyframes(String),
+    /// `@container <condition>`
+    Container(Node),
+    /// Any other at-rule, e.g. `@media (max-width: 720px)`.
+    AtRule { name: String, prelude: String },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct FunctionHead {
+    pub name: String,
+    pub params: Vec<Param>,
+    /// The `returns` type, e.g. `<integer>`.
+    pub returns: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Param {
+    pub name: String,
+    /// The parameter type, e.g. `<number>`.
+    pub syntax: Option<String>,
+}
+
+impl Prelude {
+    pub fn is_property(&self) -> bool {
+        matches!(self, Prelude::Property(_))
+    }
+
+    pub fn is_function(&self) -> bool {
+        matches!(self, Prelude::Function(_))
+    }
+
+    pub fn is_keyframes(&self) -> bool {
+        matches!(self, Prelude::Keyframes(_))
+    }
+
+    pub fn to_css(&self) -> String {
+        let mut out = String::new();
+        print_prelude(self, &mut out);
+        out
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum Body {
     Decls(Vec<DeclItem>),
     Nested(Vec<Item>),
-    Verbatim(String),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum DeclItem {
+    /// Whitespace, comments, or text the parser does not model.
     Verbatim(String),
     Decl(Decl),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Decl {
     pub name: String,
     pub value: Node,
+    pub important: bool,
+}
+
+impl Decl {
+    pub fn new(name: String, value: Node) -> Self {
+        Self {
+            name,
+            value,
+            important: false,
+        }
+    }
 }
 
 // =====================================================================
@@ -64,46 +130,50 @@ impl<'a> DocParser<'a> {
         }
     }
 
-    /// Parse items until end of input. Top-level entry point.
+    /// Parse items until end of input. Used both for the top-level
+    /// document and for nested rule bodies (`@keyframes`, `@container`).
     fn parse_items_to_end(&mut self) -> Vec<Item> {
-        self.parse_items_until(None)
-    }
-
-    /// Parse items until we hit `stop_at` (a closing brace) or end of
-    /// input. Used both for the top-level document and for nested
-    /// rule bodies (`@keyframes`, `@container`).
-    fn parse_items_until(&mut self, stop_at: Option<u8>) -> Vec<Item> {
         let mut items: Vec<Item> = Vec::new();
         let mut verbatim_start = self.pos;
+        // Where the next rule's head would start: just past the last
+        // top-level `;` or `}`.
+        let mut head_start = self.pos;
+        let mut depth: i32 = 0;
         while self.pos < self.bytes.len() {
-            let b = self.bytes[self.pos];
-            if stop_at == Some(b) {
-                break;
-            }
-            // Skip over a quoted string literal so it doesn't confuse
-            // brace-matching.
-            if b == b'"' || b == b'\'' {
-                if let Some(end) = self.skip_string(self.pos) {
-                    self.pos = end;
+            match self.bytes[self.pos] {
+                // Skip over a quoted string literal so it doesn't confuse
+                // brace-matching.
+                b'"' | b'\'' => {
+                    self.pos = super::parse::skip_css_string(self.bytes, self.pos);
                     continue;
                 }
-                self.pos += 1;
-                continue;
+                b'(' => depth += 1,
+                b')' => depth -= 1,
+                b';' if depth == 0 => head_start = self.pos + 1,
+                b'}' => head_start = self.pos + 1,
+                _ => {}
             }
-            if b == b'{' {
-                let head_start = self.find_head_start(verbatim_start);
-                let head = self.input[head_start..self.pos].to_string();
+            if self.bytes[self.pos] == b'{' {
                 let pre_text = &self.input[verbatim_start..head_start];
                 push_text_as_items(pre_text, &mut items);
+                let (trivia, head) = split_leading_trivia(&self.input[head_start..self.pos]);
+                if !trivia.is_empty() {
+                    items.push(Item::Verbatim(trivia.to_string()));
+                }
+                let head_end = head.trim_end_matches(is_css_space).len();
+                let prelude = parse_prelude(&head[..head_end]);
                 self.pos += 1; // consume `{`
-                let (open_pad, body, close_pad) = self.parse_rule_body(&head);
+                let (open_pad, body, close_pad) = self.parse_rule_body(&prelude);
                 items.push(Item::Rule(Rule {
-                    head,
+                    prelude,
+                    head_pad: head[head_end..].to_string(),
                     open_pad,
                     body,
                     close_pad,
                 }));
                 verbatim_start = self.pos;
+                head_start = self.pos;
+                depth = 0;
                 continue;
             }
             self.pos += 1;
@@ -113,59 +183,28 @@ impl<'a> DocParser<'a> {
         items
     }
 
-    fn find_head_start(&self, verbatim_start: usize) -> usize {
-        let mut i = self.pos;
-        while i > verbatim_start {
-            let b = self.bytes[i - 1];
-            if b == b';' || b == b'}' {
-                return i;
-            }
-            i -= 1;
-        }
-        verbatim_start
-    }
-
-    fn skip_string(&self, start: usize) -> Option<usize> {
-        let quote = self.bytes[start];
-        let mut i = start + 1;
-        while i < self.bytes.len() {
-            match self.bytes[i] {
-                b'\\' => i += 2,
-                c if c == quote => return Some(i + 1),
-                _ => i += 1,
-            }
-        }
-        None
-    }
-
-    fn parse_rule_body(&mut self, head: &str) -> (String, Body, String) {
-        // Find matching `}` while respecting nested braces, parens,
-        // and string literals.
+    fn parse_rule_body(&mut self, prelude: &Prelude) -> (String, Body, String) {
+        // Find matching `}` while respecting nested braces and string
+        // literals.
         let body_start = self.pos;
         let mut depth: i32 = 1;
         let mut i = self.pos;
-        while i < self.bytes.len() && depth > 0 {
+        while i < self.bytes.len() {
             match self.bytes[i] {
                 b'"' | b'\'' => {
-                    if let Some(end) = self.skip_string(i) {
-                        i = end;
-                        continue;
-                    }
-                    i += 1;
+                    i = super::parse::skip_css_string(self.bytes, i);
+                    continue;
                 }
-                b'{' => {
-                    depth += 1;
-                    i += 1;
-                }
+                b'{' => depth += 1,
                 b'}' => {
                     depth -= 1;
                     if depth == 0 {
                         break;
                     }
-                    i += 1;
                 }
-                _ => i += 1,
+                _ => {}
             }
+            i += 1;
         }
         let body_end = i;
         // Skip past the closing `}` (if present).
@@ -173,7 +212,7 @@ impl<'a> DocParser<'a> {
 
         let body_text = &self.input[body_start..body_end];
         let (open_pad, inner, close_pad) = trim_pads(body_text);
-        let body = classify_body(head, inner);
+        let body = classify_body(prelude, inner);
         (open_pad.to_string(), body, close_pad.to_string())
     }
 }
@@ -182,7 +221,7 @@ fn push_text_as_items(text: &str, out: &mut Vec<Item>) {
     if text.is_empty() {
         return;
     }
-    if text.bytes().any(|b| b == b'{' || b == b'}') {
+    if any_unquoted(text, |b, _| b == b'{' || b == b'}') {
         out.push(Item::Verbatim(text.to_string()));
         return;
     }
@@ -194,15 +233,35 @@ fn push_text_as_items(text: &str, out: &mut Vec<Item>) {
     }
 }
 
+fn is_css_space(c: char) -> bool {
+    matches!(c, ' ' | '\t' | '\n' | '\r')
+}
+
+/// Length of the comment opening `s`, if `s` starts with one.
+fn comment_len(s: &str) -> Option<usize> {
+    let rest = s.strip_prefix("/*")?;
+    Some(rest.find("*/").map_or(s.len(), |i| i + 4))
+}
+
+/// Splits leading whitespace and comments off `s`.
+fn split_leading_trivia(s: &str) -> (&str, &str) {
+    let mut i = 0;
+    loop {
+        let rest = &s[i..];
+        let ws = rest.len() - rest.trim_start_matches(is_css_space).len();
+        if ws > 0 {
+            i += ws;
+        } else if let Some(n) = comment_len(rest) {
+            i += n;
+        } else {
+            return s.split_at(i);
+        }
+    }
+}
+
 fn trim_pads(s: &str) -> (&str, &str, &str) {
-    let leading_end = s
-        .bytes()
-        .position(|b| !matches!(b, b' ' | b'\t' | b'\n' | b'\r'))
-        .unwrap_or(s.len());
-    let trailing_start = s
-        .bytes()
-        .rposition(|b| !matches!(b, b' ' | b'\t' | b'\n' | b'\r'))
-        .map_or(s.len(), |i| i + 1);
+    let leading_end = s.len() - s.trim_start_matches(is_css_space).len();
+    let trailing_start = s.trim_end_matches(is_css_space).len();
     if trailing_start < leading_end {
         // All whitespace.
         return (s, "", "");
@@ -214,13 +273,87 @@ fn trim_pads(s: &str) -> (&str, &str, &str) {
     )
 }
 
-fn classify_body(head: &str, inner: &str) -> Body {
-    let trimmed_head = head.trim();
-    if trimmed_head.starts_with("@keyframes") || trimmed_head.starts_with("@container") {
-        let mut p = DocParser::new(inner);
-        return Body::Nested(p.parse_items_to_end());
+fn parse_prelude(text: &str) -> Prelude {
+    let Some(rest) = text.strip_prefix('@') else {
+        return Prelude::Selector(text.to_string());
+    };
+    let name_end = rest
+        .bytes()
+        .position(|b| !is_custom_name_cont(b))
+        .unwrap_or(rest.len());
+    let (name, prelude) = (&rest[..name_end], rest[name_end..].trim());
+    let is_name = |s: &str| !s.is_empty() && s.bytes().all(is_custom_name_cont);
+    match name {
+        "property" if prelude.starts_with("--") && is_name(prelude) => {
+            return Prelude::Property(prelude.to_string());
+        }
+        "keyframes" if is_name(prelude) => return Prelude::Keyframes(prelude.to_string()),
+        "function" => {
+            if let Some(head) = parse_function_head(prelude) {
+                return Prelude::Function(head);
+            }
+        }
+        "container" if !prelude.is_empty() => {
+            return Prelude::Container(super::parse(prelude));
+        }
+        _ => {}
     }
-    if contains_top_level_brace(inner) {
+    Prelude::AtRule {
+        name: name.to_string(),
+        prelude: prelude.to_string(),
+    }
+}
+
+/// `--name(--a <number>, --b) returns <integer>`
+fn parse_function_head(s: &str) -> Option<FunctionHead> {
+    let open = s.find('(')?;
+    let close = open + s[open..].find(')')?;
+    let name = s[..open].trim();
+    if !name.starts_with("--") || !name.bytes().all(is_custom_name_cont) {
+        return None;
+    }
+    let params_text = s[open + 1..close].trim();
+    let params = if params_text.is_empty() {
+        Vec::new()
+    } else {
+        params_text
+            .split(',')
+            .map(|p| {
+                let mut words = p.split_whitespace();
+                let name = words.next().filter(|n| n.starts_with("--"))?;
+                let syntax = words.next().map(str::to_string);
+                // Defaults (`--a <number>: 0`) are not modeled.
+                if words.next().is_some() || name.contains(':') {
+                    return None;
+                }
+                Some(Param {
+                    name: name.to_string(),
+                    syntax,
+                })
+            })
+            .collect::<Option<Vec<_>>>()?
+    };
+    let tail = s[close + 1..].trim();
+    let returns = if tail.is_empty() {
+        None
+    } else {
+        let ty = tail.strip_prefix("returns")?.trim();
+        if ty.is_empty() || ty.contains(char::is_whitespace) {
+            return None;
+        }
+        Some(ty.to_string())
+    };
+    Some(FunctionHead {
+        name: name.to_string(),
+        params,
+        returns,
+    })
+}
+
+fn classify_body(prelude: &Prelude, inner: &str) -> Body {
+    if matches!(prelude, Prelude::Keyframes(_) | Prelude::Container(_))
+        || contains_top_level_brace(inner)
+    {
         let mut p = DocParser::new(inner);
         return Body::Nested(p.parse_items_to_end());
     }
@@ -228,14 +361,27 @@ fn classify_body(head: &str, inner: &str) -> Body {
 }
 
 fn contains_top_level_brace(s: &str) -> bool {
-    let mut depth: i32 = 0;
+    any_unquoted(s, |b, depth| b == b'{' && depth == 0)
+}
+
+/// Whether `pred` holds for some byte of `s` outside string literals,
+/// given the paren depth before it.
+fn any_unquoted(s: &str, mut pred: impl FnMut(u8, i32) -> bool) -> bool {
     let bytes = s.as_bytes();
+    let mut depth: i32 = 0;
     let mut i = 0;
     while i < bytes.len() {
-        match bytes[i] {
+        let b = bytes[i];
+        if b == b'"' || b == b'\'' {
+            i = super::parse::skip_css_string(bytes, i);
+            continue;
+        }
+        if pred(b, depth) {
+            return true;
+        }
+        match b {
             b'(' => depth += 1,
             b')' => depth -= 1,
-            b'{' if depth == 0 => return true,
             _ => {}
         }
         i += 1;
@@ -248,13 +394,11 @@ fn parse_decl_items(inner: &str) -> Vec<DeclItem> {
     let mut items: Vec<DeclItem> = Vec::new();
     let mut i = 0;
     while i < bytes.len() {
-        // Eat leading whitespace as verbatim.
-        let ws_start = i;
-        while i < bytes.len() && matches!(bytes[i], b' ' | b'\t' | b'\n' | b'\r') {
-            i += 1;
-        }
-        if i > ws_start {
-            items.push(DeclItem::Verbatim(inner[ws_start..i].to_string()));
+        // Leading whitespace and comments stay verbatim.
+        let (trivia, _) = split_leading_trivia(&inner[i..]);
+        if !trivia.is_empty() {
+            items.push(DeclItem::Verbatim(trivia.to_string()));
+            i += trivia.len();
         }
         if i >= bytes.len() {
             break;
@@ -263,37 +407,24 @@ fn parse_decl_items(inner: &str) -> Vec<DeclItem> {
         let mut depth: i32 = 0;
         while i < bytes.len() {
             match bytes[i] {
-                b'(' => {
-                    depth += 1;
-                    i += 1;
-                }
-                b')' => {
-                    depth -= 1;
-                    i += 1;
-                }
+                b'(' => depth += 1,
+                b')' => depth -= 1,
                 b';' if depth == 0 => {
                     i += 1; // include the `;`
                     break;
                 }
                 b'"' | b'\'' => {
-                    let quote = bytes[i];
-                    i += 1;
-                    while i < bytes.len() {
-                        let b = bytes[i];
-                        if b == b'\\' {
-                            i = (i + 2).min(bytes.len());
-                            continue;
-                        }
-                        i += 1;
-                        if b == quote {
-                            break;
-                        }
-                    }
+                    i = super::parse::skip_css_string(bytes, i);
+                    continue;
                 }
-                _ => i += 1,
+                _ => {}
             }
+            i += 1;
         }
-        let decl_text = &inner[decl_start..i];
+        // Trailing whitespace before the end of a final, `;`-less
+        // declaration is left for the next round.
+        let decl_text = inner[decl_start..i].trim_end_matches(is_css_space);
+        i = decl_start + decl_text.len();
         match parse_decl(decl_text) {
             Some(decl) => items.push(DeclItem::Decl(decl)),
             None => items.push(DeclItem::Verbatim(decl_text.to_string())),
@@ -303,18 +434,21 @@ fn parse_decl_items(inner: &str) -> Vec<DeclItem> {
 }
 
 fn parse_decl(slice: &str) -> Option<Decl> {
-    let trimmed = slice.trim_end_matches(|c: char| c.is_ascii_whitespace());
-    let trimmed = trimmed.strip_suffix(';')?;
+    let trimmed = slice.strip_suffix(';').unwrap_or(slice);
     let colon = find_decl_colon(trimmed)?;
     let name = trimmed[..colon].trim();
     if name.is_empty() || !name.bytes().all(is_custom_name_cont) {
         return None;
     }
     let value_str = trimmed[colon + 1..].trim();
-    let value = super::parse(value_str);
+    let (value_str, important) = match value_str.strip_suffix("!important") {
+        Some(v) => (v.trim_end(), true),
+        None => (value_str, false),
+    };
     Some(Decl {
         name: name.to_string(),
-        value,
+        value: super::parse(value_str),
+        important,
     })
 }
 
@@ -352,6 +486,9 @@ fn print_decl(d: &Decl, out: &mut String) {
     out.push_str(&d.name);
     out.push_str(": ");
     out.push_str(&d.value.to_css());
+    if d.important {
+        out.push_str(" !important");
+    }
     out.push(';');
 }
 
@@ -365,8 +502,47 @@ fn print_items(items: &[Item], out: &mut String) {
     }
 }
 
+fn print_prelude(prelude: &Prelude, out: &mut String) {
+    let at_rule = |out: &mut String, name: &str, prelude: &str| {
+        out.push('@');
+        out.push_str(name);
+        if !prelude.is_empty() {
+            out.push(' ');
+            out.push_str(prelude);
+        }
+    };
+    match prelude {
+        Prelude::Selector(s) => out.push_str(s),
+        Prelude::Property(name) => at_rule(out, "property", name),
+        Prelude::Keyframes(name) => at_rule(out, "keyframes", name),
+        Prelude::Container(cond) => at_rule(out, "container", &cond.to_css()),
+        Prelude::AtRule { name, prelude } => at_rule(out, name, prelude),
+        Prelude::Function(f) => {
+            out.push_str("@function ");
+            out.push_str(&f.name);
+            out.push('(');
+            for (i, p) in f.params.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                out.push_str(&p.name);
+                if let Some(syntax) = &p.syntax {
+                    out.push(' ');
+                    out.push_str(syntax);
+                }
+            }
+            out.push(')');
+            if let Some(ty) = &f.returns {
+                out.push_str(" returns ");
+                out.push_str(ty);
+            }
+        }
+    }
+}
+
 fn print_rule(r: &Rule, out: &mut String) {
-    out.push_str(&r.head);
+    print_prelude(&r.prelude, out);
+    out.push_str(&r.head_pad);
     out.push('{');
     out.push_str(&r.open_pad);
     match &r.body {
@@ -379,7 +555,6 @@ fn print_rule(r: &Rule, out: &mut String) {
             }
         }
         Body::Nested(items) => print_items(items, out),
-        Body::Verbatim(s) => out.push_str(s),
     }
     out.push_str(&r.close_pad);
     out.push('}');
@@ -399,7 +574,19 @@ use std::collections::HashMap;
 fn visit_value(node: &Node, visit: &mut impl FnMut(&Node)) {
     visit(node);
     match node {
-        Node::Int(_) | Node::Raw(_) | Node::Style { .. } | Node::Invalid => {}
+        Node::Int(_)
+        | Node::Raw(_)
+        | Node::Invalid
+        | Node::Ident(_)
+        | Node::Str(_)
+        | Node::Dim { .. }
+        | Node::Hash(_) => {}
+        Node::Style { value, .. } => visit_value(value, visit),
+        Node::List { items, .. } => {
+            for item in items {
+                visit_value(item, visit);
+            }
+        }
         Node::Var { fallback, .. } => {
             if let Some(fb) = fallback {
                 visit_value(fb, visit);
@@ -443,7 +630,19 @@ fn visit_value(node: &Node, visit: &mut impl FnMut(&Node)) {
 pub(super) fn visit_value_mut(node: &mut Node, visit: &mut impl FnMut(&mut Node)) {
     visit(node);
     match node {
-        Node::Int(_) | Node::Raw(_) | Node::Style { .. } | Node::Invalid => {}
+        Node::Int(_)
+        | Node::Raw(_)
+        | Node::Invalid
+        | Node::Ident(_)
+        | Node::Str(_)
+        | Node::Dim { .. }
+        | Node::Hash(_) => {}
+        Node::Style { value, .. } => visit_value_mut(value, visit),
+        Node::List { items, .. } => {
+            for item in items {
+                visit_value_mut(item, visit);
+            }
+        }
         Node::Var { fallback, .. } => {
             if let Some(fb) = fallback {
                 visit_value_mut(fb, visit);
@@ -501,6 +700,9 @@ fn walk_items(items: &[Item], counts: &mut HashMap<String, usize>) {
 }
 
 fn walk_rule(rule: &Rule, counts: &mut HashMap<String, usize>) {
+    if let Prelude::Container(cond) = &rule.prelude {
+        walk_value(cond, counts);
+    }
     match &rule.body {
         Body::Decls(items) => {
             for di in items {
@@ -510,7 +712,6 @@ fn walk_rule(rule: &Rule, counts: &mut HashMap<String, usize>) {
             }
         }
         Body::Nested(items) => walk_items(items, counts),
-        Body::Verbatim(s) => count_refs_in_text(s, counts),
     }
 }
 
@@ -571,11 +772,9 @@ fn drop_dead_in_items(items: &mut Vec<Item>, refs: &HashMap<String, usize>) -> u
 
 fn drop_dead_in_rule(rule: &mut Rule, refs: &HashMap<String, usize>) -> usize {
     let mut dropped = 0usize;
-    let head_trim = rule.head.trim_start();
-    let in_function = head_trim.starts_with("@function");
-    let in_property = head_trim.starts_with("@property");
+    let scoped = rule.prelude.is_function() || rule.prelude.is_property();
     match &mut rule.body {
-        Body::Decls(items) if !in_function && !in_property => {
+        Body::Decls(items) if !scoped => {
             items.retain(|di| {
                 let DeclItem::Decl(d) = di else {
                     return true;
@@ -627,7 +826,6 @@ fn fold_in_rule(rule: &mut Rule) {
             }
         }
         Body::Nested(items) => fold_in_items(items),
-        Body::Verbatim(_) => {}
     }
 }
 
@@ -678,7 +876,7 @@ fn walk_items_var_text(
     for item in items {
         match item {
             Item::Rule(r) => walk_rule_var_text(r, var_refs, text_refs),
-            Item::Decl(d) => walk_value_var_text(&d.value, var_refs, text_refs),
+            Item::Decl(d) => walk_decl_var_text(d, var_refs, text_refs),
             Item::Verbatim(s) => count_refs_in_text(s, text_refs),
         }
     }
@@ -689,17 +887,34 @@ fn walk_rule_var_text(
     var_refs: &mut HashMap<String, usize>,
     text_refs: &mut HashMap<String, usize>,
 ) {
+    if let Prelude::Container(cond) = &rule.prelude {
+        walk_value(cond, text_refs);
+    }
     match &rule.body {
         Body::Decls(items) => {
             for di in items {
                 match di {
                     DeclItem::Verbatim(s) => count_refs_in_text(s, text_refs),
-                    DeclItem::Decl(d) => walk_value_var_text(&d.value, var_refs, text_refs),
+                    DeclItem::Decl(d) => walk_decl_var_text(d, var_refs, text_refs),
                 }
             }
         }
         Body::Nested(items) => walk_items_var_text(items, var_refs, text_refs),
-        Body::Verbatim(s) => count_refs_in_text(s, text_refs),
+    }
+}
+
+/// Only custom-property values take inlined values: the emitter chunks long
+/// standard-property values (the visualizers' `box-shadow` lists) into
+/// custom properties on purpose.
+fn walk_decl_var_text(
+    d: &Decl,
+    var_refs: &mut HashMap<String, usize>,
+    text_refs: &mut HashMap<String, usize>,
+) {
+    if d.name.starts_with("--") {
+        walk_value_var_text(&d.value, var_refs, text_refs);
+    } else {
+        walk_value(&d.value, text_refs);
     }
 }
 
@@ -737,13 +952,10 @@ fn collect_in_rule(
     var_refs: &HashMap<String, usize>,
     candidates: &mut HashMap<String, Node>,
 ) {
-    let head_trim = rule.head.trim_start();
     // Keyframe values are latched snapshots: inlining one into its reader
     // would read the live value instead.
-    if head_trim.starts_with("@function")
-        || head_trim.starts_with("@property")
-        || head_trim.starts_with("@keyframes")
-    {
+    let p = &rule.prelude;
+    if p.is_function() || p.is_property() || p.is_keyframes() {
         return;
     }
     match &rule.body {
@@ -755,7 +967,6 @@ fn collect_in_rule(
             }
         }
         Body::Nested(items) => collect_inline_candidates(items, total_refs, var_refs, candidates),
-        Body::Verbatim(_) => {}
     }
 }
 
@@ -783,23 +994,13 @@ fn consider_candidate(
 }
 
 fn value_references_any(node: &Node, names: &std::collections::HashSet<String>) -> bool {
-    match node {
-        Node::Var { name, .. } => names.contains(name.strip_prefix("--").unwrap_or(name)),
-        Node::Int(_) | Node::Raw(_) | Node::Style { .. } | Node::Invalid => false,
-        Node::Calc(inner) | Node::Paren(inner) => value_references_any(inner, names),
-        Node::MathFn { args, .. } | Node::Fn { args, .. } => {
-            args.iter().any(|a| value_references_any(a, names))
+    let mut found = false;
+    visit_value(node, &mut |n| {
+        if let Node::Var { name, .. } = n {
+            found |= names.contains(name.strip_prefix("--").unwrap_or(name));
         }
-        Node::Sum(terms) => terms.iter().any(|t| value_references_any(&t.node, names)),
-        Node::Product(factors) => factors.iter().any(|f| value_references_any(f, names)),
-        Node::Div(l, r) => value_references_any(l, names) || value_references_any(r, names),
-        Node::If { arms, default } => {
-            arms.iter().any(|a| {
-                value_references_any(&a.cond, names) || value_references_any(&a.value, names)
-            }) || value_references_any(default, names)
-        }
-        Node::Or(conds) => conds.iter().any(|c| value_references_any(c, names)),
-    }
+    });
+    found
 }
 
 fn substitute_in_items(
@@ -821,8 +1022,7 @@ fn substitute_in_rule(
     candidates: &HashMap<String, Node>,
     substituted: &mut std::collections::HashSet<String>,
 ) {
-    let head_trim = rule.head.trim_start();
-    if head_trim.starts_with("@property") {
+    if rule.prelude.is_property() {
         return;
     }
     match &mut rule.body {
@@ -834,7 +1034,6 @@ fn substitute_in_rule(
             }
         }
         Body::Nested(items) => substitute_in_items(items, candidates, substituted),
-        Body::Verbatim(_) => {}
     }
 }
 
@@ -888,7 +1087,20 @@ fn substitute_in_node(
                 substitute_in_node(c, candidates, substituted);
             }
         }
-        Node::Int(_) | Node::Raw(_) | Node::Style { .. } | Node::Invalid => {}
+        Node::List { items, .. } => {
+            for item in items {
+                substitute_in_node(item, candidates, substituted);
+            }
+        }
+        // A `style()` query compares against its value as written.
+        Node::Style { .. } => {}
+        Node::Int(_)
+        | Node::Raw(_)
+        | Node::Invalid
+        | Node::Ident(_)
+        | Node::Str(_)
+        | Node::Dim { .. }
+        | Node::Hash(_) => {}
     }
 }
 
@@ -919,7 +1131,6 @@ fn drop_inlined_in_rule(rule: &mut Rule, substituted: &std::collections::HashSet
             });
         }
         Body::Nested(items) => drop_inlined(items, substituted),
-        Body::Verbatim(_) => {}
     }
 }
 
@@ -941,7 +1152,11 @@ fn scrub_in_items(items: &mut [Item], transform: &impl Fn(&str) -> String) {
             Item::Verbatim(s) => *s = transform(s),
             Item::Decl(_) => {}
             Item::Rule(r) => {
-                r.head = transform(&r.head);
+                match &mut r.prelude {
+                    Prelude::Selector(s) | Prelude::AtRule { prelude: s, .. } => *s = transform(s),
+                    _ => {}
+                }
+                r.head_pad = transform(&r.head_pad);
                 r.open_pad = transform(&r.open_pad);
                 match &mut r.body {
                     Body::Decls(items) => {
@@ -952,7 +1167,6 @@ fn scrub_in_items(items: &mut [Item], transform: &impl Fn(&str) -> String) {
                         }
                     }
                     Body::Nested(items) => scrub_in_items(items, transform),
-                    Body::Verbatim(s) => *s = transform(s),
                 }
                 r.close_pad = transform(&r.close_pad);
             }
@@ -974,8 +1188,17 @@ fn count_custom_in_items(items: &[Item], counts: &mut HashMap<String, usize>) {
 }
 
 fn count_custom_in_rule(r: &Rule, counts: &mut HashMap<String, usize>) {
-    scan_custom_in_text(&r.head, counts);
-    scan_custom_in_text(&r.open_pad, counts);
+    match &r.prelude {
+        Prelude::Selector(s) | Prelude::AtRule { prelude: s, .. } => scan_custom_in_text(s, counts),
+        Prelude::Property(name) | Prelude::Keyframes(name) => bump_custom(counts, name),
+        Prelude::Function(f) => {
+            bump_custom(counts, &f.name);
+            for p in &f.params {
+                bump_custom(counts, &p.name);
+            }
+        }
+        Prelude::Container(cond) => count_custom_in_value(cond, counts),
+    }
     match &r.body {
         Body::Decls(items) => {
             for di in items {
@@ -989,20 +1212,17 @@ fn count_custom_in_rule(r: &Rule, counts: &mut HashMap<String, usize>) {
             }
         }
         Body::Nested(items) => count_custom_in_items(items, counts),
-        Body::Verbatim(s) => scan_custom_in_text(s, counts),
     }
-    scan_custom_in_text(&r.close_pad, counts);
 }
 
 fn count_custom_in_value(node: &Node, counts: &mut HashMap<String, usize>) {
     visit_value(node, &mut |n| match n {
         Node::Raw(s) => scan_custom_in_text(s, counts),
-        Node::Var { name, .. } => bump_custom(counts, name),
-        Node::Style { prop, value } => {
-            bump_custom(counts, prop);
-            scan_custom_in_text(value, counts);
-        }
-        Node::MathFn { name, .. } | Node::Fn { name, .. } => bump_custom(counts, name),
+        Node::Var { name, .. }
+        | Node::Style { prop: name, .. }
+        | Node::MathFn { name, .. }
+        | Node::Fn { name, .. }
+        | Node::Ident(name) => bump_custom(counts, name),
         _ => {}
     });
 }
@@ -1040,8 +1260,19 @@ fn rename_in_items(items: &mut [Item], rename: &HashMap<String, String>) {
 }
 
 fn rename_in_rule(r: &mut Rule, rename: &HashMap<String, String>) {
-    r.head = rewrite_custom_in_text(&r.head, rename);
-    r.open_pad = rewrite_custom_in_text(&r.open_pad, rename);
+    match &mut r.prelude {
+        Prelude::Selector(s) | Prelude::AtRule { prelude: s, .. } => {
+            *s = rewrite_custom_in_text(s, rename);
+        }
+        Prelude::Property(name) | Prelude::Keyframes(name) => rename_full_name(name, rename),
+        Prelude::Function(f) => {
+            rename_full_name(&mut f.name, rename);
+            for p in &mut f.params {
+                rename_full_name(&mut p.name, rename);
+            }
+        }
+        Prelude::Container(cond) => rename_in_value(cond, rename),
+    }
     match &mut r.body {
         Body::Decls(items) => {
             for di in items {
@@ -1055,20 +1286,17 @@ fn rename_in_rule(r: &mut Rule, rename: &HashMap<String, String>) {
             }
         }
         Body::Nested(items) => rename_in_items(items, rename),
-        Body::Verbatim(s) => *s = rewrite_custom_in_text(s, rename),
     }
-    r.close_pad = rewrite_custom_in_text(&r.close_pad, rename);
 }
 
 fn rename_in_value(node: &mut Node, rename: &HashMap<String, String>) {
     visit_value_mut(node, &mut |n| match n {
         Node::Raw(s) => *s = rewrite_custom_in_text(s, rename),
-        Node::Var { name, .. } => rename_full_name(name, rename),
-        Node::Style { prop, value } => {
-            rename_full_name(prop, rename);
-            *value = rewrite_custom_in_text(value, rename);
-        }
-        Node::MathFn { name, .. } | Node::Fn { name, .. } => rename_full_name(name, rename),
+        Node::Var { name, .. }
+        | Node::Style { prop: name, .. }
+        | Node::MathFn { name, .. }
+        | Node::Fn { name, .. }
+        | Node::Ident(name) => rename_full_name(name, rename),
         _ => {}
     });
 }
@@ -1220,7 +1448,8 @@ mod tests {
         let Item::Rule(r) = &doc.items[0] else {
             panic!("expected rule");
         };
-        assert_eq!(r.head, ".foo ");
+        assert_eq!(r.prelude, Prelude::Selector(".foo".to_string()));
+        assert_eq!(r.head_pad, " ");
         let Body::Decls(items) = &r.body else {
             panic!("expected decl body");
         };
@@ -1563,5 +1792,98 @@ mod tests {
         let input = ".x { --x: --eq(2, 2); }";
         let out = fold_buffer(input);
         assert!(out.contains("--x: 1;"), "got: {out}");
+    }
+
+    fn rule_at(doc: &Doc, i: usize) -> &Rule {
+        let Item::Rule(r) = &doc.items[i] else {
+            panic!("expected a rule at {i}: {:?}", doc.items);
+        };
+        r
+    }
+
+    #[test]
+    fn parses_preludes() {
+        let doc = parse_doc(
+            "@property --x { syntax: \"<integer>\"; }\n\
+             @function --sel(--c <integer>, --t) returns <number> { result: 0; }\n\
+             @keyframes store { 0%, 100% { --a: 1; } }\n\
+             @container style(--clk: 3) { .m { --b: 1; } }\n\
+             @media (max-width: 720px) { .m { --b: 1; } }",
+        );
+        assert_eq!(rule_at(&doc, 0).prelude, Prelude::Property("--x".into()));
+        assert_eq!(
+            rule_at(&doc, 2).prelude,
+            Prelude::Function(FunctionHead {
+                name: "--sel".into(),
+                params: vec![
+                    Param {
+                        name: "--c".into(),
+                        syntax: Some("<integer>".into()),
+                    },
+                    Param {
+                        name: "--t".into(),
+                        syntax: None,
+                    },
+                ],
+                returns: Some("<number>".into()),
+            })
+        );
+        assert_eq!(rule_at(&doc, 4).prelude, Prelude::Keyframes("store".into()));
+        let Prelude::Container(Node::Style { prop, .. }) = &rule_at(&doc, 6).prelude else {
+            panic!("expected a style() container query");
+        };
+        assert_eq!(prop, "--clk");
+        assert!(matches!(
+            &rule_at(&doc, 8).prelude,
+            Prelude::AtRule { name, prelude } if name == "media" && prelude == "(max-width: 720px)"
+        ));
+    }
+
+    #[test]
+    fn parses_final_decl_without_semicolon() {
+        let doc = parse_doc("@keyframes r { 0% { --rng0: 0 } }");
+        let Body::Nested(stages) = &rule_at(&doc, 0).body else {
+            panic!("expected keyframe stages");
+        };
+        let Item::Rule(stage) = &stages[0] else {
+            panic!("expected a stage");
+        };
+        let Body::Decls(items) = &stage.body else {
+            panic!("expected decls");
+        };
+        assert!(matches!(&items[..], [DeclItem::Decl(d)] if d.name == "--rng0"));
+        assert_eq!(print_doc(&doc), "@keyframes r { 0% { --rng0: 0; } }");
+    }
+
+    #[test]
+    fn parses_important_and_comments() {
+        let input = ".a { /* hi */ animation-play-state: paused, paused !important; }";
+        let doc = parse_doc(input);
+        let Body::Decls(items) = &rule_at(&doc, 0).body else {
+            panic!("expected decls");
+        };
+        assert!(matches!(&items[0], DeclItem::Verbatim(c) if c == "/* hi */ "));
+        assert!(matches!(&items[1], DeclItem::Decl(d) if d.important));
+        assert_eq!(print_doc(&doc), input);
+    }
+
+    #[test]
+    fn braces_in_strings_do_not_split_rules() {
+        let input = "@function --c(--i <integer>) returns <string> { result: if(style(--i: 1): \"{\"; else: \"}\"); }";
+        let doc = parse_doc(input);
+        let Body::Decls(items) = &rule_at(&doc, 0).body else {
+            panic!("expected decls");
+        };
+        assert!(matches!(&items[..], [DeclItem::Decl(d)] if d.name == "result"));
+        assert_eq!(print_doc(&doc), input);
+    }
+
+    #[test]
+    fn inline_single_use_skips_standard_properties() {
+        // The emitter chunks long `box-shadow` lists into custom properties.
+        let input = ".m { --mv-0: 8px 8px red; box-shadow: var(--mv-0), 0 0 transparent; }";
+        let mut doc = parse_doc(input);
+        assert_eq!(inline_single_use(&mut doc, &HashMap::new()), 0);
+        assert_eq!(count_refs(&doc).get("mv-0"), Some(&1));
     }
 }

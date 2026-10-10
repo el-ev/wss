@@ -250,7 +250,7 @@ body { animation: rng-roll-0 257ms steps(256, jump-end) infinite, rng-roll-1 263
 @function --mhi(--w <number>) returns <integer> { result: mod(round(down, calc(var(--w) / 256)), 256); }
 /*__WSS_KEEP_FN_MHI_END__*/
 /*__WSS_KEEP_FN_MLOAD_START__*/
-@function --mload(--byte <number>) returns <integer> { result: mod(round(down, calc(--read_m16(--mhalf(var(--byte))) / (1 + 255 * mod(var(--byte), 2)))), 256); }
+@function --mload(--byte <number>) returns <integer> { result: mod(round(down, calc(/*__WSS_MLOAD_READ__*/ / (1 + 255 * mod(var(--byte), 2)))), 256); }
 /*__WSS_KEEP_FN_MLOAD_END__*/
 /*__WSS_SUPPORT__*/
 </style>

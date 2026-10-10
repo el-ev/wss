@@ -6,6 +6,7 @@ edition = "2024"
 license = "GPL-3.0"
 authors = ["Iris Shi <0.0@owo.li>"]
 repository = "https://github.com/el-ev/wss"
+autoexamples = false
 
 [dependencies]
 anyhow = "1.0.102"

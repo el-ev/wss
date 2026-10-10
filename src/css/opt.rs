@@ -11,7 +11,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::doc::{Body, DeclItem, Doc, Item, Rule, is_custom_name_cont, visit_value_mut};
+use super::doc::{
+    Body, DeclItem, Doc, Item, Prelude, Rule, is_custom_name_cont, parse_doc, visit_value_mut,
+};
 use super::fold::BOOL_HELPERS;
 use super::{Node, Sign};
 
@@ -211,7 +213,15 @@ impl Analyzer<'_> {
                 }
                 acc
             }
-            Node::Raw(_) | Node::Style { .. } | Node::Or(_) | Node::Invalid => TOP,
+            Node::Raw(_)
+            | Node::Style { .. }
+            | Node::Or(_)
+            | Node::Invalid
+            | Node::Ident(_)
+            | Node::Str(_)
+            | Node::Dim { .. }
+            | Node::Hash(_)
+            | Node::List { .. } => TOP,
         }
     }
 
@@ -247,7 +257,7 @@ impl Analyzer<'_> {
             },
             ("round", [_, x]) => {
                 let strategy = match args.first() {
-                    Some(Node::Raw(s)) => s.as_str(),
+                    Some(Node::Ident(s)) => s.as_str(),
                     _ => return TOP,
                 };
                 let (lo, hi) = match strategy {
@@ -304,22 +314,12 @@ struct DeclRef<'a> {
     function: Option<String>,
 }
 
-/// `@function --name(--p <type>, ...)` → (name, [(param, integral)]).
-fn function_head_info(head: &str) -> Option<(String, Vec<(String, bool)>)> {
-    let rest = head.trim().strip_prefix("@function")?.trim_start();
-    let open = rest.find('(')?;
-    let name = rest[..open].trim().to_string();
-    let close = rest[open..].find(')')? + open;
-    let params = rest[open + 1..close]
-        .split(',')
-        .filter_map(|p| {
-            let mut it = p.split_whitespace();
-            let name = it.next()?;
-            name.starts_with("--")
-                .then(|| (name.to_string(), it.next() == Some("<integer>")))
-        })
-        .collect();
-    Some((name, params))
+/// The `@function` a rule defines, if any.
+fn function_name(prelude: &Prelude) -> Option<&str> {
+    match prelude {
+        Prelude::Function(f) => Some(&f.name),
+        _ => None,
+    }
 }
 
 fn collect_decls<'a>(items: &'a [Item], function: Option<&str>, out: &mut Vec<DeclRef<'a>>) {
@@ -337,8 +337,7 @@ fn collect_decls<'a>(items: &'a [Item], function: Option<&str>, out: &mut Vec<De
 }
 
 fn collect_rule_decls<'a>(rule: &'a Rule, function: Option<&str>, out: &mut Vec<DeclRef<'a>>) {
-    let fn_name = function_head_info(&rule.head).map(|(n, _)| n);
-    let scope = fn_name.as_deref().or(function);
+    let scope = function_name(&rule.prelude).or(function);
     match &rule.body {
         Body::Decls(items) => {
             for di in items {
@@ -352,7 +351,6 @@ fn collect_rule_decls<'a>(rule: &'a Rule, function: Option<&str>, out: &mut Vec<
             }
         }
         Body::Nested(items) => collect_decls(items, scope, out),
-        Body::Verbatim(_) => {}
     }
 }
 
@@ -360,9 +358,12 @@ fn collect_rule_decls<'a>(rule: &'a Rule, function: Option<&str>, out: &mut Vec<
 fn collect_function_scopes(items: &[Item], out: &mut HashMap<String, Scope>) {
     for item in items {
         if let Item::Rule(r) = item {
-            if let Some((name, params)) = function_head_info(&r.head) {
+            if let Prelude::Function(f) = &r.prelude {
                 let mut scope = Scope::default();
-                scope.names.extend(params);
+                scope.names.extend(f.params.iter().map(|p| {
+                    let integral = p.syntax.as_deref() == Some("<integer>");
+                    (p.name.clone(), integral)
+                }));
                 if let Body::Decls(decls) = &r.body {
                     for di in decls {
                         if let DeclItem::Decl(d) = di
@@ -372,7 +373,7 @@ fn collect_function_scopes(items: &[Item], out: &mut HashMap<String, Scope>) {
                         }
                     }
                 }
-                out.insert(name, scope);
+                out.insert(f.name.clone(), scope);
             }
             if let Body::Nested(inner) = &r.body {
                 collect_function_scopes(inner, out);
@@ -390,8 +391,7 @@ fn rewrite_items(
         match item {
             Item::Decl(d) => d.value = f(function, std::mem::replace(&mut d.value, Node::Int(0))),
             Item::Rule(r) => {
-                let fn_name = function_head_info(&r.head).map(|(n, _)| n);
-                let scope = fn_name.as_deref().or(function);
+                let scope = function_name(&r.prelude).or(function);
                 match &mut r.body {
                     Body::Decls(decls) => {
                         for di in decls {
@@ -401,7 +401,6 @@ fn rewrite_items(
                         }
                     }
                     Body::Nested(inner) => rewrite_items(inner, scope, f),
-                    Body::Verbatim(_) => {}
                 }
             }
             Item::Verbatim(_) => {}
@@ -418,17 +417,25 @@ pub type Registrations = HashMap<String, (bool, Option<i64>)>;
 
 pub fn parse_registrations(props_css: &str) -> Registrations {
     let mut out = Registrations::new();
-    for chunk in props_css.split("@property ").skip(1) {
-        let Some(name) = chunk.split_whitespace().next() else {
+    for item in parse_doc(props_css).items {
+        let Item::Rule(Rule {
+            prelude: Prelude::Property(name),
+            body: Body::Decls(decls),
+            ..
+        }) = item
+        else {
             continue;
         };
-        let int = chunk.contains("syntax: \"<integer>\"");
-        let init = chunk
-            .split("initial-value:")
-            .nth(1)
-            .and_then(|r| r.split(';').next())
-            .and_then(|v| v.trim().parse::<i64>().ok());
-        out.insert(name.to_string(), (int, init));
+        let (mut int, mut init) = (false, None);
+        for di in decls {
+            let DeclItem::Decl(d) = di else { continue };
+            match (d.name.as_str(), d.value) {
+                ("syntax", v) => int = v.string_contents() == Some("<integer>"),
+                ("initial-value", Node::Int(v)) => init = Some(v),
+                _ => {}
+            }
+        }
+        out.insert(name, (int, init));
     }
     out
 }
@@ -540,17 +547,13 @@ fn decl_contexts<'a>(docs: &'a [&mut Doc]) -> HashMap<String, Vec<(String, &'a N
                     .or_default()
                     .push((ctx.to_string(), &d.value)),
                 Item::Rule(r) => {
-                    let head = r.head.trim();
-                    if head.starts_with("@function") || head.starts_with("@property") {
-                        continue;
-                    }
                     // `store0`/`store1`/... are one family running in lockstep.
-                    let inner = match head.strip_prefix("@keyframes") {
-                        Some(name) => format!(
-                            "kf:{}",
-                            name.trim().trim_end_matches(|c: char| c.is_ascii_digit())
-                        ),
-                        None => format!("{ctx}>{head}"),
+                    let inner = match &r.prelude {
+                        Prelude::Function(_) | Prelude::Property(_) => continue,
+                        Prelude::Keyframes(name) => {
+                            format!("kf:{}", name.trim_end_matches(|c: char| c.is_ascii_digit()))
+                        }
+                        p => format!("{ctx}>{}", p.to_css()),
                     };
                     match &r.body {
                         Body::Decls(decls) => {
@@ -565,7 +568,6 @@ fn decl_contexts<'a>(docs: &'a [&mut Doc]) -> HashMap<String, Vec<(String, &'a N
                             }
                         }
                         Body::Nested(nested) => walk(nested, &inner, out),
-                        Body::Verbatim(_) => {}
                     }
                 }
                 _ => {}

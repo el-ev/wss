@@ -409,6 +409,19 @@ fn fold_mod_collapses_redundant_nesting() {
 }
 
 #[test]
+fn fold_mod_drops_register_wrap() {
+    // A register holds a byte, so `mod(_, M)` is a no-op for M ≥ 256.
+    assert_eq!(fold_str("mod(var(--_1r3), 256)"), "var(--_1r3)");
+    assert_eq!(fold_str("mod(var(--_1r3, 0), 512)"), "var(--_1r3, 0)");
+    assert_eq!(fold_str("mod(var(--_1r3), 128)"), "mod(var(--_1r3), 128)");
+    assert_eq!(
+        fold_str("mod(var(--_1r3, 300), 256)"),
+        "mod(var(--_1r3, 300), 256)"
+    );
+    assert_eq!(fold_str("mod(var(--r), 256)"), "mod(var(--r), 256)");
+}
+
+#[test]
 fn fold_calc_combines_inside_mod() {
     // `var + var` combines to `var * 2`, then the `mod(X*K, M)` rule
     // pulls the literal factor out of the mod (K=2 | M=256), giving
@@ -614,4 +627,139 @@ fn fold_round_of_literal_division() {
     assert_eq!(fold_str("round(down, calc(-1 / 256))"), "-1");
     assert_eq!(fold_str("round(up, 257 / 256)"), "2");
     assert_eq!(fold_str("round(to-zero, -257 / 256)"), "-1");
+}
+
+#[test]
+fn component_values() {
+    use super::ListSep;
+    assert_eq!(parse("down"), Node::Ident("down".into()));
+    assert_eq!(parse("\"a;b\""), Node::Str("\"a;b\"".into()));
+    assert_eq!(parse("#ddd"), Node::Hash("ddd".into()));
+    assert_eq!(
+        parse("-4px"),
+        Node::Dim {
+            value: -4.0,
+            unit: "px".into()
+        }
+    );
+    assert_eq!(
+        parse("0.5"),
+        Node::Dim {
+            value: 0.5,
+            unit: String::new()
+        }
+    );
+    assert_eq!(parse(""), Node::empty());
+    let Node::List {
+        sep: ListSep::Comma,
+        items,
+    } = parse("a 1s, b 2s")
+    else {
+        panic!("expected a comma list");
+    };
+    assert!(matches!(
+        items.as_slice(),
+        [
+            Node::List {
+                sep: ListSep::Space,
+                ..
+            },
+            Node::List {
+                sep: ListSep::Space,
+                ..
+            }
+        ]
+    ));
+}
+
+#[test]
+fn space_list_of_vars_roundtrips() {
+    for input in [
+        "var(--a, --m(1, 2, var(--b, 0))) var(--c, var(--b, 0))",
+        "1px solid #ddd",
+        "8px 8px rgb(0, 0, 0), 16px 8px rgba(48, 170, 84, calc(0.72 * var(--o)))",
+        "var(--fb, \"\") \"\\a[Trap: unreachable]\"",
+        "anim 1024ms steps(4, jump-end) infinite",
+        "--support-test()",
+    ] {
+        assert!(!matches!(parse(input), Node::Raw(_)), "{input}");
+        assert_eq!(parse(input).to_css(), input);
+        idempotent(input);
+    }
+}
+
+#[test]
+fn components_split_only_at_whitespace() {
+    // `a#b` is one token sequence; re-printing it as `a #b` would differ.
+    assert!(matches!(parse("a#b"), Node::Raw(_)));
+}
+
+#[test]
+fn fold_keeps_units() {
+    for input in ["calc(var(--x) * 8px - var(--x) * 8px)", "calc(0 * 1px)"] {
+        assert_eq!(fold(parse(input)).to_css(), input);
+    }
+    // Unitless operands are still folded.
+    assert_eq!(
+        fold(parse("calc((mod((var(--x)), 128) * 8px) + 8px)")).to_css(),
+        "calc((mod(var(--x), 128) * 8px) + 8px)"
+    );
+}
+
+#[test]
+fn fold_literal_byte_helpers() {
+    assert_eq!(fold(parse("--mlo(27944)")), Node::Int(40));
+    assert_eq!(fold(parse("--mhi(27944)")), Node::Int(109));
+    assert_eq!(fold(parse("--mhalf(658)")), Node::Int(329));
+    assert_eq!(fold(parse("--mpar(7)")), Node::Int(1));
+}
+
+#[test]
+fn style_query_value_is_a_node() {
+    let Node::Style { prop, value } = parse("style(--p: var(--lo))") else {
+        panic!("expected a style query");
+    };
+    assert_eq!(prop, "--p");
+    assert!(matches!(*value, Node::Var { .. }));
+}
+
+#[test]
+fn parse_registrations_reads_property_rules() {
+    let regs = super::parse_registrations(
+        "@property --pc { syntax: \"<integer>\"; initial-value: -2; inherits: true; }\n\
+         @property --s { syntax: \"<content-list>\"; initial-value: \"\"; inherits: true; }",
+    );
+    assert_eq!(regs.get("--pc"), Some(&(true, Some(-2))));
+    assert_eq!(regs.get("--s"), Some(&(false, None)));
+}
+
+#[test]
+fn fold_literal_math_functions() {
+    for (input, want) in [
+        ("mod(0, 16)", 0),
+        ("mod(-6, 16)", 10),
+        ("rem(-6, 16)", -6),
+        ("round(down, calc(mod(42, 256) / 16))", 2),
+        ("round(up, 33 / 16)", 3),
+        ("round(7 / 2)", 4),
+        ("min(3, -1, 2)", -1),
+        ("abs(-5)", 5),
+    ] {
+        assert_eq!(fold(parse(input)), Node::Int(want), "{input}");
+    }
+}
+
+#[test]
+fn fold_literal_string_helpers() {
+    assert_eq!(fold(parse("--hex(10)")), Node::Str("\"a\"".into()));
+    assert_eq!(fold(parse("--hex(16)")), Node::Str("\"0\"".into()));
+    assert_eq!(
+        fold(parse("\"0x\" --hex(round(down, calc(42 / 16))) --hex(mod(42, 16))")).to_css(),
+        "\"0x\" \"2\" \"a\""
+    );
+    assert_eq!(fold(parse("--i2char(65)")).to_css(), "\"A\"");
+    assert_eq!(fold(parse("--i2char(10)")).to_css(), "\"\\a \"");
+    assert_eq!(fold(parse("--i2char(34)")).to_css(), "\"\\\"\"");
+    assert_eq!(fold(parse("--cond_char(0, var(--x))")).to_css(), "\"\"");
+    assert_eq!(fold(parse("--cond_char(1, 92)")).to_css(), "\"\\\\\"");
 }

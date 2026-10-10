@@ -260,42 +260,44 @@ impl<'a> Emitter<'a> {
         }
     }
 
+    /// A call of a read function from [`Self::emit_chunked_read_function`]
+    /// over `entries` entries: `func(chunk, idx)`. `chunk` is
+    /// `floor(idx / READ_LOOKUP_CHUNK)` (computed here when `None`), or `0`
+    /// when there is a single chunk.
+    pub(super) fn read_call(func: &str, entries: usize, idx: &str, chunk: Option<&str>) -> String {
+        let chunk = match chunk {
+            _ if entries <= READ_LOOKUP_CHUNK => "0".to_string(),
+            Some(chunk) => chunk.to_string(),
+            None => format!(
+                "round(down, {} / {READ_LOOKUP_CHUNK})",
+                Self::calc_inner(idx)
+            ),
+        };
+        format!("{func}({chunk}, {idx})")
+    }
+
     pub(super) fn emit_chunked_read_function(
         out: &mut String,
         func: &str,
         reads: &[(usize, String)],
     ) {
-        if reads.is_empty() {
-            let _ = writeln!(
-                out,
-                "@function {}(--i <integer>) returns <integer> {{ result: 0; }}",
-                func
-            );
-            return;
-        }
-        let chunk_count = reads.len().div_ceil(READ_LOOKUP_CHUNK);
+        // Every shape takes the chunk `--c` (see [`Self::read_call`]), so
+        // callers don't depend on how many chunks are live.
+        const PARAMS: &str = "(--c <integer>, --i <integer>) returns <integer>";
         let chunked: Vec<&[(usize, String)]> = reads.chunks(READ_LOOKUP_CHUNK).collect();
-        let live_idx: Vec<usize> = (0..chunk_count)
+        let live_idx: Vec<usize> = (0..chunked.len())
             .filter(|c| !chunked[*c].iter().all(|(_, v)| v.trim() == "0"))
             .collect();
 
-        if live_idx.len() == 1 {
-            let arms = chunked[live_idx[0]];
-            let _ = write!(
-                out,
-                "@function {}(--i <integer>) returns <integer> {{ result: if(",
-                func
-            );
-            Self::emit_grouped_style_arms(out, arms);
-            out.push_str("else: 0); }\n");
+        if live_idx.is_empty() {
+            let _ = writeln!(out, "@function {func}{PARAMS} {{ result: 0; }}");
             return;
         }
-        if live_idx.is_empty() {
-            let _ = writeln!(
-                out,
-                "@function {}(--i <integer>) returns <integer> {{ result: 0; }}",
-                func
-            );
+        if live_idx.len() == 1 {
+            let arms = chunked[live_idx[0]];
+            let _ = write!(out, "@function {func}{PARAMS} {{ result: if(");
+            Self::emit_grouped_style_arms(out, arms);
+            out.push_str("else: 0); }\n");
             return;
         }
         for chunk_idx in &live_idx {
@@ -308,17 +310,9 @@ impl<'a> Emitter<'a> {
             Self::emit_grouped_style_arms(out, chunk_reads);
             out.push_str("else: 0); }\n");
         }
-        // Two-level lookup: pick the chunk from the index, then test only
-        // that chunk's arms (instead of every arm of every chunk).
-        let _ = writeln!(
-            out,
-            "@function {func}(--i <integer>) returns <integer> {{ result: {func}_d(round(down, var(--i) / {READ_LOOKUP_CHUNK}), var(--i)); }}"
-        );
-        let _ = write!(
-            out,
-            "@function {}_d(--c <integer>, --i <integer>) returns <integer> {{ result: if(",
-            func
-        );
+        // Two-level lookup: pick the chunk, then test only that chunk's arms
+        // (instead of every arm of every chunk).
+        let _ = write!(out, "@function {func}{PARAMS} {{ result: if(");
         for chunk in &live_idx {
             let _ = write!(out, "style(--c: {chunk}): {func}_{chunk}(var(--i)); ");
         }
@@ -728,7 +722,13 @@ impl<'a> Emitter<'a> {
             );
             let _ = writeln!(
                 out,
-                " --mir{j}: if(style(--mik: -1): 0; else: --read_m16(calc(var(--mik) + {j})));"
+                " --mir{j}: if(style(--mik: -1): 0; else: {});",
+                Self::read_call(
+                    "--read_m16",
+                    self.mem_names.len(),
+                    &format!("calc(var(--mik) + {j})"),
+                    None
+                )
             );
         }
         let window = "(var(--mir0) + 65536 * var(--mir1) + 4294967296 * var(--mir2))";

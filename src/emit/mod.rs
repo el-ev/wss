@@ -32,6 +32,7 @@ const LOGIC_PLACEHOLDER: &str = "/*__WSS_LOGIC__*/";
 const SUPPORT_PLACEHOLDER: &str = "/*__WSS_SUPPORT__*/";
 const TERMINAL_PCS_PLACEHOLDER: &str = "/*__WSS_TERMINAL_PCS__*/";
 const DEBUGGER_CYCLES_PLACEHOLDER: &str = "/*__WSS_DEBUGGER_CYCLES__*/";
+const MLOAD_READ_PLACEHOLDER: &str = "/*__WSS_MLOAD_READ__*/";
 const READ_LOOKUP_CHUNK: usize = 32;
 const VIS_SHADOW_CHUNK: usize = 8;
 const VIS_COLS: usize = 128;
@@ -476,6 +477,17 @@ fn emit_html(emitter: &Emitter, program: &Ir8Program) -> anyhow::Result<String> 
         String::from("{}")
     };
     let html = render(&html, DEBUGGER_CYCLES_PLACEHOLDER, &debugger_cycles)?;
+    // Cell `byte / 2` lies in chunk `byte / (2 * READ_LOOKUP_CHUNK)`.
+    let mload_read = Emitter::read_call(
+        "--read_m16",
+        emitter.mem_names.len(),
+        "--mhalf(var(--byte))",
+        Some(&format!(
+            "round(down, var(--byte) / {})",
+            2 * READ_LOOKUP_CHUNK
+        )),
+    );
+    let html = render(&html, MLOAD_READ_PLACEHOLDER, &mload_read)?;
     let html = emitter.apply_template_features(html, &[&logic_css, &support_css])?;
     Ok(map_style_bodies(&html, compact_css_run))
 }

@@ -496,7 +496,8 @@ fn emit_html_mload_helper_avoids_local_aliasing() {
     };
     let html = emit_program(&program).expect("emit should succeed");
     assert!(html.contains("@function --mload(--byte <number>) returns <integer>"));
-    assert!(html.contains("--read_m16(--mhalf(var(--byte)))"));
+    // The read function takes the chunk directly: no dispatch wrapper.
+    assert!(html.contains("--read_m16(round(down, var(--byte) / 64), --mhalf(var(--byte)))"));
     assert!(!html.contains("--cell: --read_m16"));
 }
 
@@ -1006,7 +1007,7 @@ fn emit_html_return_falls_back_to_callstack_top_when_cs_load_pc_is_in_prior_cycl
     assert!(html.contains("style(--_1pc: 2): --sel("));
     // `0 <= sp < N` folds to `sp < N`: the stack pointer is never negative.
     assert!(html.contains("style(--_1pc: 2): --sel(--lt(var(--_1cs_sp), "));
-    assert!(html.contains("--read_cs(var(--_1cs_sp))"));
+    assert!(html.contains("--read_cs(round(down, var(--_1cs_sp) / 32), var(--_1cs_sp))"));
 }
 
 #[test]
@@ -1181,4 +1182,22 @@ fn byte_bit7_needs_no_mod() {
     );
     // Not for an arbitrary operand, which may not be a byte.
     assert!(!Emitter::is_bool_expr("round(down, calc(var(--x) / 128))"));
+}
+
+#[test]
+fn read_call_passes_chunk_directly() {
+    assert_eq!(
+        Emitter::read_call("--f", 32, "var(--x)", None),
+        "--f(0, var(--x))"
+    );
+    assert_eq!(
+        Emitter::read_call("--f", 64, "calc(var(--x) + 3)", None),
+        "--f(round(down, (var(--x) + 3) / 32), calc(var(--x) + 3))"
+    );
+    let mut out = String::new();
+    let reads: Vec<(usize, String)> = (0..64).map(|i| (i, (i + 1).to_string())).collect();
+    Emitter::emit_chunked_read_function(&mut out, "--f", &reads);
+    // One entry point dispatching on `--c`; no one-argument wrapper.
+    assert!(out.contains("@function --f(--c <integer>, --i <integer>) returns <integer> { result: if(style(--c: 0): --f_0(var(--i)); style(--c: 1): --f_1(var(--i)); "));
+    assert!(!out.contains("--f_d"));
 }
