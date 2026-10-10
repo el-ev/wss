@@ -138,7 +138,11 @@ fn eval_math_fn(name: &str, args: &[Node]) -> Option<i64> {
             }
             // `mod` takes the divisor's sign, `rem` the dividend's.
             let r = a % b;
-            if name == "mod" && r != 0 && (r < 0) != (b < 0) { r + b } else { r }
+            if name == "mod" && r != 0 && (r < 0) != (b < 0) {
+                r + b
+            } else {
+                r
+            }
         }
         "min" => ints()?.into_iter().min()?,
         "max" => ints()?.into_iter().max()?,

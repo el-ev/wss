@@ -754,7 +754,10 @@ fn fold_literal_string_helpers() {
     assert_eq!(fold(parse("--hex(10)")), Node::Str("\"a\"".into()));
     assert_eq!(fold(parse("--hex(16)")), Node::Str("\"0\"".into()));
     assert_eq!(
-        fold(parse("\"0x\" --hex(round(down, calc(42 / 16))) --hex(mod(42, 16))")).to_css(),
+        fold(parse(
+            "\"0x\" --hex(round(down, calc(42 / 16))) --hex(mod(42, 16))"
+        ))
+        .to_css(),
         "\"0x\" \"2\" \"a\""
     );
     assert_eq!(fold(parse("--i2char(65)")).to_css(), "\"A\"");

@@ -16,9 +16,7 @@ mod builder;
 mod calls;
 mod ops;
 
-use analysis::{
-    compute_live_after_by_block, compute_local_live_after_by_block,
-};
+use analysis::{compute_live_after_by_block, compute_local_live_after_by_block};
 use builder::{FuncAlloc, FuncBuilder, prealloc_locals};
 use ops::lower_load_fill_byte;
 
